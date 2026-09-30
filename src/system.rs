@@ -13,10 +13,14 @@ pub struct System {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SysNode {
     pub id: String,
-    /// One of: client, web, mobile, service, library, datastore, queue, schedule, external.
+    /// One of: client, web, mobile, service, library, datastore, queue, schedule, external, feature.
+    /// report.html switches on these strings.
     pub kind: String,
     pub label: String,
     pub detail: String,
+    /// For a feature: the service or web app it lives in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -73,6 +77,33 @@ pub struct Inputs<'a> {
     pub xcode: Vec<(String, String)>,
     /// (file, host) of each outside URL found in string literals.
     pub urls: Vec<(String, String)>,
+    /// (area, package dir) of every code area, and the area each file belongs to.
+    pub areas: Vec<(String, String)>,
+    pub area_of: &'a dyn Fn(&str) -> String,
+}
+
+const GENERIC_FOLDERS: &[&str] = &[
+    "lib", "libs", "utils", "util", "helpers", "helper", "common", "shared", "components", "hooks", "types", "styles",
+    "test", "tests", "__tests__", "spec", "e2e", "playwright", "cypress", "storybook", "stories", "scripts", "config",
+    "constants", "ui", "assets", "public", "src", "middleware", "routes", "pages", "app", "server", "client", "core",
+    "db", "store", "models", "schemas", "env", "fixtures", "mocks", "generated", "icons",
+];
+
+/// `apps/api/src/net-worth` -> "Net worth"; folders that name a layer rather than a feature give None.
+fn feature_name(area: &str, package_dir: &str) -> Option<String> {
+    if area == package_dir || area.is_empty() {
+        return None;
+    }
+    let last = area.rsplit('/').next()?;
+    if GENERIC_FOLDERS.contains(&last.to_ascii_lowercase().as_str()) || last.starts_with(['(', '[', '_', '.']) {
+        return None;
+    }
+    let words = last.replace(['-', '_'], " ");
+    if words.len() <= 3 {
+        return Some(words.to_ascii_uppercase());
+    }
+    let mut chars = words.chars();
+    chars.next().map(|c| c.to_ascii_uppercase().to_string() + chars.as_str())
 }
 
 const SERVER_FRAMEWORKS: &[(&str, &str)] = &[
@@ -151,6 +182,7 @@ impl Builder {
             kind: kind.to_string(),
             label: label.to_string(),
             detail: detail.to_string(),
+            parent: None,
         });
         id.to_string()
     }
@@ -244,7 +276,7 @@ pub fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
             None => format!("Cloudflare Worker \"{name}\""),
         };
         let label = b.nodes.get(&owner).map(|n| n.label.clone()).unwrap_or_else(|| name.clone());
-        b.nodes.insert(owner.clone(), SysNode { id: owner.clone(), kind: "service".into(), label, detail });
+        b.nodes.insert(owner.clone(), SysNode { id: owner.clone(), kind: "service".into(), label, detail, parent: None });
         workers.insert(name.clone(), owner.clone());
         let routes = cfg.get("routes").and_then(|v| v.as_array()).cloned().unwrap_or_default();
         for r in routes.iter().chain(cfg.get("route")) {
@@ -326,6 +358,18 @@ pub fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
         b.node(&format!("xcode:{dir}/{name}"), "mobile", name, &format!("Apple app (Xcode), {}", if dir.is_empty() { "repo root" } else { dir }));
     }
 
+    let mut features: BTreeMap<String, String> = BTreeMap::new();
+    for (area, dir) in &inputs.areas {
+        let parent = format!("pkg:{}", if dir.is_empty() { "." } else { dir });
+        let hosts_features = b.nodes.get(&parent).is_some_and(|p| p.kind == "service" || p.kind == "web");
+        if let (true, Some(label)) = (hosts_features, feature_name(area, dir)) {
+            let id = format!("feat:{area}");
+            let node = SysNode { id: id.clone(), kind: "feature".into(), label, detail: area.clone(), parent: Some(parent) };
+            b.nodes.insert(id.clone(), node);
+            features.insert(area.clone(), id);
+        }
+    }
+
     let mut mirrors: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for (file, host) in &inputs.urls {
         let owner = if file.ends_with(".swift") {
@@ -360,6 +404,9 @@ pub fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
             }
         };
         b.edge(&owner, &target, "calls");
+        if let Some(feature) = features.get(&(inputs.area_of)(file)) {
+            b.edge(feature, &target, "calls");
+        }
     }
     for (key, hosts) in mirrors {
         if let Some(n) = b.nodes.get_mut(&format!("host:{key}")) {
@@ -530,6 +577,7 @@ pub fn diff_lines(before: &System, after: &System) -> Vec<String> {
         "schedule" => format!("schedule ({})", n.label.to_lowercase()),
         "external" => format!("outside service {}", n.label),
         "library" => format!("shared package {}", n.label),
+        "feature" => format!("feature {} ({})", n.label, n.detail),
         "mobile" => format!("app {}", n.label),
         _ => format!("{} {}", if n.kind == "web" { "web app" } else { "service" }, n.label),
     };

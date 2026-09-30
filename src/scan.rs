@@ -226,8 +226,17 @@ pub fn scan(git: &Git, point: &WeekPoint, depth: usize, warnings: &mut Vec<Warni
         })
         .collect();
     xcode.extend(xcodegen);
+    let areas: Vec<(String, String)> = modules.iter().map(|(a, m)| (a.clone(), m.package.clone())).collect();
+    let area_of_file = |file: &str| area_of(file, depth, &packages);
     let system = system::detect(
-        system::Inputs { packages: &packages, wranglers, xcode: xcode.into_iter().collect(), urls },
+        system::Inputs {
+            packages: &packages,
+            wranglers,
+            xcode: xcode.into_iter().collect(),
+            urls,
+            areas,
+            area_of: &area_of_file,
+        },
         warnings,
     );
 

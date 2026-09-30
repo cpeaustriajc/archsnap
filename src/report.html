@@ -88,6 +88,22 @@ h2 { margin: 0 0 4px; font-size: 18px; font-weight: 650; letter-spacing: -0.01em
 }
 .tip.on { opacity: 1; }
 
+.section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.tabs { display: inline-flex; border: 1px solid var(--rule); border-radius: 8px; padding: 2px; background: var(--raised); }
+.tabs button { font: inherit; font-size: 14px; color: var(--ink-2); background: none; border: 0; border-radius: 6px; padding: 4px 14px; cursor: pointer; }
+.tabs button[aria-pressed="true"] { color: var(--ink); background: var(--surface); box-shadow: 0 0 0 1px var(--rule); }
+.poster { overflow-x: auto; margin-top: 6px; }
+.poster svg { display: block; margin: 0 auto; width: 100%; height: auto; min-width: 760px; }
+.poster .pnode { cursor: pointer; }
+.poster .pnode:focus { outline: none; }
+.poster .pnode:focus-visible .ptile, .poster .pnode:hover .ptile { stroke: var(--focus); stroke-width: 2; }
+.poster-foot { margin: 8px 0 0; font-size: 14px; color: var(--ink-2); }
+.flow-legend .flow-sample { display: inline-block; width: 22px; height: 0; border-top: 2px dashed; margin-right: 6px; vertical-align: 3px; }
+.flow { stroke-dasharray: 7 6; }
+@media (prefers-reduced-motion: no-preference) {
+  .flow { animation: flow 1.1s linear infinite; }
+  @keyframes flow { to { stroke-dashoffset: -13; } }
+}
 .system { overflow-x: auto; margin-top: 8px; }
 .system svg { display: block; }
 .sys-node { cursor: pointer; }
@@ -177,12 +193,26 @@ tr.removed td { color: var(--ink-3); }
   </section>
 
   <section aria-labelledby="system-h">
-    <h2 id="system-h">System map</h2>
-    <p class="lede">What runs, what stores data and what it talks to, read from package.json, Cloudflare config, SDKs and the URLs the code calls. Dashed lines are shared code; + marks something new this week.</p>
-    <div class="chips" id="system-filters" role="group" aria-label="Show connections"></div>
-    <div class="system" id="system"></div>
-    <div class="system-detail" id="system-detail" aria-live="polite"></div>
-    <details class="connections"><summary id="connections-summary"></summary><ul id="connections"></ul></details>
+    <div class="section-head">
+      <h2 id="system-h">System map</h2>
+      <div class="tabs" role="group" aria-label="System map view">
+        <button type="button" id="view-poster" aria-pressed="true">Poster</button>
+        <button type="button" id="view-explore" aria-pressed="false">Explore</button>
+      </div>
+    </div>
+    <div id="poster-view">
+      <p class="lede">What runs, what it stores and who it talks to, from the top down. Moving dashes show the direction of each call. Select anything to explore its connections.</p>
+      <ul class="legend flow-legend" id="poster-legend"></ul>
+      <div class="poster" id="poster"></div>
+      <p class="poster-foot" id="poster-foot"></p>
+    </div>
+    <div id="explore-view" hidden>
+      <p class="lede">What runs, what stores data and what it talks to, read from package.json, Cloudflare config, SDKs and the URLs the code calls. Dashed lines are shared code; + marks something new this week.</p>
+      <div class="chips" id="system-filters" role="group" aria-label="Show connections"></div>
+      <div class="system" id="system"></div>
+      <div class="system-detail" id="system-detail" aria-live="polite"></div>
+      <details class="connections"><summary id="connections-summary"></summary><ul id="connections"></ul></details>
+    </div>
   </section>
 
   <section aria-labelledby="code-h">
@@ -203,6 +233,7 @@ tr.removed td { color: var(--ink-3); }
   </section>
 </div>
 
+<script id="archsnap-brands" type="application/json">__ARCHSNAP_BRANDS__</script>
 <script id="archsnap-data" type="application/json">__ARCHSNAP_DATA__</script>
 <script>
 const data = JSON.parse(document.getElementById("archsnap-data").textContent);
@@ -518,7 +549,7 @@ function renderSystemControls() {
 function renderSystem() {
   renderSystemControls();
   const w = data.weeks[selected];
-  const full = w.snapshot.system || { nodes: [], edges: [] };
+  const full = explorable(w.snapshot.system || { nodes: [], edges: [] });
   const sys = foldOutside(full, 12);
   const host = $("system");
   if (!sys.nodes.length) {
@@ -923,10 +954,295 @@ function renderAreas() {
   t.replaceChildren(...rows);
 }
 
+// ---- Poster view: the system drawn top-down like a hand-made design diagram ----
+const BRANDS = JSON.parse(document.getElementById("archsnap-brands").textContent).icons;
+const DOMAIN_BRAND = {
+  "apple.com": "apple", "github.com": "github", "githubusercontent.com": "github", "google.com": "google",
+  "googleapis.com": "google", "youtube.com": "youtube", "youtu.be": "youtube", "tiktok.com": "tiktok",
+  "tiktokapis.com": "tiktok", "x.com": "x", "twitter.com": "x", "hubspot.com": "hubspot", "hubapi.com": "hubspot",
+  "bitly.com": "bitly", "shopify.com": "shopify", "paypal.com": "paypal", "discord.com": "discord", "notion.so": "notion",
+  "linear.app": "linear", "figma.com": "figma", "plausible.io": "plausibleanalytics", "vercel.com": "vercel",
+  "stripe.com": "stripe", "cloudflare.com": "cloudflare", "supabase.co": "supabase", "sentry.io": "sentry",
+};
+const LABEL_BRAND = {
+  Stripe: "stripe", Resend: "resend", Sentry: "sentry", PostHog: "posthog", Anthropic: "anthropic", Clerk: "clerk",
+  Auth0: "auth0", Algolia: "algolia", PostgreSQL: "postgresql", "Neon PostgreSQL": "neon", MySQL: "mysql",
+  SQLite: "sqlite", "libSQL / Turso": "turso", MongoDB: "mongodb", Redis: "redis", "Upstash Redis": "upstash",
+  PlanetScale: "planetscale", Supabase: "supabase", Firebase: "firebase", Kafka: "apachekafka", RabbitMQ: "rabbitmq",
+  "BullMQ (Redis)": "redis",
+};
+const FRAMEWORK_BRAND = [
+  ["Next.js", "nextdotjs"], ["Nuxt", "nuxt"], ["Remix", "remix"], ["Astro", "astro"], ["SvelteKit", "svelte"],
+  ["Angular", "angular"], ["Vue", "vuedotjs"], ["Svelte", "svelte"], ["Solid", "solid"], ["React", "react"],
+  ["Hono", "hono"], ["Express", "express"], ["Fastify", "fastify"], ["NestJS", "nestjs"], ["tRPC", "trpc"],
+  ["React Native", "react"], ["Expo", "expo"],
+];
+ICONS.feature = "M4.5 4.5h6v6h-6z M13.5 4.5h6v6h-6z M4.5 13.5h6v6h-6z M13.5 13.5h6v6h-6z";
+
+function brandOf(n) {
+  if (n.kind === "external") return DOMAIN_BRAND[n.label] || LABEL_BRAND[n.label] || null;
+  if (LABEL_BRAND[n.label]) return LABEL_BRAND[n.label];
+  if (n.detail.startsWith("Cloudflare Worker")) return "cloudflareworkers";
+  if (n.detail.startsWith("Cloudflare")) return "cloudflare";
+  if (n.kind === "mobile" && n.detail.includes("Apple")) return "apple";
+  const hit = FRAMEWORK_BRAND.find(([name]) => n.detail.split(/[ ,+]+/).includes(name.split(" ")[0]) && n.detail.includes(name));
+  return hit ? hit[1] : null;
+}
+
+// Brand colours that vanish on this page's background (black logos in dark mode) fall back to ink.
+function brandFill(hex) {
+  const lum = (h) => {
+    const c = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  };
+  const bg = getComputedStyle(document.body).backgroundColor.match(/\d+/g).slice(0, 3).map(Number);
+  const bgHex = bg.map((v) => v.toString(16).padStart(2, "0")).join("");
+  const [a, b] = [lum(hex), lum(bgHex)].sort((x, y) => y - x);
+  return (a + 0.05) / (b + 0.05) < 2.2 ? "var(--ink)" : `#${hex}`;
+}
+
+const FLOWS = {
+  request: { label: "Requests", color: "var(--s1)" },
+  data: { label: "Reads and writes data", color: "var(--s3)" },
+  events: { label: "Queued work", color: "var(--s4)" },
+  schedule: { label: "Scheduled runs", color: "var(--s5)" },
+};
+function flowOf(e) {
+  if (e.label === "runs") return "schedule";
+  if (e.label === "reads and writes") return "data";
+  if (e.label === "sends to" || e.label === "delivers to") return "events";
+  if (e.label === "uses code from" || e.label === "serves") return null;
+  return "request";
+}
+
+let view = (() => { try { return localStorage.getItem("archsnap-view") || "poster"; } catch { return "poster"; } })();
+
+function setView(v) {
+  view = v;
+  try { localStorage.setItem("archsnap-view", v); } catch { /* private mode: the choice just isn't remembered */ }
+  $("view-poster").setAttribute("aria-pressed", String(v === "poster"));
+  $("view-explore").setAttribute("aria-pressed", String(v === "explore"));
+  $("poster-view").hidden = v !== "poster";
+  $("explore-view").hidden = v !== "explore";
+  renderSystemView();
+}
+
+function renderSystemView() {
+  if (view === "poster") renderPoster();
+  else renderSystem();
+}
+
+function explorable(sys) {
+  const drop = new Set(sys.nodes.filter((n) => n.kind === "feature").map((n) => n.id));
+  return { nodes: sys.nodes.filter((n) => !drop.has(n.id)), edges: sys.edges.filter((e) => !drop.has(e.from) && !drop.has(e.to)) };
+}
+
+function renderPoster() {
+  const w = data.weeks[selected];
+  const sys = w.snapshot.system || { nodes: [], edges: [] };
+  const host = $("poster");
+  if (!sys.nodes.length) {
+    host.replaceChildren(el("p", { class: "lede" }, "Nothing to draw this week: no apps, services or data stores were found."));
+    $("poster-legend").replaceChildren();
+    $("poster-foot").textContent = "";
+    return;
+  }
+  const older = data.weeks[selected + 1]?.snapshot.system;
+  const oldIds = new Set((older?.nodes || []).map((n) => n.id));
+  const byId = new Map(sys.nodes.map((n) => [n.id, n]));
+  const featuresOf = new Map();
+  sys.nodes.filter((n) => n.kind === "feature").forEach((f) => {
+    if (!featuresOf.has(f.parent)) featuresOf.set(f.parent, []);
+    featuresOf.get(f.parent).push(f);
+  });
+
+  // Calls a feature makes are drawn from the feature, not again from its service.
+  const byFeature = new Set(sys.edges.filter((e) => byId.get(e.from)?.kind === "feature").map((e) => `${byId.get(e.from).parent}\u0000${e.to}`));
+  let edges = sys.edges.filter((e) => {
+    const a = byId.get(e.from), b = byId.get(e.to);
+    if (!a || !b || !flowOf(e) || a.kind === "library" || b.kind === "library") return false;
+    return !byFeature.has(`${e.from}\u0000${e.to}`);
+  });
+
+  const outside = sys.nodes.filter((n) => n.kind === "external");
+  const degree = new Map(outside.map((n) => [n.id, edges.filter((e) => e.to === n.id).length]));
+  const keep = new Set([...outside].sort((a, b) => degree.get(b.id) - degree.get(a.id) || a.label.localeCompare(b.label)).slice(0, 10).map((n) => n.id));
+  const hidden = outside.filter((n) => !keep.has(n.id));
+  edges = edges.filter((e) => byId.get(e.to)?.kind !== "external" || keep.has(e.to));
+
+  const TILE = 64, FTILE = 46, OUT_W = 116, perRow = 9;
+  const W = Math.max(1060, Math.min(perRow, outside.filter((n) => keep.has(n.id)).length) * (OUT_W + 20));
+  const entry = sys.nodes.filter((n) => ["client", "mobile", "schedule"].includes(n.kind));
+  const apps = sys.nodes.filter((n) => n.kind === "web" || n.kind === "service");
+  const stores = sys.nodes.filter((n) => n.kind === "datastore" || n.kind === "queue");
+  const outs = outside.filter((n) => keep.has(n.id));
+
+  const pos = new Map();
+  const place = (items, widthOf, y) => {
+    const widths = items.map(widthOf);
+    const sum = widths.reduce((a, b) => a + b, 0);
+    const gap = items.length > 1 ? Math.min(70, Math.max(24, (W - sum) / (items.length - 1))) : 0;
+    let x = (W - sum - gap * (items.length - 1)) / 2;
+    items.forEach((n, i) => { pos.set(n.id, { x, y, w: widths[i] }); x += widths[i] + gap; });
+  };
+  const centerOf = (id) => { const p = pos.get(id); return p ? p.x + p.w / 2 : W / 2; };
+  const orderBy = (items, sources) => items
+    .map((n) => {
+      const xs = edges.filter((e) => (e.to === n.id && sources(e.from)) || (e.from === n.id && sources(e.to))).map((e) => centerOf(e.to === n.id ? e.from : e.to));
+      return [n, xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : W / 2];
+    })
+    .sort((a, b) => a[1] - b[1])
+    .map(([n]) => n);
+
+  const clusterW = (n) => Math.max(170, (featuresOf.get(n.id)?.length || 0) * 104 + 36);
+  const clusterH = (n) => (featuresOf.get(n.id)?.length ? 250 : 140);
+  let y = 12;
+  place(entry, () => 140, y);
+  const entryIds = new Set(entry.map((n) => n.id));
+  y += 190;
+  const appsOrdered = orderBy(apps, (id) => entryIds.has(id));
+  place(appsOrdered, clusterW, y);
+  const appsH = Math.max(0, ...apps.map(clusterH));
+  appsOrdered.forEach((s) => {
+    const fs = featuresOf.get(s.id) || [];
+    const p = pos.get(s.id);
+    fs.forEach((f, i) => pos.set(f.id, { x: p.x + 18 + i * 104, y: p.y + 136, w: 104, feature: true }));
+  });
+  y += appsH + 70;
+  const upper = (id) => { const k = byId.get(id)?.kind; return k === "web" || k === "service" || k === "feature"; };
+  if (stores.length) {
+    place(orderBy(stores, upper), () => 150, y);
+    y += 190;
+  }
+  const outsOrdered = orderBy(outs, (id) => upper(id) || entryIds.has(id));
+  for (let i = 0; i < outsOrdered.length; i += perRow) {
+    place(outsOrdered.slice(i, i + perRow), () => OUT_W, y);
+    y += 160;
+  }
+  const H = y + 10;
+
+  const root = svg("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "group",
+    "aria-label": `System poster: ${plural(entry.length + apps.length + stores.length + outs.length, "part", "parts")}. Select a part to explore its connections.` });
+  const defs = svg("defs");
+  Object.entries(FLOWS).forEach(([key, f]) => {
+    const m = svg("marker", { id: `flow-${key}`, viewBox: "0 0 10 10", refX: 8, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" });
+    m.append(svg("path", { d: "M0,1 L9,5 L0,9 z", fill: f.color }));
+    defs.append(m);
+  });
+  root.append(defs);
+
+  // Containers first so arrows and tiles sit on top of them.
+  appsOrdered.forEach((s) => {
+    const p = pos.get(s.id);
+    if (!featuresOf.get(s.id)?.length) return;
+    root.append(svg("rect", { x: p.x, y: p.y - 10, width: p.w, height: clusterH(s) - 10, rx: 22, fill: "none", stroke: "var(--rule)", "stroke-dasharray": "2 5", "stroke-linecap": "round" }));
+  });
+
+  const anchor = (id) => {
+    const p = pos.get(id);
+    const n = byId.get(id);
+    if (p.feature) return { cx: p.x + p.w / 2, top: p.y, bottom: p.y + FTILE + 30, midY: p.y + FTILE / 2, left: p.x + p.w / 2 - FTILE / 2, right: p.x + p.w / 2 + FTILE / 2 };
+    const cx = n && (n.kind === "service" || n.kind === "web") ? p.x + p.w / 2 : p.x + p.w / 2;
+    const hasFeatures = featuresOf.get(id)?.length;
+    return { cx, top: p.y, bottom: hasFeatures ? p.y + clusterH(n) - 20 : p.y + TILE + 44, midY: p.y + TILE / 2, left: cx - TILE / 2, right: cx + TILE / 2 };
+  };
+  const rowOf = (id) => pos.get(id).y;
+  const flowLayer = svg("g");
+  const outgoing = new Map();
+  edges.forEach((e) => { if (!outgoing.has(e.from)) outgoing.set(e.from, []); outgoing.get(e.from).push(e); });
+  outgoing.forEach((list) => list.sort((a, b) => centerOf(a.to) - centerOf(b.to)));
+  edges.forEach((e) => {
+    if (!pos.has(e.from) || !pos.has(e.to)) return;
+    const a = anchor(e.from), b = anchor(e.to);
+    const list = outgoing.get(e.from);
+    const spread = list.length > 1 ? (list.indexOf(e) / (list.length - 1) - 0.5) * Math.min(TILE, list.length * 8) : 0;
+    let d;
+    if (rowOf(e.to) > rowOf(e.from) + 5) {
+      const sx = a.cx + spread, sy = a.bottom, tx = b.cx, ty = b.top - 6;
+      const my = (sy + ty) / 2;
+      d = `M${sx},${sy} C${sx},${my} ${tx},${my} ${tx},${ty}`;
+    } else if (rowOf(e.to) < rowOf(e.from) - 5) {
+      const sx = a.cx + 12, sy = a.top - 4, tx = b.cx + 20, ty = b.bottom + 6;
+      d = `M${sx},${sy} C${sx + 60},${sy - 50} ${tx + 60},${ty + 50} ${tx},${ty}`;
+    } else {
+      const toRight = b.cx > a.cx;
+      const sx = toRight ? a.right + 8 : a.left - 8, tx = toRight ? b.left - 10 : b.right + 10;
+      d = `M${sx},${a.midY} C${(sx + tx) / 2},${a.midY - 30} ${(sx + tx) / 2},${b.midY - 30} ${tx},${b.midY}`;
+    }
+    const f = flowOf(e);
+    const path = svg("path", { d, fill: "none", stroke: FLOWS[f].color, "stroke-width": 2, class: "flow", "marker-end": `url(#flow-${f})`, opacity: 0.9 });
+    const t = svg("title");
+    t.textContent = `${byId.get(e.from).label} ${e.label} ${byId.get(e.to).label}`;
+    path.append(t);
+    flowLayer.append(path);
+  });
+  root.append(flowLayer);
+
+  const drawTile = (n, cx, top, size) => {
+    const g = svg("g", { class: "pnode", tabindex: 0, role: "button", "aria-label": `${n.label}, ${KIND_WORD[n.kind] || "feature"}${n.detail ? `, ${n.detail}` : ""}. Opens it in Explore.` });
+    g.append(svg("rect", { class: "ptile", x: cx - size / 2, y: top, width: size, height: size, rx: size * 0.28, fill: "var(--raised)", stroke: "var(--rule)" }));
+    const slug = brandOf(n);
+    const s = size * 0.56 / 24;
+    if (slug && BRANDS[slug]) {
+      g.append(svg("path", { d: BRANDS[slug].path, fill: brandFill(BRANDS[slug].hex), transform: `translate(${cx - 12 * s},${top + size / 2 - 12 * s}) scale(${s})` }));
+    } else if (n.kind === "external") {
+      const letter = svg("text", { x: cx, y: top + size / 2 + size * 0.14, "text-anchor": "middle", "font-size": size * 0.4, "font-weight": 700, fill: "var(--ink-2)" });
+      letter.textContent = n.label[0].toUpperCase();
+      g.append(letter);
+    } else {
+      g.append(svg("path", { d: ICONS[n.kind] || ICONS.feature, fill: "none", stroke: "var(--ink)", "stroke-width": 1.5 / s * 1.1, "stroke-linecap": "round", "stroke-linejoin": "round",
+        transform: `translate(${cx - 12 * s},${top + size / 2 - 12 * s}) scale(${s})` }));
+    }
+    if (older && !oldIds.has(n.id)) {
+      g.append(svg("circle", { cx: cx + size / 2 - 2, cy: top + 2, r: 9, fill: "var(--ink)" }));
+      const plus = svg("text", { x: cx + size / 2 - 2, y: top + 6.5, "text-anchor": "middle", "font-size": 13, "font-weight": 700, fill: "var(--surface)" });
+      plus.textContent = "+";
+      g.append(plus);
+    }
+    const label = svg("text", { x: cx, y: top + size + 18, "text-anchor": "middle", "font-size": size > 50 ? 13.5 : 12.5, "font-weight": 650, fill: "var(--ink)" });
+    label.textContent = clip(n.label, size > 50 ? 22 : 15);
+    g.append(label);
+    const sub = n.kind === "feature" ? "" : n.kind === "external" && n.detail === n.label ? "" : n.detail;
+    if (sub) {
+      const detail = svg("text", { x: cx, y: top + size + 34, "text-anchor": "middle", "font-size": 11.5, fill: "var(--ink-2)" });
+      detail.textContent = clip(sub.replace(/^Cloudflare Worker /, "Worker "), 28);
+      g.append(detail);
+    }
+    const tip = svg("title");
+    tip.textContent = `${n.label}${n.detail ? `: ${n.detail}` : ""}`;
+    g.append(tip);
+    const open = () => { focusNode = n.kind === "feature" ? n.parent : n.id; setView("explore"); document.querySelector(`[data-node="${CSS.escape(focusNode)}"]`)?.focus(); };
+    g.addEventListener("click", open);
+    g.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); open(); } });
+    root.append(g);
+  };
+
+  [...entry, ...apps, ...stores, ...outs].forEach((n) => { const p = pos.get(n.id); drawTile(n, p.x + p.w / 2, p.y, TILE); });
+  sys.nodes.filter((n) => n.kind === "feature").forEach((f) => { const p = pos.get(f.id); if (p) drawTile(f, p.x + p.w / 2, p.y, FTILE); });
+  host.replaceChildren(root);
+
+  const used = new Set(edges.map(flowOf));
+  $("poster-legend").replaceChildren(...Object.entries(FLOWS).filter(([k]) => used.has(k)).map(([, f]) => {
+    const li = el("li");
+    const sample = el("span", { class: "flow-sample", "aria-hidden": "true" });
+    sample.style.borderTopColor = f.color;
+    li.append(sample, document.createTextNode(f.label));
+    return li;
+  }));
+  const libs = sys.nodes.filter((n) => n.kind === "library").map((n) => n.label);
+  const notes = [];
+  if (libs.length) notes.push(`Shared code, not drawn: ${libs.join(", ")}.`);
+  if (hidden.length) notes.push(`${plural(hidden.length, "more outside service", "more outside services")}: ${hidden.map((n) => n.label).join(", ")}.`);
+  $("poster-foot").textContent = notes.join(" ");
+}
+
+$("view-poster").addEventListener("click", () => setView("poster"));
+$("view-explore").addEventListener("click", () => setView("explore"));
+
 function render() {
   renderHeader();
   renderChart();
-  renderSystem();
+  renderSystemView();
   renderCode();
   renderAreas();
 }
@@ -941,6 +1257,7 @@ document.addEventListener("keydown", (e) => {
 
 renderWarnings();
 renderLegend();
+setView(view);
 render();
 </script>
 </body>

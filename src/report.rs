@@ -5,6 +5,8 @@ use crate::diff::Diff;
 use crate::scan::Snapshot;
 
 const TEMPLATE: &str = include_str!("report.html");
+/// Logos from simple-icons (CC0), fetched by hand; see `source` inside the file.
+const BRANDS: &str = include_str!("brands.json");
 
 #[derive(Serialize)]
 pub struct Report<'a> {
@@ -26,7 +28,10 @@ pub fn render(report: &Report) -> String {
     // `<` escaped so file names like `</script>` can't end the data block early.
     let json = json.replace('<', "\\u003c");
     // Title first: substituting data first would let repo contents inject a title marker.
-    TEMPLATE.replace("__ARCHSNAP_TITLE__", &html_escape(&report.repo)).replace("__ARCHSNAP_DATA__", &json)
+    TEMPLATE
+        .replace("__ARCHSNAP_TITLE__", &html_escape(&report.repo))
+        .replace("__ARCHSNAP_BRANDS__", &BRANDS.replace('<', "\\u003c"))
+        .replace("__ARCHSNAP_DATA__", &json)
 }
 
 fn html_escape(s: &str) -> String {

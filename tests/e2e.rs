@@ -307,7 +307,7 @@ fn first_week_does_not_mark_everything_new() {
     let repo = two_week_repo();
     archsnap(repo.path()).assert().success();
     let html = fs::read_to_string(repo.out().join("index.html")).unwrap();
-    let data = html.split("type=\"application/json\">").nth(1).unwrap().split("</script>").next().unwrap();
+    let data = html.split("id=\"archsnap-data\" type=\"application/json\">").nth(1).unwrap().split("</script>").next().unwrap();
     let report: Value = serde_json::from_str(data).unwrap();
     let oldest = report["weeks"].as_array().unwrap().last().unwrap();
     assert_eq!(oldest["diff"]["added_modules"].as_array().unwrap().len(), 0);

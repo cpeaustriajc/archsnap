@@ -9,7 +9,11 @@ Weekly architecture snapshots of a TypeScript/JavaScript repo, for everyone on t
   between areas, packages started or stopped.
 - **How the codebase got here**: lines of code per week, split by the five largest areas. Select a
   week (or use ← →) to read what changed in it. Weeks without commits show as gaps.
-- **System map**: what runs, what stores data and what it talks to, in five lanes (who and what starts
+- **System map, Poster view**: the system drawn top-down like a design diagram, with brand logos
+  (Simple Icons, CC0) and moving dashed arrows coloured by kind: requests, data, queued work,
+  schedules. Each service shows its features, named after its folders (`apps/api/src/prices` →
+  "Prices"), and each outside call is drawn from the feature whose files make it.
+- **System map, Explore view**: what runs, what stores data and what it talks to, in five lanes (who and what starts
   it, apps and services, shared code, data and queues, outside services). Read from `package.json`
   files, Cloudflare `wrangler` config (Workers, D1, KV, R2, Durable Objects, queues, crons, served
   assets, routes), well-known SDKs (Stripe, Postgres, Redis, …), Xcode and XcodeGen projects, and the
