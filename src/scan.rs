@@ -130,6 +130,7 @@ pub fn scan(git: &Git, point: &WeekPoint, depth: usize, warnings: &mut Vec<Warni
     let mut wranglers = Vec::new();
     let mut urls: Vec<(String, String)> = Vec::new();
     let mut xcodegen: Vec<(String, String)> = Vec::new();
+    let mut code: Vec<(String, system::CodeFacts)> = Vec::new();
     for ((entry, r), blob) in wanted.iter().zip(blobs) {
         let Ok(text) = String::from_utf8(blob) else {
             if matches!(r, Role::Source) {
@@ -141,7 +142,13 @@ pub fn scan(git: &Git, point: &WeekPoint, depth: usize, warnings: &mut Vec<Warni
             Role::Source => sources.push((entry.path.as_str(), text)),
             Role::Package => packages.extend(system::parse_package(&entry.path, &text, warnings)),
             Role::Wrangler => wranglers.push((entry.path.clone(), text)),
-            Role::Swift => urls.extend(swift_urls(&text).into_iter().map(|h| (entry.path.clone(), h))),
+            Role::Swift => {
+                urls.extend(swift_urls(&text).into_iter().map(|h| (entry.path.clone(), h)));
+                let paths = swift_api_paths(&text);
+                if !paths.is_empty() {
+                    code.push((entry.path.clone(), system::CodeFacts { paths, ..Default::default() }));
+                }
+            }
             Role::XcodeGen => {
                 let name = text.lines().find_map(|l| l.strip_prefix("name:")).map(|n| n.trim().trim_matches('"').to_string());
                 let dir = entry.path.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
@@ -183,6 +190,13 @@ pub fn scan(git: &Git, point: &WeekPoint, depth: usize, warnings: &mut Vec<Warni
         m.package = system::package_of(&packages, path).map(|p| p.dir.clone()).unwrap_or_default();
         stats.files += 1;
         urls.extend(parsed.hosts.into_iter().map(|h| (path.to_string(), h)));
+        let mut http = parsed.http;
+        // A literal inside fetch("/api/x", { method }) is also seen on its own, without the method.
+        let known: BTreeSet<String> = http.paths.iter().filter(|(_, m)| m.is_some()).map(|(p, _)| p.clone()).collect();
+        let defined: BTreeSet<String> =
+            http.routes.iter().map(|(_, p, _)| p.clone()).chain(http.mounts.iter().map(|(_, p, _)| p.clone())).collect();
+        http.paths.retain(|(p, m)| (m.is_some() || !known.contains(p)) && !defined.contains(p));
+        code.push((path.to_string(), http));
 
         for imp in parsed.imports {
             match classify(path, &imp.spec, &committed, &packages) {
@@ -236,6 +250,7 @@ pub fn scan(git: &Git, point: &WeekPoint, depth: usize, warnings: &mut Vec<Warni
             urls,
             areas,
             area_of: &area_of_file,
+            code,
         },
         warnings,
     );
@@ -298,6 +313,7 @@ struct Import {
 struct Parsed {
     imports: Vec<Import>,
     hosts: Vec<String>,
+    http: system::CodeFacts,
 }
 
 type Labels = Vec<(u32, u32, Option<String>)>;
@@ -422,6 +438,102 @@ impl<'a> Visit<'a> for NetworkUrls {
     }
 }
 
+const HTTP_METHODS: &[&str] = &["get", "post", "put", "patch", "delete", "all"];
+
+#[derive(Default)]
+struct HttpFacts {
+    facts: system::CodeFacts,
+    current_var: Option<String>,
+}
+
+fn path_pattern(e: &Expression) -> Option<String> {
+    match e {
+        Expression::StringLiteral(s) => Some(s.value.as_str().to_string()),
+        Expression::TemplateLiteral(t) => Some(t.quasis.iter().map(|q| q.value.raw.as_str()).collect::<Vec<_>>().join("*")),
+        _ => None,
+    }
+}
+
+/// The variable a route chain hangs off: `x.get()` -> x, `new Hono().get().post()` -> the declared name.
+fn router_root(e: &Expression, current: &Option<String>) -> Option<String> {
+    match e {
+        Expression::Identifier(i) => Some(i.name.as_str().to_string()),
+        Expression::CallExpression(c) => match &c.callee {
+            Expression::StaticMemberExpression(m) => router_root(&m.object, current),
+            _ => None,
+        },
+        Expression::NewExpression(_) => current.clone(),
+        _ => None,
+    }
+}
+
+fn method_option(args: &[Argument]) -> Option<String> {
+    let Some(Expression::ObjectExpression(o)) = args.get(1).and_then(|a| a.as_expression()) else { return None };
+    o.properties.iter().find_map(|p| match p {
+        oxc_ast::ast::ObjectPropertyKind::ObjectProperty(p) => match (&p.key, &p.value) {
+            (PropertyKey::StaticIdentifier(k), Expression::StringLiteral(v)) if k.name.as_str() == "method" => {
+                Some(v.value.as_str().to_ascii_uppercase())
+            }
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+fn looks_like_api_path(p: &str) -> bool {
+    p.starts_with("/api/") || p.starts_with("api/") || p == "/api"
+}
+
+impl<'a> Visit<'a> for HttpFacts {
+    fn visit_variable_declarator(&mut self, it: &VariableDeclarator<'a>) {
+        let saved = self.current_var.take();
+        if let BindingPattern::BindingIdentifier(b) = &it.id {
+            self.current_var = Some(b.name.as_str().to_string());
+        }
+        walk::walk_variable_declarator(self, it);
+        self.current_var = saved;
+    }
+    fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
+        let first = it.arguments.first().and_then(|a| a.as_expression()).and_then(path_pattern);
+        if let Expression::StaticMemberExpression(m) = &it.callee {
+            let prop = m.property.name.as_str();
+            if let Some(p) = first.as_ref().filter(|p| p.starts_with('/')) {
+                if HTTP_METHODS.contains(&prop) {
+                    let root = router_root(&m.object, &self.current_var);
+                    self.facts.routes.push((prop.to_ascii_uppercase(), p.clone(), root));
+                } else if prop == "route"
+                    && let Some(Expression::Identifier(child)) = it.arguments.get(1).and_then(|a| a.as_expression())
+                {
+                    let parent = router_root(&m.object, &self.current_var);
+                    self.facts.mounts.push((parent, p.clone(), child.name.as_str().to_string()));
+                }
+            }
+        }
+        if is_network_call(&it.callee)
+            && let Some(p) = first
+        {
+            let method = method_option(&it.arguments).or_else(|| Some("GET".into()));
+            self.facts.paths.push((p, method));
+        }
+        walk::walk_call_expression(self, it);
+    }
+    fn visit_object_property(&mut self, it: &ObjectProperty<'a>) {
+        if let PropertyKey::StaticIdentifier(k) = &it.key {
+            let name = k.name.as_str();
+            let is_fn = it.method || matches!(it.value, Expression::FunctionExpression(_) | Expression::ArrowFunctionExpression(_));
+            if is_fn && (name == "scheduled" || name == "queue") {
+                self.facts.handlers.push(name.to_string());
+            }
+        }
+        walk::walk_object_property(self, it);
+    }
+    fn visit_string_literal(&mut self, it: &StringLiteral<'a>) {
+        if looks_like_api_path(it.value.as_str()) {
+            self.facts.paths.push((it.value.as_str().to_string(), None));
+        }
+    }
+}
+
 fn parse(path: &str, text: &str) -> Result<Parsed, SyntaxError> {
     let alloc = Allocator::default();
     let mut source_type = SourceType::from_path(path).unwrap_or_default();
@@ -455,6 +567,8 @@ fn parse(path: &str, text: &str) -> Result<Parsed, SyntaxError> {
             ImportImportName::NamespaceObject => "* (everything)".to_string(),
             ImportImportName::Default(_) => "default".to_string(),
         };
+        // report.html hides "type "-prefixed names from the plain-language views.
+        let n = if e.is_type { format!("type {n}") } else { n };
         names.entry(e.module_request.name.as_str()).or_default().insert(n);
     }
     for e in record.indirect_export_entries.iter().chain(record.star_export_entries.iter()) {
@@ -493,7 +607,14 @@ fn parse(path: &str, text: &str) -> Result<Parsed, SyntaxError> {
 
     let mut urls = NetworkUrls::default();
     urls.visit_program(&ret.program);
-    Ok(Parsed { imports, hosts: urls.hosts() })
+    let mut http = HttpFacts::default();
+    http.visit_program(&ret.program);
+    for e in record.local_export_entries.iter() {
+        if let oxc_syntax::module_record::ExportExportName::Name(n) = &e.export_name {
+            http.facts.exports.push(n.name.as_str().to_string());
+        }
+    }
+    Ok(Parsed { imports, hosts: urls.hosts(), http: http.facts })
 }
 
 /// Same rule as TS: a URL counts in a file that makes requests, or when its constant names an endpoint.
@@ -512,6 +633,38 @@ fn swift_urls(text: &str) -> Vec<String> {
         }
     }
     hosts
+}
+
+/// `"api/instruments/\(id)/prices"` -> `api/instruments/*/prices`.
+fn swift_api_paths(text: &str) -> Vec<(String, Option<String>)> {
+    let mut out = Vec::new();
+    for (i, _) in text.match_indices('"') {
+        let rest = &text[i + 1..];
+        if !(rest.starts_with("api/") || rest.starts_with("/api/")) {
+            continue;
+        }
+        let Some(end) = rest.find(['"', '\n']) else { continue };
+        let mut pattern = String::new();
+        let mut chars = rest[..end].chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\\' && chars.peek() == Some(&'(') {
+                let mut depth = 0;
+                for n in chars.by_ref() {
+                    match n {
+                        '(' => depth += 1,
+                        ')' if depth == 1 => break,
+                        ')' => depth -= 1,
+                        _ => {}
+                    }
+                }
+                pattern.push('*');
+            } else {
+                pattern.push(c);
+            }
+        }
+        out.push((pattern, None));
+    }
+    out
 }
 
 enum Target {

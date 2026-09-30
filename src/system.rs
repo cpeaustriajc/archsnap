@@ -8,6 +8,97 @@ use crate::diag::{Source, Warning};
 pub struct System {
     pub nodes: Vec<SysNode>,
     pub edges: Vec<SysEdge>,
+    #[serde(default)]
+    pub routes: Vec<Route>,
+    #[serde(default)]
+    pub route_calls: Vec<RouteCall>,
+    #[serde(default)]
+    pub handlers: Vec<Handler>,
+}
+
+/// An endpoint a service answers, with its mount prefix applied.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Route {
+    pub method: String,
+    pub path: String,
+    pub file: String,
+    pub service: String,
+}
+
+/// A place in client code that requests one of the routes above.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RouteCall {
+    pub from: String,
+    pub file: String,
+    pub method: String,
+    pub path: String,
+}
+
+/// A Worker entry point other than fetch: `scheduled` (cron) or `queue` (consumer).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Handler {
+    pub kind: String,
+    pub file: String,
+    pub service: String,
+}
+
+/// What one source file says about HTTP: routes it defines, routers it mounts, paths it requests.
+#[derive(Debug, Clone, Default)]
+pub struct CodeFacts {
+    /// (method, path, router variable)
+    pub routes: Vec<(String, String, Option<String>)>,
+    /// (parent router, prefix, child router variable)
+    pub mounts: Vec<(Option<String>, String, String)>,
+    /// (path pattern with `*` for interpolations, method if known)
+    pub paths: Vec<(String, Option<String>)>,
+    pub handlers: Vec<String>,
+    pub exports: Vec<String>,
+}
+
+fn segments(path: &str) -> Vec<&str> {
+    path.split(['?', '#']).next().unwrap_or("").split('/').filter(|s| !s.is_empty()).collect()
+}
+
+fn is_param(seg: &str) -> bool {
+    seg == "*" || seg.starts_with(':') || seg.starts_with('[') || seg.starts_with('{')
+}
+
+/// `/api/rates/*/refresh` (client) matches `/api/rates/:id/refresh` (server).
+fn path_matches(client: &str, server: &str) -> bool {
+    let (c, s) = (segments(client), segments(server));
+    c.len() == s.len() && !c.is_empty() && c.iter().zip(&s).all(|(a, b)| a == b || is_param(a) || is_param(b))
+}
+
+fn join_route(prefix: &str, path: &str) -> String {
+    let joined = format!("/{}/{}", prefix.trim_matches('/'), path.trim_matches('/'));
+    let parts: Vec<&str> = joined.split('/').filter(|s| !s.is_empty()).collect();
+    format!("/{}", parts.join("/"))
+}
+
+/// Next.js file routes: `app/api/links/[id]/route.ts` -> `/api/links/:id`, `pages/api/x.ts` -> `/api/x`.
+fn next_route(file: &str, package_dir: &str) -> Option<String> {
+    let rest = if package_dir.is_empty() { file } else { file.strip_prefix(&format!("{package_dir}/"))? };
+    let rest = rest.strip_prefix("src/").unwrap_or(rest);
+    let (dir, name) = rest.rsplit_once('/')?;
+    let segs: Vec<String> = if let Some(app) = dir.strip_prefix("app").filter(|_| name.starts_with("route.")) {
+        app.split('/').filter(|s| !s.is_empty()).filter(|s| !(s.starts_with('(') && s.ends_with(')'))).map(str::to_string).collect()
+    } else {
+        let api = dir.strip_prefix("pages/api").map(|d| format!("api{d}"))?;
+        let stem = name.split('.').next()?;
+        let mut s: Vec<String> = api.split('/').filter(|s| !s.is_empty()).map(str::to_string).collect();
+        if stem != "index" {
+            s.push(stem.to_string());
+        }
+        s
+    };
+    let segs: Vec<String> = segs
+        .into_iter()
+        .map(|s| match s.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            Some(p) => format!(":{}", p.trim_start_matches("...")),
+            None => s,
+        })
+        .collect();
+    Some(format!("/{}", segs.join("/")))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -80,6 +171,7 @@ pub struct Inputs<'a> {
     /// (area, package dir) of every code area, and the area each file belongs to.
     pub areas: Vec<(String, String)>,
     pub area_of: &'a dyn Fn(&str) -> String,
+    pub code: Vec<(String, CodeFacts)>,
 }
 
 const GENERIC_FOLDERS: &[&str] = &[
@@ -265,6 +357,7 @@ pub fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
     }
 
     let mut workers: BTreeMap<String, String> = BTreeMap::new();
+    let mut mains: Vec<(String, String)> = Vec::new();
     let mut domains: BTreeMap<String, String> = BTreeMap::new();
     for (path, text) in &inputs.wranglers {
         let dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
@@ -278,6 +371,9 @@ pub fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
         let label = b.nodes.get(&owner).map(|n| n.label.clone()).unwrap_or_else(|| name.clone());
         b.nodes.insert(owner.clone(), SysNode { id: owner.clone(), kind: "service".into(), label, detail, parent: None });
         workers.insert(name.clone(), owner.clone());
+        if let Some(main) = cfg.get("main").and_then(|v| v.as_str()).and_then(|m| crate::scan::join(dir, m)) {
+            mains.push((owner.clone(), main));
+        }
         let routes = cfg.get("routes").and_then(|v| v.as_array()).cloned().unwrap_or_default();
         for r in routes.iter().chain(cfg.get("route")) {
             let pattern = r.as_str().or_else(|| r.get("pattern").and_then(|p| p.as_str())).unwrap_or("");
@@ -422,7 +518,90 @@ pub fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
         }
     }
 
-    System { nodes: b.nodes.into_values().collect(), edges: b.edges.into_iter().collect() }
+    let (routes, route_calls, handlers) = http(&inputs, pkgs, &b, &mains);
+    System { nodes: b.nodes.into_values().collect(), edges: b.edges.into_iter().collect(), routes, route_calls, handlers }
+}
+
+fn http(inputs: &Inputs, pkgs: &[Package], b: &Builder, mains: &[(String, String)]) -> (Vec<Route>, Vec<RouteCall>, Vec<Handler>) {
+    let owner_of = |file: &str| -> Option<String> {
+        if file.ends_with(".swift") {
+            return inputs.xcode.first().map(|(d, n)| format!("xcode:{d}/{n}"));
+        }
+        package_of(pkgs, file).map(pkg_id).filter(|id| b.nodes.contains_key(id))
+    };
+    let kind_of = |id: &str| b.nodes.get(id).map(|n| n.kind.as_str()).unwrap_or("");
+
+    // Router variables are matched by name within a package: `app.route("/api/x", xRoutes)`.
+    let mut prefix_of: BTreeMap<(String, String), String> = BTreeMap::new();
+    for _ in 0..4 {
+        for (file, facts) in &inputs.code {
+            let Some(owner) = owner_of(file) else { continue };
+            for (parent, prefix, child) in &facts.mounts {
+                let base = parent.as_ref().and_then(|p| prefix_of.get(&(owner.clone(), p.clone()))).cloned().unwrap_or_default();
+                prefix_of.insert((owner.clone(), child.clone()), join_route(&base, prefix));
+            }
+        }
+    }
+
+    let mut routes: Vec<Route> = Vec::new();
+    for (file, facts) in &inputs.code {
+        let Some(owner) = owner_of(file) else { continue };
+        let pkg_dir = package_of(pkgs, file).map(|p| p.dir.as_str()).unwrap_or("");
+        let kind = kind_of(&owner);
+        if kind == "service" {
+            for (method, path, router) in &facts.routes {
+                let base = router.as_ref().and_then(|r| prefix_of.get(&(owner.clone(), r.clone()))).cloned().unwrap_or_default();
+                routes.push(Route { method: method.clone(), path: join_route(&base, path), file: file.clone(), service: owner.clone() });
+            }
+        }
+        if (kind == "service" || kind == "web") && let Some(path) = next_route(file, pkg_dir) {
+            let methods: Vec<&String> = facts.exports.iter().filter(|e| ["GET", "POST", "PUT", "PATCH", "DELETE"].contains(&e.as_str())).collect();
+            if file.contains("/pages/api/") || file.starts_with("pages/api/") {
+                routes.push(Route { method: "ANY".into(), path: path.clone(), file: file.clone(), service: owner.clone() });
+            }
+            for m in methods {
+                routes.push(Route { method: m.clone(), path: path.clone(), file: file.clone(), service: owner.clone() });
+            }
+        }
+    }
+    routes.sort_by(|a, b| (&a.path, &a.method).cmp(&(&b.path, &b.method)));
+    routes.dedup_by(|a, b| a.path == b.path && a.method == b.method && a.service == b.service);
+
+    let is_test = |f: &str| {
+        let l = f.to_ascii_lowercase();
+        ["tests/", "test/", "__tests__/", "e2e/", ".test.", ".spec.", "tests.swift", "test.swift"].iter().any(|t| l.contains(t))
+    };
+    let mut calls: Vec<RouteCall> = Vec::new();
+    for (file, facts) in &inputs.code {
+        if is_test(file) {
+            continue;
+        }
+        let Some(owner) = owner_of(file) else { continue };
+        for (path, method) in &facts.paths {
+            let hit = routes
+                .iter()
+                .filter(|r| &r.file != file && path_matches(path, &r.path))
+                .find(|r| method.as_ref().is_none_or(|m| m == &r.method || r.method == "ANY"));
+            if let Some(r) = hit {
+                let call = RouteCall { from: owner.clone(), file: file.clone(), method: r.method.clone(), path: r.path.clone() };
+                if !calls.contains(&call) {
+                    calls.push(call);
+                }
+            }
+        }
+    }
+
+    let mut handlers = Vec::new();
+    for (owner, main) in mains {
+        let stem = main.rsplit_once('.').map(|(s, _)| s).unwrap_or(main);
+        let facts = inputs.code.iter().find(|(f, _)| f == main || f.rsplit_once('.').map(|(s, _)| s) == Some(stem));
+        if let Some((file, facts)) = facts {
+            for kind in &facts.handlers {
+                handlers.push(Handler { kind: kind.clone(), file: file.clone(), service: owner.clone() });
+            }
+        }
+    }
+    (routes, calls, handlers)
 }
 
 /// Cloudflare crons run in UTC. Uncommon patterns fall back to the raw expression.

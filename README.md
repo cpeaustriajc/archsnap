@@ -18,7 +18,14 @@ Weekly architecture snapshots of a TypeScript/JavaScript repo, for everyone on t
   files, Cloudflare `wrangler` config (Workers, D1, KV, R2, Durable Objects, queues, crons, served
   assets, routes), well-known SDKs (Stripe, Postgres, Redis, …), Xcode and XcodeGen projects, and the
   URLs the code actually calls. The week's summary says what changed, e.g. "Added queue emails."
-- **How the code fits together**: an import matrix of every area (rows import from columns), grouped
+- **How the app works**: numbered steps in plain words, each with pseudocode underneath: who opens
+  what, which endpoints each app requests, what every endpoint (`on GET /api/fx-rates`) uses and
+  calls, what scheduled and queue handlers do, and where data lives. Endpoints come from Hono,
+  Express-style `router.get("/…")` calls with their `app.route(prefix, …)` mounts, and Next.js
+  `route.ts` / `pages/api` files; requests come from `fetch`-style calls and `"/api/…"` strings in
+  TS/JS and Swift, matched to those endpoints. Type-only imports are left out of these views.
+- **How the code fits together, In words**: every area and what it uses from the others.
+- **How the code fits together, Matrix**: an import matrix of every area (rows import from columns), grouped
   by workspace package. Select a cell, or pick two areas, to see how they talk: which names cross the
   boundary, which file defines them and which files use them.
 - An **areas table** with the same numbers, readable without colour.

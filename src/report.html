@@ -104,6 +104,20 @@ h2 { margin: 0 0 4px; font-size: 18px; font-weight: 650; letter-spacing: -0.01em
   .flow { animation: flow 1.1s linear infinite; }
   @keyframes flow { to { stroke-dashoffset: -13; } }
 }
+.steps { margin: 12px 0 0; padding-left: 22px; }
+.step { margin: 0 0 22px; }
+.step::marker { font-weight: 700; color: var(--ink-3); }
+.step p { margin: 0 0 8px; font-size: 16px; max-width: 72ch; }
+.pseudo {
+  margin: 0; padding: 12px 14px; background: var(--raised); border-radius: 8px; overflow-x: auto;
+  font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); white-space: pre;
+}
+.words { list-style: none; margin: 8px 0 0; padding: 0; columns: 2 420px; column-gap: 40px; }
+.words > li { break-inside: avoid; margin: 0 0 16px; }
+.words p { margin: 0 0 4px; }
+.words .muted { color: var(--ink-3); font-size: 13px; }
+.words ul { margin: 0; padding-left: 18px; color: var(--ink-2); font-size: 14px; }
+.linkish { font: inherit; color: var(--ink); background: none; border: 0; padding: 0; text-decoration: underline; text-decoration-color: var(--ink-3); text-underline-offset: 3px; cursor: pointer; }
 .system { overflow-x: auto; margin-top: 8px; }
 .system svg { display: block; }
 .sys-node { cursor: pointer; }
@@ -215,16 +229,34 @@ tr.removed td { color: var(--ink-3); }
     </div>
   </section>
 
+  <section aria-labelledby="walk-h">
+    <h2 id="walk-h">How the app works</h2>
+    <p class="lede">Each step says in plain words how one part talks to the others, with the same thing as pseudocode underneath. It is written from the code: endpoints it defines, requests it makes, and what each file uses.</p>
+    <div id="walkthrough"></div>
+  </section>
+
   <section aria-labelledby="code-h">
-    <h2 id="code-h">How the code fits together</h2>
-    <p class="lede">Each row is an area and each column an area it imports from; darker cells mean more imports, and a dot marks a link that is new this week. Select a cell, or pick two areas, to see how they talk.</p>
-    <dl class="facts" id="facts"></dl>
-    <div class="pickers">
-      <label>From <select id="pick-from"></select></label>
-      <label>To <select id="pick-to"></select></label>
+    <div class="section-head">
+      <h2 id="code-h">How the code fits together</h2>
+      <div class="tabs" role="group" aria-label="Code view">
+        <button type="button" id="code-tab-words" aria-pressed="true">In words</button>
+        <button type="button" id="code-tab-matrix" aria-pressed="false">Matrix</button>
+      </div>
     </div>
-    <div class="matrix" id="matrix"></div>
-    <div class="talk" id="talk" aria-live="polite"></div>
+    <dl class="facts" id="facts"></dl>
+    <div id="code-words-view">
+      <p class="lede">Every area and what it uses from the others. Select one to see the files on each side.</p>
+      <div id="code-words"></div>
+    </div>
+    <div id="code-matrix-view" hidden>
+      <p class="lede">Each row is an area and each column an area it imports from; darker cells mean more imports, and a dot marks a link that is new this week. Select a cell, or pick two areas, to see how they talk.</p>
+      <div class="pickers">
+        <label>From <select id="pick-from"></select></label>
+        <label>To <select id="pick-to"></select></label>
+      </div>
+      <div class="matrix" id="matrix"></div>
+      <div class="talk" id="talk" aria-live="polite"></div>
+    </div>
   </section>
 
   <section aria-labelledby="areas-h">
@@ -1239,11 +1271,234 @@ function renderPoster() {
 $("view-poster").addEventListener("click", () => setView("poster"));
 $("view-explore").addEventListener("click", () => setView("explore"));
 
+// ---- "How the app works": the system and imports written out as steps and pseudocode ----
+function codeContext(snapshot) {
+  const sys = snapshot.system || { nodes: [], edges: [], routes: [], route_calls: [], handlers: [] };
+  const byId = new Map(sys.nodes.map((n) => [n.id, n]));
+  const pkgName = new Map(sys.nodes.filter((n) => n.id.startsWith("pkg:")).map((n) => [n.id.slice(4) === "." ? "" : n.id.slice(4), n.label]));
+  const featureOf = new Map(sys.nodes.filter((n) => n.kind === "feature").map((n) => [n.detail, n]));
+  const areas = Object.keys(snapshot.modules).sort((a, b) => b.length - a.length);
+  const areaOfFile = (file) => areas.find((a) => file.startsWith(`${a}/`)) || "(root)";
+  // "apps/web/src/components" -> "@pfm/web › components"; features use their own name.
+  const nameOf = (area) => {
+    if (featureOf.has(area)) return featureOf.get(area).label;
+    const pkg = snapshot.modules[area]?.package ?? "";
+    const owner = pkgName.get(pkg);
+    if (!owner) return area;
+    const rest = area.slice(pkg.length).replace(/^\/(src\/)?/, "");
+    return rest ? `${owner} › ${rest}` : owner;
+  };
+  const usesOfFile = (file) => {
+    const out = new Map();
+    snapshot.edges.forEach((e) => e.links.forEach((l) => {
+      if (l.from !== file) return;
+      if (!out.has(e.to)) out.set(e.to, new Set());
+      l.names.forEach((n) => out.get(e.to).add(n));
+    }));
+    return out;
+  };
+  const outsideOfArea = (area) => {
+    const f = featureOf.get(area);
+    if (!f) return [];
+    return sys.edges.filter((e) => e.from === f.id && byId.get(e.to)?.kind === "external").map((e) => byId.get(e.to).label);
+  };
+  return { sys, byId, nameOf, areaOfFile, usesOfFile, outsideOfArea, featureOf };
+}
+
+const runtimeNames = (names) => [...names].filter((n) => !n.startsWith("type "));
+const listNames = (names, max = 4) => {
+  const xs = runtimeNames(names).filter((n) => n !== "default");
+  if (!xs.length) return "";
+  return xs.slice(0, max).join(", ") + (xs.length > max ? ` +${xs.length - max} more` : "");
+};
+const shortFile = (f) => f.split("/").slice(-2).join("/");
+
+function stepBlock(sentence, lines) {
+  const li = el("li", { class: "step" });
+  const p = el("p");
+  sentence.forEach((part) => p.append(typeof part === "string" ? document.createTextNode(part) : el("strong", {}, part.b)));
+  li.append(p);
+  if (lines.length) li.append(el("pre", { class: "pseudo" }, lines.join("\n")));
+  return li;
+}
+
+function useLines(ctx, file, indent = "  ") {
+  const lines = [];
+  const outside = new Set();
+  ctx.usesOfFile(file).forEach((names, area) => {
+    if (names.size && !runtimeNames(names).length) return;
+    const n = listNames(names);
+    lines.push(`${indent}use ${ctx.nameOf(area)}${n ? `: ${n}` : ""}`);
+    ctx.outsideOfArea(area).forEach((o) => outside.add(o));
+  });
+  ctx.outsideOfArea(ctx.areaOfFile(file)).forEach((o) => outside.add(o));
+  if (outside.size) lines.push(`${indent}call ${[...outside].join(", ")}`);
+  return lines;
+}
+
+function renderWalkthrough() {
+  const w = data.weeks[selected];
+  const s = w.snapshot;
+  const ctx = codeContext(s);
+  const { sys, byId } = ctx;
+  const steps = [];
+  const detailed = s.edges.some((e) => e.links.length);
+
+  const callsFrom = (id) => (sys.route_calls || []).filter((c) => c.from === id);
+  const callLines = (calls) => {
+    const seen = new Set();
+    return calls.filter((c) => !seen.has(`${c.method} ${c.path}`) && seen.add(`${c.method} ${c.path}`))
+      .map((c) => `  ${c.method.padEnd(6)} ${c.path.padEnd(32)} (${shortFile(c.file)})`);
+  };
+
+  sys.nodes.filter((n) => n.kind === "web").forEach((web) => {
+    const pkg = web.id.slice(4) === "." ? "" : web.id.slice(4);
+    const lines = [`${web.label} (${web.detail})`];
+    Object.keys(s.modules).filter((a) => (s.modules[a].package || "") === pkg).forEach((area) => {
+      s.edges.filter((e) => e.from === area).sort((a, b) => b.count - a.count).slice(0, 3).forEach((e) => {
+        const names = new Set(e.links.flatMap((l) => l.names));
+        lines.push(`  ${ctx.nameOf(area)} ← ${ctx.nameOf(e.to)}${names.size ? `: ${listNames(names)}` : ` (${plural(e.count, "import", "imports")})`}`);
+      });
+    });
+    const calls = callsFrom(web.id);
+    const opener = sys.edges.some((e) => e.to === web.id && byId.get(e.from)?.kind === "client") ? "People open " : "";
+    const sentence = [opener, { b: web.label }, ` in a browser. It is built from ${plural(Object.keys(s.modules).filter((a) => (s.modules[a].package || "") === pkg).length, "area", "areas")}, which fit together like this.`];
+    if (calls.length) {
+      sentence.push(` It calls ${plural(calls.length, "API endpoint", "API endpoints")}.`);
+      lines.push("  requests:", ...callLines(calls).map((l) => "  " + l));
+    } else {
+      sentence.push(" No calls to the API were found in its code.");
+    }
+    steps.push(stepBlock(sentence, lines));
+  });
+
+  sys.nodes.filter((n) => n.kind === "mobile" || n.kind === "library").forEach((client) => {
+    const calls = callsFrom(client.id);
+    if (!calls.length) return;
+    const what = client.kind === "mobile" ? "app" : "shared package";
+    steps.push(stepBlock(
+      ["The ", { b: client.label }, ` ${what} calls the API: ${plural(calls.length, "request", "requests")} to ${plural(new Set(calls.map((c) => c.path)).size, "endpoint", "endpoints")}.`],
+      [`${client.label} requests:`, ...callLines(calls)],
+    ));
+  });
+
+  sys.nodes.filter((n) => n.kind === "service").forEach((svc) => {
+    const routes = (sys.routes || []).filter((r) => r.service === svc.id);
+    const handlers = (sys.handlers || []).filter((h) => h.service === svc.id);
+    if (routes.length) {
+      const lines = [];
+      const files = [...new Set(routes.map((r) => r.file))];
+      files.forEach((file, i) => {
+        if (i) lines.push("");
+        routes.filter((r) => r.file === file).forEach((r) => {
+          const callers = [...new Set((sys.route_calls || []).filter((c) => c.path === r.path && c.method === r.method).map((c) => byId.get(c.from)?.label || c.from))];
+          lines.push(`on ${r.method.padEnd(6)} ${r.path.padEnd(30)}${callers.length ? `  ← ${callers.join(", ")}` : ""}`);
+        });
+        lines.push(`  in ${shortFile(file)}`, ...useLines(ctx, file));
+      });
+      steps.push(stepBlock([{ b: svc.label }, ` (${svc.detail}) answers ${plural(routes.length, "endpoint", "endpoints")}.`], lines));
+    }
+    handlers.forEach((h) => {
+      if (h.kind === "scheduled") {
+        const crons = sys.edges.filter((e) => e.to === svc.id && byId.get(e.from)?.kind === "schedule").map((e) => byId.get(e.from).label);
+        const queues = sys.edges.filter((e) => e.from === svc.id && e.label === "sends to").map((e) => byId.get(e.to).label);
+        const lines = [`${crons[0] || "On schedule"} → scheduled()   (${shortFile(h.file)})`, ...useLines(ctx, h.file)];
+        queues.forEach((q) => lines.push(`  send work to ${q}`));
+        steps.push(stepBlock([crons.length ? `${crons[0]}, ` : "On a schedule, ", { b: svc.label }, " runs its scheduled job", queues.length ? ` and queues work on ${queues.join(", ")}.` : "."], lines));
+      }
+      if (h.kind === "queue") {
+        const queues = sys.edges.filter((e) => e.to === svc.id && e.label === "delivers to").map((e) => byId.get(e.from).label);
+        steps.push(stepBlock(
+          [`Work waiting on ${queues.join(", ") || "its queue"} is picked up by `, { b: svc.label }, ` in queue().`],
+          [`on message from ${queues[0] || "queue"} → queue()   (${shortFile(h.file)})`, ...useLines(ctx, h.file)],
+        ));
+      }
+    });
+    const stores = sys.edges.filter((e) => e.from === svc.id && byId.get(e.to)?.kind === "datastore").map((e) => byId.get(e.to).label);
+    const featureCalls = new Set(sys.edges.filter((e) => byId.get(e.from)?.parent === svc.id).map((e) => e.to));
+    const direct = sys.edges.filter((e) => e.from === svc.id && byId.get(e.to)?.kind === "external" && !featureCalls.has(e.to)).map((e) => byId.get(e.to).label);
+    if (stores.length || direct.length) {
+      const lines = [];
+      stores.forEach((d) => lines.push(`${svc.label} reads and writes ${d}`));
+      if (direct.length) lines.push(`${svc.label} also calls ${direct.join(", ")}`);
+      steps.push(stepBlock([{ b: svc.label }, stores.length ? ` keeps its data in ${stores.join(", ")}` : "", direct.length ? `${stores.length ? " and" : ""} also calls ${direct.join(", ")}` : "", "."], lines));
+    }
+  });
+
+  const libs = sys.nodes.filter((n) => n.kind === "library");
+  if (libs.length) {
+    const lines = libs.map((l) => {
+      const users = sys.edges.filter((e) => e.to === l.id && e.label === "uses code from").map((e) => byId.get(e.from)?.label).filter(Boolean);
+      return `${l.label.padEnd(24)} used by ${users.length ? users.join(", ") : "nothing drawn here"}`;
+    });
+    steps.push(stepBlock(["Shared packages hold code the apps reuse."], lines));
+  }
+
+  const host = $("walkthrough");
+  if (!steps.length) {
+    host.replaceChildren(el("p", { class: "lede" }, "Not enough was found this week to describe how the parts talk."));
+    return;
+  }
+  const ol = el("ol", { class: "steps" });
+  ol.append(...steps);
+  const parts = [ol];
+  if (!detailed) parts.unshift(el("p", { class: "lede" }, "Names of what each part uses are kept for the newest week only; select the newest week for full detail."));
+  host.replaceChildren(...parts);
+}
+
+let codeView = "words";
+
+function renderCodeWords() {
+  const w = data.weeks[selected];
+  const s = w.snapshot;
+  const ctx = codeContext(s);
+  const host = $("code-words");
+  const byArea = new Map();
+  s.edges.forEach((e) => { if (!byArea.has(e.from)) byArea.set(e.from, []); byArea.get(e.from).push(e); });
+  const rows = areaOrder(s).filter((a) => byArea.has(a)).map((area) => {
+    const li = el("li");
+    const head = el("p");
+    head.append(el("strong", {}, ctx.nameOf(area)), el("span", { class: "muted" }, `  ${area}, ${plural(s.modules[area].files, "file", "files")}`));
+    const ul = el("ul");
+    byArea.get(area).sort((a, b) => b.count - a.count).forEach((e) => {
+      const names = new Set(e.links.flatMap((l) => l.names));
+      const item = el("li");
+      const btn = el("button", { type: "button", class: "linkish" }, ctx.nameOf(e.to));
+      btn.onclick = () => { pair = [e.from, e.to]; codeView = "matrix"; renderCodeTabs(); renderCode(); $("talk").scrollIntoView({ block: "nearest" }); };
+      const runtime = listNames(names, 6);
+      const tail = runtime ? ` for ${runtime}` : names.size ? " for types only" : ` (${plural(e.count, "import", "imports")})`;
+      item.append(document.createTextNode("uses "), btn, document.createTextNode(tail));
+      ul.append(item);
+    });
+    li.append(head, ul);
+    return li;
+  });
+  if (!rows.length) {
+    host.replaceChildren(el("p", { class: "lede" }, "No area imports from another area yet."));
+    return;
+  }
+  const list = el("ul", { class: "words" });
+  list.append(...rows);
+  host.replaceChildren(list);
+}
+
+function renderCodeTabs() {
+  $("code-tab-words").setAttribute("aria-pressed", String(codeView === "words"));
+  $("code-tab-matrix").setAttribute("aria-pressed", String(codeView === "matrix"));
+  $("code-words-view").hidden = codeView !== "words";
+  $("code-matrix-view").hidden = codeView !== "matrix";
+}
+
+$("code-tab-words").addEventListener("click", () => { codeView = "words"; renderCodeTabs(); renderCodeWords(); });
+$("code-tab-matrix").addEventListener("click", () => { codeView = "matrix"; renderCodeTabs(); renderCode(); });
+
 function render() {
   renderHeader();
   renderChart();
   renderSystemView();
+  renderWalkthrough();
   renderCode();
+  renderCodeWords();
   renderAreas();
 }
 

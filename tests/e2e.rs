@@ -422,7 +422,7 @@ fn workspace_imports_resolve_and_record_what_crosses_the_boundary() {
     assert_eq!(link["from"], "apps/api/src/index.ts");
     assert_eq!(link["to"], "packages/core/src/index.ts");
     let names: Vec<&str> = link["names"].as_array().unwrap().iter().map(|n| n.as_str().unwrap()).collect();
-    assert!(names.contains(&"formatPrice") && names.contains(&"Money"), "{names:?}");
+    assert!(names.contains(&"formatPrice") && names.contains(&"type Money"), "type-only imports are marked: {names:?}");
 }
 
 #[test]
@@ -448,4 +448,67 @@ crons = ["0 6 * * *"]
     archsnap(repo.path()).assert().success();
     let html = fs::read_to_string(repo.out().join("index.html")).unwrap();
     assert!(html.contains("Added queue emails"), "summary should mention the new queue");
+}
+
+/// An API with mounted Hono routes, a web client calling one, and a cron handler in the Worker entry.
+fn routed_repo() -> Repo {
+    let repo = monorepo();
+    repo.write(
+        "apps/api/src/app.ts",
+        "import { Hono } from 'hono';\nimport { rateRoutes } from './routes/rates';\nexport const app = new Hono();\napp.route('/api/rates', rateRoutes);\n",
+    )
+    .write(
+        "apps/api/src/routes/rates.ts",
+        "import { Hono } from 'hono';\nimport { latestRate } from '../rates/latest';\nexport const rateRoutes = new Hono()\n  .get('/', (c) => c.json(latestRate()))\n  .post('/:id/refresh', (c) => c.json({}));\n",
+    )
+    .write(
+        "apps/api/src/rates/latest.ts",
+        "export const latestRate = () => fetch('https://api.rates-provider.io/v1/latest');\n",
+    )
+    .write(
+        "apps/api/src/index.ts",
+        "import { app } from './app';\nimport { latestRate } from './rates/latest';\nexport default {\n  fetch: app.fetch,\n  async scheduled() { await latestRate(); },\n};\n",
+    )
+    .write(
+        "apps/web/src/main.tsx",
+        "export const load = (id: string) => fetch(`/api/rates/${id}/refresh`, { method: 'POST' });\nexport const App = () => <p>{String(load)}</p>;\n",
+    )
+    .commit("routes", WEEK_38);
+    repo
+}
+
+#[test]
+fn api_routes_are_read_with_their_mount_prefix() {
+    let repo = routed_repo();
+    archsnap(repo.path()).assert().success();
+    let s = repo.snapshot("2026-W38");
+    let routes: Vec<String> = s["system"]["routes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| format!("{} {} {}", r["method"].as_str().unwrap(), r["path"].as_str().unwrap(), r["file"].as_str().unwrap()))
+        .collect();
+    assert!(routes.contains(&"GET /api/rates apps/api/src/routes/rates.ts".to_string()), "{routes:?}");
+    assert!(routes.contains(&"POST /api/rates/:id/refresh apps/api/src/routes/rates.ts".to_string()), "{routes:?}");
+}
+
+#[test]
+fn client_calls_are_matched_to_api_routes() {
+    let repo = routed_repo();
+    archsnap(repo.path()).assert().success();
+    let s = repo.snapshot("2026-W38");
+    let calls = s["system"]["route_calls"].as_array().unwrap();
+    assert!(
+        calls.iter().any(|c| c["file"] == "apps/web/src/main.tsx" && c["method"] == "POST" && c["path"] == "/api/rates/:id/refresh"),
+        "{calls:?}"
+    );
+}
+
+#[test]
+fn worker_scheduled_handler_is_found() {
+    let repo = routed_repo();
+    archsnap(repo.path()).assert().success();
+    let s = repo.snapshot("2026-W38");
+    let handlers = s["system"]["handlers"].as_array().unwrap();
+    assert!(handlers.iter().any(|h| h["kind"] == "scheduled" && h["file"] == "apps/api/src/index.ts"), "{handlers:?}");
 }
