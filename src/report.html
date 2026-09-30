@@ -114,6 +114,7 @@ h2 { margin: 0 0 4px; font-size: 18px; font-weight: 650; letter-spacing: -0.01em
 }
 .sequence { overflow-x: auto; margin-top: 10px; }
 .sequence svg { display: block; }
+.sequence .seq-more { margin-top: 10px; }
 .seq-label { paint-order: stroke; stroke: var(--surface); stroke-width: 5px; stroke-linejoin: round; }
 .seq-msg:hover .seq-label, .seq-msg.on .seq-label { font-weight: 700; }
 .sequence-words { margin: 14px 0 0; padding-left: 28px; max-width: 80ch; }
@@ -1010,10 +1011,10 @@ function renderAreas() {
 }
 
 // ---- Poster view: the system drawn top-down like a hand-made design diagram ----
-const BRANDS = JSON.parse(document.getElementById("archsnap-brands").textContent).icons;
+const { icons: BRANDS, domains: BRAND_DOMAINS = {} } = JSON.parse(document.getElementById("archsnap-brands").textContent);
 const DOMAIN_BRAND = {
   "apple.com": "apple", "github.com": "github", "githubusercontent.com": "github", "google.com": "google",
-  "googleapis.com": "google", "youtube.com": "youtube", "youtu.be": "youtube", "tiktok.com": "tiktok",
+  "googleapis.com": "google", "dns.google": "google", "youtube.com": "youtube", "youtu.be": "youtube", "tiktok.com": "tiktok",
   "tiktokapis.com": "tiktok", "x.com": "x", "twitter.com": "x", "hubspot.com": "hubspot", "hubapi.com": "hubspot",
   "bitly.com": "bitly", "shopify.com": "shopify", "paypal.com": "paypal", "discord.com": "discord", "notion.so": "notion",
   "linear.app": "linear", "figma.com": "figma", "plausible.io": "plausibleanalytics", "vercel.com": "vercel",
@@ -1035,7 +1036,7 @@ const FRAMEWORK_BRAND = [
 ICONS.feature = "M4.5 4.5h6v6h-6z M13.5 4.5h6v6h-6z M4.5 13.5h6v6h-6z M13.5 13.5h6v6h-6z";
 
 function brandOf(n) {
-  if (n.kind === "external") return DOMAIN_BRAND[n.label] || LABEL_BRAND[n.label] || null;
+  if (n.kind === "external") return DOMAIN_BRAND[n.label] || LABEL_BRAND[n.label] || BRAND_DOMAINS[n.label] || null;
   if (LABEL_BRAND[n.label]) return LABEL_BRAND[n.label];
   if (n.detail.startsWith("Cloudflare Worker")) return "cloudflareworkers";
   if (n.detail.startsWith("Cloudflare")) return "cloudflare";
@@ -1126,7 +1127,10 @@ function renderPoster() {
   edges = edges.filter((e) => byId.get(e.to)?.kind !== "external" || keep.has(e.to));
 
   const TILE = 64, FTILE = 46, OUT_W = 116, perRow = 9;
-  const W = Math.max(1060, Math.min(perRow, outside.filter((n) => keep.has(n.id)).length) * (OUT_W + 20));
+  const clusterW = (n) => Math.max(170, (featuresOf.get(n.id)?.length || 0) * 104 + 36);
+  const clusterH = (n) => (featuresOf.get(n.id)?.length ? 250 : 140);
+  const W = Math.max(1060, Math.min(perRow, outside.filter((n) => keep.has(n.id)).length) * (OUT_W + 20),
+    ...sys.nodes.filter((n) => n.kind === "web" || n.kind === "service").map((n) => clusterW(n) + 20)) + 100;
   const entry = sys.nodes.filter((n) => ["client", "mobile", "schedule"].includes(n.kind));
   const apps = sys.nodes.filter((n) => n.kind === "web" || n.kind === "service");
   const stores = sys.nodes.filter((n) => n.kind === "datastore" || n.kind === "queue");
@@ -1136,7 +1140,7 @@ function renderPoster() {
   const place = (items, widthOf, y) => {
     const widths = items.map(widthOf);
     const sum = widths.reduce((a, b) => a + b, 0);
-    const gap = items.length > 1 ? Math.min(70, Math.max(24, (W - sum) / (items.length - 1))) : 0;
+    const gap = items.length > 1 ? Math.min(70, Math.max(24, (W - 100 - sum) / (items.length - 1))) : 0;
     let x = (W - sum - gap * (items.length - 1)) / 2;
     items.forEach((n, i) => { pos.set(n.id, { x, y, w: widths[i] }); x += widths[i] + gap; });
   };
@@ -1149,25 +1153,34 @@ function renderPoster() {
     .sort((a, b) => a[1] - b[1])
     .map(([n]) => n);
 
-  const clusterW = (n) => Math.max(170, (featuresOf.get(n.id)?.length || 0) * 104 + 36);
-  const clusterH = (n) => (featuresOf.get(n.id)?.length ? 250 : 140);
+  // Rows wrap instead of overflowing W, which would push tiles past both edges of the poster.
+  const rowsOf = (items, widthOf) => {
+    const rows = [];
+    let used = 0;
+    items.forEach((n) => {
+      const w = widthOf(n);
+      if (rows.length && used + 24 + w <= W - 100) { rows[rows.length - 1].push(n); used += 24 + w; }
+      else { rows.push([n]); used = w; }
+    });
+    return rows;
+  };
   let y = 12;
-  place(entry, () => 140, y);
+  rowsOf(entry, () => 140).forEach((row) => { place(row, () => 140, y); y += 190; });
+  if (!entry.length) y += 190;
   const entryIds = new Set(entry.map((n) => n.id));
-  y += 190;
   const appsOrdered = orderBy(apps, (id) => entryIds.has(id));
-  place(appsOrdered, clusterW, y);
-  const appsH = Math.max(0, ...apps.map(clusterH));
+  rowsOf(appsOrdered, clusterW).forEach((row, i, rows) => {
+    place(row, clusterW, y);
+    y += Math.max(...row.map(clusterH)) + (i < rows.length - 1 ? 50 : 70);
+  });
   appsOrdered.forEach((s) => {
     const fs = featuresOf.get(s.id) || [];
     const p = pos.get(s.id);
     fs.forEach((f, i) => pos.set(f.id, { x: p.x + 18 + i * 104, y: p.y + 136, w: 104, feature: true }));
   });
-  y += appsH + 70;
   const upper = (id) => { const k = byId.get(id)?.kind; return k === "web" || k === "service" || k === "feature"; };
   if (stores.length) {
-    place(orderBy(stores, upper), () => 150, y);
-    y += 190;
+    rowsOf(orderBy(stores, upper), () => 150).forEach((row) => { place(row, () => 150, y); y += 190; });
   }
   const outsOrdered = orderBy(outs, (id) => upper(id) || entryIds.has(id));
   for (let i = 0; i < outsOrdered.length; i += perRow) {
@@ -1240,10 +1253,6 @@ function renderPoster() {
     const s = size * 0.56 / 24;
     if (slug && BRANDS[slug]) {
       g.append(svg("path", { d: BRANDS[slug].path, fill: brandFill(BRANDS[slug].hex), transform: `translate(${cx - 12 * s},${top + size / 2 - 12 * s}) scale(${s})` }));
-    } else if (n.kind === "external") {
-      const letter = svg("text", { x: cx, y: top + size / 2 + size * 0.14, "text-anchor": "middle", "font-size": size * 0.4, "font-weight": 700, fill: "var(--ink-2)" });
-      letter.textContent = n.label[0].toUpperCase();
-      g.append(letter);
     } else {
       g.append(svg("path", { d: ICONS[n.kind] || ICONS.feature, fill: "none", stroke: "var(--ink)", "stroke-width": 1.5 / s * 1.1, "stroke-linecap": "round", "stroke-linejoin": "round",
         transform: `translate(${cx - 12 * s},${top + size / 2 - 12 * s}) scale(${s})` }));
@@ -1487,12 +1496,19 @@ function fileEffects(ctx, file) {
 
 function sequenceStories(snapshot) {
   const ctx = codeContext(snapshot);
-  const { sys, byId } = ctx;
+  const { sys } = ctx;
+  const byId = new Map(ctx.byId);
   const routes = sys.routes || [];
   const calls = sys.route_calls || [];
   const name = (id) => (id === "person" ? "Someone" : byId.get(id)?.label || id);
   const extId = new Map(sys.nodes.filter((n) => n.kind === "external").map((n) => [n.label, n.id]));
-  const storesOf = (svc) => sys.edges.filter((e) => e.from === svc && byId.get(e.to)?.kind === "datastore").map((e) => e.to);
+  const storesOf = (svc) => sys.edges.filter((e) => e.from === byId.get(svc)?.id.split("#")[0] && byId.get(e.to)?.kind === "datastore").map((e) => e.to);
+  // An app calling its own endpoints (Next.js /api) gets a second lifeline for its server side.
+  const serverOf = (app) => {
+    const id = `${app}#server`;
+    if (!byId.has(id)) byId.set(id, { ...byId.get(app), id, label: `${byId.get(app).label} server` });
+    return id;
+  };
 
   const effects = (msgs, svc, file) => {
     const fx = fileEffects(ctx, file);
@@ -1502,10 +1518,11 @@ function sequenceStories(snapshot) {
   const request = (msgs, from, c, via) => {
     const r = routes.find((x) => x.path === c.path && x.method === c.method) || routes.find((x) => x.path === c.path);
     if (!r) return;
-    msgs.push({ from, to: r.service, text: `${c.method} ${c.path}`, flow: "request",
-      say: `${name(from)} asks ${name(r.service)} for ${c.method} ${c.path}${via ? ` through ${via}` : ""}.`, file: `handled in ${shortFile(r.file)}` });
-    effects(msgs, r.service, r.file);
-    msgs.push({ from: r.service, to: from, text: "response", ret: true, say: `${name(r.service)} sends the answer back to ${name(from)}.` });
+    const to = r.service === from ? serverOf(from) : r.service;
+    msgs.push({ from, to, text: `${c.method} ${c.path}`, flow: "request",
+      say: `${name(from)} asks ${name(to)} for ${c.method} ${c.path}${via ? ` through ${via}` : ""}.`, file: `handled in ${shortFile(r.file)}` });
+    effects(msgs, to, r.file);
+    msgs.push({ from: to, to: from, text: "response", ret: true, say: `${name(to)} sends the answer back to ${name(from)}.` });
   };
   const requestsOf = (msgs, from, list, via) => {
     const seen = new Set();
@@ -1574,6 +1591,8 @@ function sequenceStories(snapshot) {
 
 let seqStory = null;
 let seqOn = -1;
+let seqAll = false;
+const SEQ_SHOWN = 30;
 
 function renderSequence() {
   const s = data.weeks[selected].snapshot;
@@ -1591,7 +1610,7 @@ function renderSequence() {
   seqStory = story.key;
   bar.replaceChildren(...stories.map((x) => {
     const b = el("button", { type: "button", class: "chip", "aria-pressed": String(x === story) }, x.title);
-    b.onclick = () => { seqStory = x.key; seqOn = -1; renderSequence(); };
+    b.onclick = () => { seqStory = x.key; seqOn = -1; seqAll = false; renderSequence(); };
     return b;
   }));
 
@@ -1610,9 +1629,16 @@ function renderSequence() {
     m.text = `calls ${m.hosts.length === 1 ? m.hosts[0] : `${m.hosts[0]} +${m.hosts.length - 1}`}`;
     m.say = `${byId.get(m.from)?.label || m.from} calls ${m.hosts.join(", ")}.`;
   });
+  const total = msgs.length;
+  if (!seqAll && total > SEQ_SHOWN) {
+    let cut = SEQ_SHOWN;
+    while (cut < total && msgs[cut].ret) cut++;
+    msgs.splice(cut);
+  }
   const ids = ["person"].filter((id) => msgs.some((m) => m.from === id || m.to === id));
   msgs.forEach((m) => [m.from, m.to].forEach((id) => { if (!ids.includes(id)) ids.push(id); }));
-  const colW = 150, headH = 58, top = 12, rowH = 42, pad = 76;
+  const longest = Math.max(0, ...msgs.map((m) => m.text.length));
+  const colW = Math.min(440, Math.max(150, longest * 7 + 60)), headH = 58, top = 12, rowH = 42, pad = 76;
   const xOf = new Map(ids.map((id, i) => [id, pad + i * colW]));
   const firstY = top + headH + 34;
   const W = pad * 2 + (ids.length - 1) * colW;
@@ -1678,7 +1704,10 @@ function renderSequence() {
     root.append(g);
     return g;
   });
-  host.replaceChildren(root);
+  const more = total > SEQ_SHOWN
+    ? [el("button", { type: "button", class: "chip seq-more" }, seqAll ? "Show fewer steps" : `Show all ${total} steps (${total - msgs.length} more)`)] : [];
+  more.forEach((b) => { b.onclick = () => { seqAll = !seqAll; renderSequence(); }; });
+  host.replaceChildren(root, ...more);
 
   const lis = msgs.map((m, i) => {
     const li = el("li", { class: i === seqOn ? "on" : "" }, m.say);

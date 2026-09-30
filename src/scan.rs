@@ -15,7 +15,7 @@ use crate::diag::{Fatal, Source, Warning};
 use crate::git::{Git, TreeEntry, WeekPoint};
 use crate::system::{self, Package, System};
 
-pub const SCHEMA: u32 = 2;
+pub const SCHEMA: u32 = 3;
 pub const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 const ASSET_EXTENSIONS: &[&str] = &[
     "css", "scss", "sass", "less", "svg", "png", "jpg", "jpeg", "gif", "webp", "avif", "ico", "json",

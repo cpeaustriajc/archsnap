@@ -254,11 +254,19 @@ pub fn host_of(url: &str) -> Option<String> {
     let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
     let host = rest.split(['/', '?', '#', ':', '`', '"', '\'', ' ']).next()?.to_ascii_lowercase();
     let valid = host.contains('.') && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
-    let reserved = [".example", ".local", ".localhost", ".test", ".invalid"].iter().any(|t| host.ends_with(t));
+    let reserved = [".example", ".local", ".localhost", ".test", ".invalid"].iter().any(|t| host.ends_with(t))
+        || ["example.com", "example.org", "example.net"].contains(&site_of(&host).as_str())
+        || private_ip(&host);
     if !valid || reserved || IGNORED_HOSTS.contains(&host.as_str()) || PLACEHOLDERS.contains(&site_of(&host).as_str()) {
         return None;
     }
     Some(host)
+}
+
+/// Loopback, private, link-local (cloud metadata) and unspecified IPv4 addresses.
+fn private_ip(host: &str) -> bool {
+    let Ok(ip) = host.parse::<std::net::Ipv4Addr>() else { return false };
+    ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
 }
 
 #[derive(Default)]
@@ -633,10 +641,10 @@ fn describe_cron(c: &str) -> String {
 }
 
 /// The registrable domain: api.stripe.com -> stripe.com, www.bdo.com.ph -> bdo.com.ph.
-fn site_of(host: &str) -> String {
+pub fn site_of(host: &str) -> String {
     let parts: Vec<&str> = host.split('.').collect();
     let n = parts.len();
-    if n <= 2 {
+    if n <= 2 || host.parse::<std::net::Ipv4Addr>().is_ok() {
         return host.to_string();
     }
     let country_second_level =

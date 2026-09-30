@@ -512,3 +512,75 @@ fn worker_scheduled_handler_is_found() {
     let handlers = s["system"]["handlers"].as_array().unwrap();
     assert!(handlers.iter().any(|h| h["kind"] == "scheduled" && h["file"] == "apps/api/src/index.ts"), "{handlers:?}");
 }
+
+/// A web app calling real services, reserved example domains and private or metadata IPs.
+fn outside_calls_repo() -> Repo {
+    let repo = Repo::new();
+    repo.write("package.json", r#"{ "name": "site", "dependencies": { "react": "19" } }"#)
+        .write(
+            "src/calls.ts",
+            [
+                "export const a = () => fetch('https://api.example.com/v1/items');",
+                "export const b = () => fetch('http://169.254.169.254/latest/meta-data');",
+                "export const c = () => fetch('http://10.0.0.5/health');",
+                "export const d = () => fetch('http://192.168.1.20:8080/x');",
+                "export const e = () => fetch('http://172.20.0.3/x');",
+                "export const f = () => fetch('http://127.0.0.1:3000/x');",
+                "export const g = () => fetch('https://hooks.slack.com/services/T0');",
+                "export const h = () => fetch('https://1.1.1.1/dns-query');",
+                "export const i = () => fetch('https://api.buffer.com/1/profiles.json');",
+                "",
+            ]
+            .join("\n")
+            .as_str(),
+        )
+        .commit("calls", WEEK_37);
+    repo
+}
+
+fn external_labels(snapshot: &Value) -> Vec<String> {
+    let (nodes, _) = system(snapshot);
+    nodes.iter().filter(|n| n["kind"] == "external").map(|n| n["label"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn reserved_domains_and_private_ips_are_not_outside_services() {
+    let repo = outside_calls_repo();
+    archsnap(repo.path()).assert().success();
+    let labels = external_labels(&repo.snapshot("2026-W37"));
+    for gone in ["example.com", "169.254.169.254", "10.0.0.5", "192.168.1.20", "172.20.0.3", "127.0.0.1"] {
+        assert!(!labels.iter().any(|l| l.contains(gone)), "{gone} is not a service: {labels:?}");
+    }
+    for kept in ["slack.com", "1.1.1.1", "buffer.com"] {
+        assert!(labels.iter().any(|l| l.contains(kept)), "{kept} is a service: {labels:?}");
+    }
+}
+
+#[test]
+fn snapshots_cached_by_an_older_schema_are_rebuilt() {
+    let repo = outside_calls_repo();
+    archsnap(repo.path()).assert().success();
+    let p = repo.out().join("snapshots").join("2026-W37.json");
+    let mut stale = repo.snapshot("2026-W37");
+    stale["schema"] = Value::from(stale["schema"].as_u64().unwrap() - 1);
+    stale["system"]["nodes"] = Value::Array(vec![]);
+    fs::write(&p, serde_json::to_string(&stale).unwrap()).unwrap();
+    archsnap(repo.path()).assert().success();
+    assert!(!external_labels(&repo.snapshot("2026-W37")).is_empty(), "the stale snapshot should be rescanned");
+}
+
+fn embedded_brands(repo: &Repo) -> Value {
+    let html = fs::read_to_string(repo.out().join("index.html")).unwrap();
+    let json = html.split("id=\"archsnap-brands\" type=\"application/json\">").nth(1).unwrap().split("</script>").next().unwrap();
+    serde_json::from_str(json).unwrap()
+}
+
+#[test]
+fn outside_services_named_like_a_brand_get_its_logo_and_unused_logos_stay_out() {
+    let repo = outside_calls_repo();
+    archsnap(repo.path()).assert().success();
+    let icons = &embedded_brands(&repo)["icons"];
+    assert!(icons.get("buffer").is_some(), "buffer.com should carry the Buffer logo");
+    assert!(icons.get("stripe").is_some(), "the hand-picked logos are always there");
+    assert!(icons.get("zoom").is_none(), "logos no service uses are left out");
+}
