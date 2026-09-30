@@ -380,7 +380,7 @@ fn system_map_reads_packages_wrangler_sdks_and_urls() {
     let web = node_id(&nodes, "@shop/web");
     let core = node_id(&nodes, "@shop/core");
     let d1 = node_id(&nodes, "D1 shopdb");
-    let cron = node_id(&nodes, "0 6 * * *");
+    let cron = node_id(&nodes, "Daily at 06:00 UTC");
     let stripe = node_id(&nodes, "Stripe");
     let rates = node_id(&nodes, "rates-provider.io");
 

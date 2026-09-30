@@ -90,6 +90,25 @@ h2 { margin: 0 0 4px; font-size: 18px; font-weight: 650; letter-spacing: -0.01em
 
 .system { overflow-x: auto; margin-top: 8px; }
 .system svg { display: block; }
+.sys-node { cursor: pointer; }
+.sys-node:focus { outline: none; }
+.sys-node:focus-visible .sys-box { stroke: var(--focus); stroke-width: 2; }
+.sys-node:hover .sys-box { stroke: var(--ink-3); }
+.edge-label { paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 6px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 8px; font: inherit; font-size: 13px; color: var(--ink-2);
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 999px; padding: 4px 12px; cursor: pointer;
+}
+.chip[aria-pressed="true"] { color: var(--ink); background: var(--raised); border-color: var(--ink-3); }
+.chip-line { width: 18px; height: 0; border-top: 1.5px solid currentColor; }
+.chip-data .chip-line { border-top-width: 2.5px; }
+.chip-code .chip-line { border-top-style: dashed; }
+.system-detail { margin-top: 12px; font-size: 14px; color: var(--ink-2); min-height: 1.5em; }
+.system-detail h3 { margin: 0; font-size: 16px; color: var(--ink); }
+.system-detail h4 { margin: 10px 0 2px; font-size: 13px; font-weight: 600; color: var(--ink-3); }
+.system-detail p { margin: 2px 0 0; }
+.system-detail ul { margin: 0; padding-left: 18px; columns: 2 300px; }
 .connections { margin-top: 10px; font-size: 14px; color: var(--ink-2); }
 .connections summary { cursor: pointer; }
 .connections ul { margin: 8px 0 0; padding-left: 18px; columns: 2 320px; }
@@ -160,7 +179,9 @@ tr.removed td { color: var(--ink-3); }
   <section aria-labelledby="system-h">
     <h2 id="system-h">System map</h2>
     <p class="lede">What runs, what stores data and what it talks to, read from package.json, Cloudflare config, SDKs and the URLs the code calls. Dashed lines are shared code; + marks something new this week.</p>
+    <div class="chips" id="system-filters" role="group" aria-label="Show connections"></div>
     <div class="system" id="system"></div>
+    <div class="system-detail" id="system-detail" aria-live="polite"></div>
     <details class="connections"><summary id="connections-summary"></summary><ul id="connections"></ul></details>
   </section>
 
@@ -429,87 +450,252 @@ const KIND_WORD = {
   client: "people", mobile: "app", schedule: "schedule", web: "web app", service: "service",
   library: "shared package", datastore: "data store", queue: "queue", external: "outside service",
 };
+// 24×24 stroke icons, drawn for this report so it stays self-contained.
+const ICONS = {
+  client: "M3 5.5h18v13H3z M3 9.5h18 M6 7.5h.01 M8.5 7.5h.01",
+  mobile: "M7.5 2.5h9a1.5 1.5 0 0 1 1.5 1.5v16a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 20V4a1.5 1.5 0 0 1 1.5-1.5z M11 18.5h2",
+  schedule: "M12 3.5a8.5 8.5 0 1 1 0 17a8.5 8.5 0 1 1 0-17z M12 7.5V12l3 2",
+  web: "M3 4.5h18v15H3z M3 8.5h18 M9 8.5v11",
+  service: "M4 4.5h16v6H4z M4 13.5h16v6H4z M7.5 7.5h.01 M7.5 16.5h.01 M11 7.5h5 M11 16.5h5",
+  library: "M12 2.8l8 4.4v9.6l-8 4.4-8-4.4V7.2z M4 7.2l8 4.4 8-4.4 M12 11.6v9.6",
+  datastore: "M4.5 6c0-1.7 3.4-3 7.5-3s7.5 1.3 7.5 3-3.4 3-7.5 3-7.5-1.3-7.5-3z M4.5 6v12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6 M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3",
+  queue: "M3.5 6.5h11v4h-11z M3.5 13.5h11v4h-11z M17 8.5h3.5 M17 15.5h3.5 M19 6.5l2 2-2 2 M19 13.5l2 2-2 2",
+  external: "M12 3.5a8.5 8.5 0 1 1 0 17a8.5 8.5 0 1 1 0-17z M3.5 12h17 M12 3.5c2.5 2.4 3.6 5.2 3.6 8.5s-1.1 6.1-3.6 8.5c-2.5-2.4-3.6-5.2-3.6-8.5s1.1-6.1 3.6-8.5z",
+  more: "M6 12h.01 M12 12h.01 M18 12h.01",
+};
+const EDGE_GROUP = {
+  "uses code from": "code",
+  "reads and writes": "data", "sends to": "data", "delivers to": "data",
+};
+const groupOf = (e) => EDGE_GROUP[e.label] || "calls";
+const GROUPS = [["calls", "Calls"], ["data", "Data"], ["code", "Shared code"]];
+const shown = new Set(["calls", "data", "code"]);
+let focusNode = null;
+
 const nodeLabel = (sys, id) => sys.nodes.find((n) => n.id === id)?.label ?? id;
 const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
+// Barycenter ordering: each part sits near the parts it connects to, which removes most crossings.
+function orderLanes(lanes, edges) {
+  const neighbors = new Map();
+  edges.forEach((e) => {
+    if (!neighbors.has(e.from)) neighbors.set(e.from, []);
+    if (!neighbors.has(e.to)) neighbors.set(e.to, []);
+    neighbors.get(e.from).push(e.to);
+    neighbors.get(e.to).push(e.from);
+  });
+  const rank = new Map();
+  const reindex = () => lanes.forEach((l) => l.nodes.forEach((n, i) => rank.set(n.id, i / Math.max(1, l.nodes.length - 1))));
+  reindex();
+  const sweep = (order) => order.forEach((li) => {
+    const l = lanes[li];
+    const score = (n) => {
+      const ns = (neighbors.get(n.id) || []).filter((m) => rank.has(m));
+      return ns.length ? ns.reduce((a, m) => a + rank.get(m), 0) / ns.length : rank.get(n.id);
+    };
+    const scored = l.nodes.map((n) => [n, score(n)]);
+    scored.sort((a, b) => a[1] - b[1]);
+    l.nodes = scored.map(([n]) => n);
+    reindex();
+  });
+  const idx = lanes.map((_, i) => i);
+  for (let pass = 0; pass < 4; pass++) {
+    sweep(idx.slice(1));
+    sweep(idx.slice(0, -1).reverse());
+  }
+}
+
+function renderSystemControls() {
+  const bar = $("system-filters");
+  bar.replaceChildren(...GROUPS.map(([key, label]) => {
+    const b = el("button", { type: "button", "aria-pressed": String(shown.has(key)), class: `chip chip-${key}` });
+    b.append(el("span", { class: "chip-line", "aria-hidden": "true" }), document.createTextNode(label));
+    b.onclick = () => { shown.has(key) ? shown.delete(key) : shown.add(key); renderSystem(); };
+    return b;
+  }));
+}
+
 function renderSystem() {
+  renderSystemControls();
   const w = data.weeks[selected];
   const full = w.snapshot.system || { nodes: [], edges: [] };
   const sys = foldOutside(full, 12);
   const host = $("system");
   if (!sys.nodes.length) {
     host.replaceChildren(el("p", { class: "lede" }, "No apps, services or data stores found this week. archsnap reads package.json files, Cloudflare wrangler config, Xcode projects and the URLs the code calls."));
+    $("system-detail").replaceChildren();
     $("connections-summary").textContent = "No connections found";
     $("connections").replaceChildren();
     return;
   }
+  if (focusNode && !sys.nodes.some((n) => n.id === focusNode)) focusNode = null;
   const older = data.weeks[selected + 1]?.snapshot.system;
   const oldIds = new Set((older?.nodes || []).map((n) => n.id));
   const oldEdges = new Set((older?.edges || []).map((e) => `${e.from}\u0000${e.to}\u0000${e.label}`));
+  const edges = sys.edges.filter((e) => shown.has(groupOf(e)));
   const lanes = LANES.map((l) => ({ ...l, nodes: sys.nodes.filter((n) => l.kinds.includes(n.kind)) })).filter((l) => l.nodes.length);
-  const NW = 220, NH = 54, GX = 64, GY = 12, TOP = 30;
+  orderLanes(lanes, edges);
+
+  const NW = 232, NH = 58, GX = 76, GY = 14, TOP = 34;
   const pos = new Map();
-  lanes.forEach((l, li) => l.nodes.forEach((n, ri) => pos.set(n.id, { x: 1 + li * (NW + GX), y: TOP + ri * (NH + GY) })));
-  const width = lanes.length * NW + (lanes.length - 1) * GX + 40;
-  const height = TOP + Math.max(...lanes.map((l) => l.nodes.length)) * (NH + GY);
-  const root = svg("svg", { width, height, viewBox: `0 0 ${width} ${height}`, role: "img",
-    "aria-label": `System map: ${plural(sys.nodes.length, "part", "parts")} and ${plural(sys.edges.length, "connection", "connections")}. The list below the map names every connection.` });
+  lanes.forEach((l, li) => l.nodes.forEach((n, ri) => pos.set(n.id, { x: 1 + li * (NW + GX), y: TOP + ri * (NH + GY), lane: li })));
+  const width = lanes.length * NW + (lanes.length - 1) * GX + 44;
+  const height = TOP + Math.max(...lanes.map((l) => l.nodes.length)) * (NH + GY) + 8;
+
+  const linked = new Set();
+  if (focusNode) {
+    linked.add(focusNode);
+    edges.forEach((e) => { if (e.from === focusNode) linked.add(e.to); if (e.to === focusNode) linked.add(e.from); });
+  }
+  const touches = (e) => !focusNode || e.from === focusNode || e.to === focusNode;
+
+  const root = svg("svg", { width, height, viewBox: `0 0 ${width} ${height}`, role: "group",
+    "aria-label": `System map: ${plural(sys.nodes.length, "part", "parts")} and ${plural(edges.length, "connection", "connections")}. Select a part to trace its connections; the list below names every connection.` });
   const defs = svg("defs");
-  const marker = svg("marker", { id: "sys-arrow", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 6, markerHeight: 6, orient: "auto-start-reverse" });
-  marker.append(svg("path", { d: "M0,0 L10,5 L0,10 z", fill: "var(--ink-3)" }));
-  defs.append(marker);
+  [["arrow", "var(--ink-3)"], ["arrow-on", "var(--focus)"]].forEach(([id, fill]) => {
+    const m = svg("marker", { id: `sys-${id}`, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 6, markerHeight: 6, orient: "auto-start-reverse" });
+    m.append(svg("path", { d: "M0,0 L10,5 L0,10 z", fill }));
+    defs.append(m);
+  });
   root.append(defs);
   lanes.forEach((l, li) => {
-    const t = svg("text", { x: 1 + li * (NW + GX), y: 14, "font-size": 13, fill: "var(--ink-3)" });
+    const t = svg("text", { x: 1 + li * (NW + GX), y: 16, "font-size": 13, fill: "var(--ink-3)" });
     t.textContent = l.title;
     root.append(t);
   });
 
-  sys.edges.forEach((e) => {
+  // Spread each box's connection points down its side, in the order of the boxes they lead to.
+  const ports = new Map();
+  const port = (id, side, other) => {
+    const key = `${id}\u0000${side}`;
+    if (!ports.has(key)) ports.set(key, []);
+    ports.get(key).push(other);
+  };
+  const sideOf = (a, b) => (b.lane > a.lane ? ["r", "l"] : b.lane < a.lane ? ["l", "r"] : ["r", "r"]);
+  edges.forEach((e) => {
     const a = pos.get(e.from), b = pos.get(e.to);
     if (!a || !b) return;
+    const [sa, sb] = sideOf(a, b);
+    port(e.from, sa, e.to);
+    port(e.to, sb, e.from);
+  });
+  ports.forEach((list, key) => list.sort((p, q) => pos.get(p).y - pos.get(q).y));
+  const portY = (id, side, other) => {
+    const list = ports.get(`${id}\u0000${side}`) || [other];
+    const i = list.indexOf(other);
+    const n = list.length;
+    return pos.get(id).y + NH / 2 + (n === 1 ? 0 : (i / (n - 1) - 0.5) * Math.min(NH - 16, n * 4));
+  };
+
+  const edgeLayer = svg("g");
+  const labelLayer = svg("g");
+  edges.forEach((e) => {
+    const a = pos.get(e.from), b = pos.get(e.to);
+    if (!a || !b) return;
+    const [sa, sb] = sideOf(a, b);
+    const x1 = sa === "r" ? a.x + NW : a.x, x2 = sb === "r" ? b.x + NW : b.x;
+    const y1 = portY(e.from, sa, e.to), y2 = portY(e.to, sb, e.from);
+    const bend = sa === sb ? 38 : Math.max(GX / 2, Math.abs(x2 - x1) / 3);
+    const c1 = sa === "r" ? x1 + bend : x1 - bend, c2 = sb === "r" ? x2 + bend : x2 - bend;
+    const d = `M${x1},${y1} C${c1},${y1} ${c2},${y2} ${x2},${y2}`;
+    const on = focusNode && touches(e);
     const isNew = older && !oldEdges.has(`${e.from}\u0000${e.to}\u0000${e.label}`);
-    let d;
-    if (b.x > a.x) {
-      const x1 = a.x + NW, y1 = a.y + NH / 2, x2 = b.x, y2 = b.y + NH / 2;
-      d = `M${x1},${y1} C${x1 + GX / 2},${y1} ${x2 - GX / 2},${y2} ${x2},${y2}`;
-    } else if (b.x < a.x) {
-      const x1 = a.x, y1 = a.y + NH / 2, x2 = b.x + NW, y2 = b.y + NH / 2;
-      d = `M${x1},${y1} C${x1 - GX / 2},${y1} ${x2 + GX / 2},${y2} ${x2},${y2}`;
-    } else {
-      const x = a.x + NW, y1 = a.y + NH / 2 + 6, y2 = b.y + NH / 2 - 6;
-      d = `M${x},${y1} C${x + 34},${y1} ${x + 34},${y2} ${x},${y2}`;
-    }
-    const p = svg("path", { d, fill: "none", stroke: isNew ? "var(--ink)" : "var(--ink-3)", "stroke-width": isNew ? 2 : 1.2,
-      "stroke-opacity": isNew ? 1 : 0.7, "stroke-dasharray": e.label === "uses code from" ? "4 4" : "none", "marker-end": "url(#sys-arrow)" });
+    const group = groupOf(e);
+    const p = svg("path", { d, fill: "none",
+      stroke: on ? "var(--focus)" : isNew ? "var(--ink)" : "var(--ink-3)",
+      "stroke-width": on ? 2 : group === "data" ? 1.6 : 1.1,
+      "stroke-opacity": focusNode ? (on ? 1 : 0.08) : isNew ? 1 : 0.55,
+      "stroke-dasharray": group === "code" ? "4 4" : "none",
+      "marker-end": `url(#sys-${on ? "arrow-on" : "arrow"})` });
     const t = svg("title");
     t.textContent = `${nodeLabel(sys, e.from)} ${e.label} ${nodeLabel(sys, e.to)}${isNew ? ", new this week" : ""}`;
     p.append(t);
-    root.append(p);
+    edgeLayer.append(p);
+    if (on) {
+      // Beside the arrowhead: every target has its own row, so labels never stack.
+      const intoLeft = sb === "l";
+      const text = svg("text", { x: intoLeft ? x2 - 10 : x2 + 10, y: y2 - 6, "text-anchor": intoLeft ? "end" : "start",
+        "font-size": 11, fill: "var(--ink)", class: "edge-label" });
+      text.textContent = e.label;
+      labelLayer.append(text);
+    }
   });
+  root.append(edgeLayer);
+
+  const outDegree = new Map(), inDegree = new Map();
+  edges.forEach((e) => { outDegree.set(e.from, (outDegree.get(e.from) || 0) + 1); inDegree.set(e.to, (inDegree.get(e.to) || 0) + 1); });
 
   sys.nodes.forEach((n) => {
     const q = pos.get(n.id);
     if (!q) return;
     const isNew = older && !oldIds.has(n.id);
-    const g = svg("g");
-    g.append(svg("rect", { x: q.x + 0.5, y: q.y + 0.5, width: NW - 1, height: NH - 1, rx: n.kind === "datastore" || n.kind === "queue" ? 16 : 6,
-      fill: "var(--surface)", stroke: isNew ? "var(--ink)" : "var(--rule)", "stroke-width": isNew ? 1.5 : 1 }));
-    const t1 = svg("text", { x: q.x + 12, y: q.y + 22, "font-size": 13, "font-weight": 650, fill: "var(--ink)" });
-    t1.textContent = clip(n.label, 25) + (isNew ? "  +" : "");
-    const t2 = svg("text", { x: q.x + 12, y: q.y + 40, "font-size": 12, fill: "var(--ink-2)" });
-    t2.textContent = clip(n.detail || KIND_WORD[n.kind], 31);
-    const tt = svg("title");
-    tt.textContent = `${n.label} (${KIND_WORD[n.kind]})${n.detail ? `: ${n.detail}` : ""}${isNew ? ", new this week" : ""}`;
-    g.append(t1, t2, tt);
+    const faded = focusNode && !linked.has(n.id);
+    const active = n.id === focusNode;
+    const g = svg("g", { class: "sys-node", tabindex: 0, role: "button", "aria-pressed": String(active),
+      "aria-label": `${n.label}, ${KIND_WORD[n.kind]}${n.detail ? `, ${n.detail}` : ""}${isNew ? ", new this week" : ""}. ${plural(outDegree.get(n.id) || 0, "outgoing connection", "outgoing connections")}, ${plural(inDegree.get(n.id) || 0, "incoming", "incoming")}.`,
+      opacity: faded ? 0.28 : 1 });
+    const round = n.kind === "datastore" || n.kind === "queue" ? 16 : 8;
+    g.append(svg("rect", { x: q.x + 0.5, y: q.y + 0.5, width: NW - 1, height: NH - 1, rx: round, fill: "var(--surface)",
+      stroke: active ? "var(--focus)" : isNew ? "var(--ink)" : "var(--rule)", "stroke-width": active ? 2 : isNew ? 1.5 : 1, class: "sys-box" }));
+    g.append(svg("rect", { x: q.x + 10, y: q.y + 12, width: 34, height: 34, rx: 8, fill: "var(--raised)" }));
+    const icon = svg("path", { d: ICONS[n.id === "more:outside" ? "more" : n.kind] || ICONS.external, transform: `translate(${q.x + 15},${q.y + 17})`,
+      fill: "none", stroke: "var(--ink)", "stroke-width": n.id === "more:outside" ? 3 : 1.6, "stroke-linecap": "round", "stroke-linejoin": "round" });
+    g.append(icon);
+    const t1 = svg("text", { x: q.x + 54, y: q.y + 25, "font-size": 13, "font-weight": 650, fill: "var(--ink)" });
+    t1.textContent = clip(n.label, 22);
+    const t2 = svg("text", { x: q.x + 54, y: q.y + 42, "font-size": 12, fill: "var(--ink-2)" });
+    t2.textContent = clip(n.detail || KIND_WORD[n.kind], 27);
+    g.append(t1, t2);
+    if (isNew) {
+      const badge = svg("text", { x: q.x + NW - 10, y: q.y + 20, "font-size": 12, "font-weight": 700, "text-anchor": "end", fill: "var(--ink)" });
+      badge.textContent = "+";
+      g.append(badge);
+    }
+    const tip = svg("title");
+    tip.textContent = `${n.label} (${KIND_WORD[n.kind]})${n.detail ? `: ${n.detail}` : ""}`;
+    g.append(tip);
+    const toggle = () => { focusNode = focusNode === n.id ? null : n.id; renderSystem(); root.ownerDocument.querySelector(`[data-node="${CSS.escape(n.id)}"]`)?.focus(); };
+    g.setAttribute("data-node", n.id);
+    g.addEventListener("click", (ev) => { ev.stopPropagation(); toggle(); });
+    g.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(); }
+      if (ev.key === "Escape") { focusNode = null; renderSystem(); }
+    });
     root.append(g);
   });
+  root.append(labelLayer);
+  root.addEventListener("click", () => { if (focusNode) { focusNode = null; renderSystem(); } });
+
   host.replaceChildren(root);
   const scale = Math.max(0.72, Math.min(1, host.clientWidth / width));
   root.setAttribute("width", width * scale);
   root.setAttribute("height", height * scale);
+  renderSystemDetail(full, sys);
   $("connections-summary").textContent = `All ${plural(full.edges.length, "connection", "connections")} as a list`;
   $("connections").replaceChildren(...full.edges.map((e) => el("li", {}, `${nodeLabel(full, e.from)} ${e.label} ${nodeLabel(full, e.to)}`)));
+}
+
+function renderSystemDetail(full, sys) {
+  const box = $("system-detail");
+  if (!focusNode) {
+    box.replaceChildren(el("p", {}, "Select a part to trace what it talks to and what depends on it."));
+    return;
+  }
+  const n = sys.nodes.find((x) => x.id === focusNode);
+  const ids = focusNode === "more:outside" ? new Set(full.nodes.filter((x) => x.kind === "external" && !sys.nodes.some((s) => s.id === x.id)).map((x) => x.id)) : new Set([focusNode]);
+  const out = full.edges.filter((e) => ids.has(e.from));
+  const inc = full.edges.filter((e) => ids.has(e.to));
+  const parts = [el("h3", {}, n.label), el("p", {}, `${KIND_WORD[n.kind]}${n.detail ? `: ${n.detail}` : ""}`)];
+  const list = (title, rows, pick) => {
+    if (!rows.length) return;
+    parts.push(el("h4", {}, title));
+    const ul = el("ul");
+    rows.forEach((e) => ul.append(el("li", {}, pick(e))));
+    parts.push(ul);
+  };
+  list("What it does", out, (e) => `${e.label} ${nodeLabel(full, e.to)}`);
+  list("What uses it", inc, (e) => `${nodeLabel(full, e.from)} ${e.label} it`);
+  box.replaceChildren(...parts);
 }
 
 // Big apps talk to dozens of outside services; the most-connected stay, the rest share one box.

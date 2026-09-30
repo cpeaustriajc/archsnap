@@ -300,7 +300,7 @@ pub fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
         }
         if let Some(crons) = cfg.get("triggers").and_then(|t| t.get("crons")).and_then(|v| v.as_array()) {
             for c in crons.iter().filter_map(|c| c.as_str()) {
-                let t = b.node(&format!("cron:{name}:{c}"), "schedule", &format!("schedule {c}"), "cron trigger (UTC)");
+                let t = b.node(&format!("cron:{name}:{c}"), "schedule", &describe_cron(c), &format!("cron {c}"));
                 b.edge(&t, &owner, "runs");
             }
         }
@@ -376,6 +376,34 @@ pub fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
     }
 
     System { nodes: b.nodes.into_values().collect(), edges: b.edges.into_iter().collect() }
+}
+
+/// Cloudflare crons run in UTC. Uncommon patterns fall back to the raw expression.
+fn describe_cron(c: &str) -> String {
+    let f: Vec<&str> = c.split_whitespace().collect();
+    if f.len() != 5 {
+        return format!("Schedule {c}");
+    }
+    let num = |s: &str| s.parse::<u32>().ok();
+    let at = |m: u32, h: u32| format!("{h:02}:{m:02} UTC");
+    const DAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    let day = |s: &str| {
+        num(s).and_then(|d| DAYS.get(d as usize % 7).map(|d| d.to_string()))
+            .or_else(|| DAYS.iter().find(|d| d[..3].eq_ignore_ascii_case(s)).map(|d| d.to_string()))
+    };
+    match (f[0], f[1], f[2], f[3], f[4]) {
+        ("*", "*", "*", "*", "*") => "Every minute".into(),
+        (m, "*", "*", "*", "*") if m.starts_with("*/") => format!("Every {} minutes", &m[2..]),
+        (m, "*", "*", "*", "*") if num(m).is_some() => format!("Hourly at :{:02}", num(m).unwrap()),
+        (m, h, "*", "*", "*") if num(m).is_some() && num(h).is_some() => format!("Daily at {}", at(num(m).unwrap(), num(h).unwrap())),
+        (m, h, "*", "*", d) if num(m).is_some() && num(h).is_some() && day(d).is_some() => {
+            format!("Weekly on {} at {}", day(d).unwrap(), at(num(m).unwrap(), num(h).unwrap()))
+        }
+        (m, h, dom, "*", "*") if num(m).is_some() && num(h).is_some() && num(dom).is_some() => {
+            format!("Monthly on day {dom} at {}", at(num(m).unwrap(), num(h).unwrap()))
+        }
+        _ => format!("Schedule {c}"),
+    }
 }
 
 /// The registrable domain: api.stripe.com -> stripe.com, www.bdo.com.ph -> bdo.com.ph.
@@ -498,7 +526,8 @@ fn strip_json_comments(text: &str) -> String {
 pub fn diff_lines(before: &System, after: &System) -> Vec<String> {
     let label = |s: &System, id: &str| s.nodes.iter().find(|n| n.id == id).map(|n| n.label.clone()).unwrap_or_else(|| id.to_string());
     let describe = |n: &SysNode| match n.kind.as_str() {
-        "datastore" | "queue" | "schedule" => n.label.clone(),
+        "datastore" | "queue" => n.label.clone(),
+        "schedule" => format!("schedule ({})", n.label.to_lowercase()),
         "external" => format!("outside service {}", n.label),
         "library" => format!("shared package {}", n.label),
         "mobile" => format!("app {}", n.label),
