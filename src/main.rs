@@ -4,6 +4,7 @@ mod git;
 mod report;
 mod scan;
 mod store;
+mod system;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -40,8 +41,8 @@ struct RunArgs {
     /// How many weeks that had commits to snapshot, newest first.
     #[arg(long, default_value_t = 12, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
     weeks: usize,
-    /// How many folder levels make one area, e.g. 2 turns src/billing/api/x.ts into src/billing.
-    #[arg(long, default_value_t = 2, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
+    /// Folder levels per area below each package (after src/), e.g. 1 turns apps/web/src/billing/api/x.ts into apps/web/src/billing.
+    #[arg(long, default_value_t = 1, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
     depth: usize,
     /// Exit 1 when there are warnings (the report is still written).
     #[arg(long)]
@@ -133,7 +134,12 @@ fn run(args: RunArgs) -> Result<(), Fatal> {
     let mut weeks = Vec::with_capacity(total);
     for i in (0..snapshots.len()).rev() {
         let before = if i == 0 { None } else { Some(&snapshots[i - 1]) };
-        weeks.push(report::WeekView { snapshot: &snapshots[i], diff: diff::diff(before, &snapshots[i]) });
+        let mut snapshot = snapshots[i].clone();
+        // File-level links only for the newest week: on big repos every week's links would bloat the page.
+        if i + 1 != snapshots.len() {
+            snapshot.edges.iter_mut().for_each(|e| e.links.clear());
+        }
+        weeks.push(report::WeekView { diff: diff::diff(before, &snapshots[i]), snapshot });
     }
 
     for w in warnings.iter().take(MAX_PRINTED_WARNINGS) {

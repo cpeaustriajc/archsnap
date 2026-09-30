@@ -313,3 +313,139 @@ fn first_week_does_not_mark_everything_new() {
     assert_eq!(oldest["diff"]["added_modules"].as_array().unwrap().len(), 0);
     assert_eq!(oldest["diff"]["added_edges"].as_array().unwrap().len(), 0);
 }
+
+/// A Cloudflare monorepo: api Worker (Hono) serving the web app, D1, a queue, a cron, Stripe and a URL.
+fn monorepo() -> Repo {
+    let repo = Repo::new();
+    repo.write("package.json", r#"{ "name": "shop-root", "private": true }"#)
+        .write(
+            "apps/api/package.json",
+            r#"{ "name": "@shop/api", "dependencies": { "hono": "4", "stripe": "18", "@shop/core": "workspace:*" } }"#,
+        )
+        .write(
+            "apps/api/wrangler.toml",
+            r#"name = "shop"
+main = "src/index.ts"
+[assets]
+directory = "../web/dist"
+[[d1_databases]]
+binding = "DB"
+database_name = "shopdb"
+[triggers]
+crons = ["0 6 * * *"]
+"#,
+        )
+        .write(
+            "apps/api/src/index.ts",
+            "import { Hono } from 'hono';\nimport { formatPrice, type Money } from '@shop/core';\n// docs: https://docs.ignored.dev/guide\nexport const rates = () => fetch('https://api.rates-provider.io/v1/latest');\nexport const p = (m: Money) => formatPrice(m);\n",
+        )
+        .write(
+            "apps/web/package.json",
+            r#"{ "name": "@shop/web", "dependencies": { "react": "19", "@shop/core": "workspace:*" }, "devDependencies": { "vite": "7" } }"#,
+        )
+        .write("apps/web/src/main.tsx", "import { formatPrice } from '@shop/core';\nexport const App = () => <p>{formatPrice(1)}</p>;\n")
+        .write("apps/web/src/components/cart.tsx", "import { App } from '../main';\nexport const Cart = () => <App />;\n")
+        .write("packages/core/package.json", r#"{ "name": "@shop/core", "main": "src/index.ts" }"#)
+        .write(
+            "packages/core/src/index.ts",
+            "export type Money = number;\nexport const formatPrice = (m: Money) => `$${m}`;\n",
+        )
+        .commit("shop", WEEK_37);
+    repo
+}
+
+fn system(snapshot: &Value) -> (Vec<Value>, Vec<Value>) {
+    let s = &snapshot["system"];
+    (s["nodes"].as_array().unwrap().clone(), s["edges"].as_array().unwrap().clone())
+}
+
+fn node_id(nodes: &[Value], label_part: &str) -> String {
+    nodes
+        .iter()
+        .find(|n| n["label"].as_str().unwrap().contains(label_part))
+        .unwrap_or_else(|| panic!("no node labelled like {label_part}: {nodes:?}"))["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn system_map_reads_packages_wrangler_sdks_and_urls() {
+    let repo = monorepo();
+    archsnap(repo.path()).assert().success();
+    let (nodes, edges) = system(&repo.snapshot("2026-W37"));
+    let has_edge = |from: &str, to: &str| edges.iter().any(|e| e["from"] == from && e["to"] == to);
+
+    let worker = node_id(&nodes, "@shop/api");
+    let web = node_id(&nodes, "@shop/web");
+    let core = node_id(&nodes, "@shop/core");
+    let d1 = node_id(&nodes, "D1 shopdb");
+    let cron = node_id(&nodes, "0 6 * * *");
+    let stripe = node_id(&nodes, "Stripe");
+    let rates = node_id(&nodes, "rates-provider.io");
+
+    assert!(has_edge(&worker, &web), "the Worker serves the web assets");
+    assert!(has_edge(&worker, &d1));
+    assert!(has_edge(&cron, &worker));
+    assert!(has_edge(&worker, &stripe));
+    assert!(has_edge(&worker, &rates));
+    assert!(has_edge(&web, &core), "workspace dependency is shared code");
+    assert!(
+        !nodes.iter().any(|n| n["label"].as_str().unwrap().contains("docs.ignored.dev")),
+        "URLs in comments are not services"
+    );
+}
+
+#[test]
+fn areas_follow_workspace_packages() {
+    let repo = monorepo();
+    archsnap(repo.path()).assert().success();
+    let s = repo.snapshot("2026-W37");
+    for area in ["apps/api", "apps/web", "apps/web/src/components", "packages/core"] {
+        assert!(s["modules"].get(area).is_some(), "missing area {area}: {:?}", s["modules"]);
+    }
+}
+
+#[test]
+fn workspace_imports_resolve_and_record_what_crosses_the_boundary() {
+    let repo = monorepo();
+    archsnap(repo.path()).assert().success();
+    let s = repo.snapshot("2026-W37");
+    assert!(s["externals"].get("@shop/core").is_none(), "workspace packages are not externals");
+    let edge = s["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["from"] == "apps/api" && e["to"] == "packages/core")
+        .expect("apps/api -> packages/core edge");
+    let link = &edge["links"][0];
+    assert_eq!(link["from"], "apps/api/src/index.ts");
+    assert_eq!(link["to"], "packages/core/src/index.ts");
+    let names: Vec<&str> = link["names"].as_array().unwrap().iter().map(|n| n.as_str().unwrap()).collect();
+    assert!(names.contains(&"formatPrice") && names.contains(&"Money"), "{names:?}");
+}
+
+#[test]
+fn weekly_summary_reports_system_changes() {
+    let repo = monorepo();
+    repo.write(
+        "apps/api/wrangler.toml",
+        r#"name = "shop"
+main = "src/index.ts"
+[assets]
+directory = "../web/dist"
+[[d1_databases]]
+binding = "DB"
+database_name = "shopdb"
+[[queues.producers]]
+binding = "EMAILS"
+queue = "emails"
+[triggers]
+crons = ["0 6 * * *"]
+"#,
+    )
+    .commit("add queue", WEEK_38);
+    archsnap(repo.path()).assert().success();
+    let html = fs::read_to_string(repo.out().join("index.html")).unwrap();
+    assert!(html.contains("Added queue emails"), "summary should mention the new queue");
+}

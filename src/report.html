@@ -17,6 +17,7 @@
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4;
   --other: #b9b9b3;
   --gap-mark: #cfcfc9;
+  --q1: #b7d3f6; --q2: #86b6ef; --q3: #5598e7; --q4: #2a78d6; --q5: #1c5cab; --q6: #104281;
 }
 @media (prefers-color-scheme: dark) {
   :root:where(:not([data-theme="light"])) {
@@ -25,6 +26,7 @@
     --rule: #33332f; --focus: #6da7ec;
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
     --other: #5c5c57; --gap-mark: #45453f;
+    --q1: #184f95; --q2: #1c5cab; --q3: #256abf; --q4: #2a78d6; --q5: #3987e5; --q6: #6da7ec;
   }
 }
 :root[data-theme="dark"] {
@@ -33,6 +35,7 @@
   --rule: #33332f; --focus: #6da7ec;
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
   --other: #5c5c57; --gap-mark: #45453f;
+    --q1: #184f95; --q2: #1c5cab; --q3: #256abf; --q4: #2a78d6; --q5: #3987e5; --q6: #6da7ec;
 }
 
 * { box-sizing: border-box; }
@@ -85,8 +88,24 @@ h2 { margin: 0 0 4px; font-size: 18px; font-weight: 650; letter-spacing: -0.01em
 }
 .tip.on { opacity: 1; }
 
-.map { overflow-x: auto; margin-top: 18px; }
-.map svg { display: block; }
+.system { overflow-x: auto; margin-top: 8px; }
+.system svg { display: block; }
+.connections { margin-top: 10px; font-size: 14px; color: var(--ink-2); }
+.connections summary { cursor: pointer; }
+.connections ul { margin: 8px 0 0; padding-left: 18px; columns: 2 320px; }
+.pickers { display: flex; flex-wrap: wrap; gap: 10px 20px; margin: 16px 0 10px; font-size: 14px; color: var(--ink-2); }
+.pickers select { margin-left: 6px; font: inherit; color: var(--ink); background: var(--raised); border: 1px solid var(--rule); border-radius: 6px; padding: 4px 8px; max-width: 260px; }
+.matrix { overflow: auto; max-height: 720px; }
+.matrix svg { display: block; }
+.matrix .cell { cursor: pointer; }
+.matrix .cell:focus { outline: none; }
+.matrix .cell:focus-visible rect, .matrix .cell.on rect { stroke: var(--ink); stroke-width: 2; }
+.talk { margin-top: 16px; border-top: 1px solid var(--rule); padding-top: 14px; }
+.talk h3 { margin: 12px 0 2px; font-size: 16px; font-weight: 650; }
+.talk h3:first-child { margin-top: 0; }
+.talk p { margin: 0 0 10px; color: var(--ink-2); font-size: 14px; }
+.talk td.names { font-weight: 600; }
+.talk td.users { color: var(--ink-2); }
 .facts { display: flex; flex-wrap: wrap; gap: 8px 36px; margin: 0; padding: 12px 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
 .facts div { display: flex; flex-direction: column-reverse; }
 .facts dt { color: var(--ink-2); font-size: 14px; }
@@ -138,11 +157,23 @@ tr.removed td { color: var(--ink-3); }
     <div class="chart" id="chart"><div class="tip" id="tip" role="status"></div></div>
   </section>
 
-  <section aria-labelledby="map-h">
-    <h2 id="map-h">Architecture map</h2>
-    <p class="lede">Each box is an area (a folder). Arrows point from an area to the areas it imports from. + marks a new area, ▲ and ▼ mark areas that grew or shrank by 20% or more.</p>
+  <section aria-labelledby="system-h">
+    <h2 id="system-h">System map</h2>
+    <p class="lede">What runs, what stores data and what it talks to, read from package.json, Cloudflare config, SDKs and the URLs the code calls. Dashed lines are shared code; + marks something new this week.</p>
+    <div class="system" id="system"></div>
+    <details class="connections"><summary id="connections-summary"></summary><ul id="connections"></ul></details>
+  </section>
+
+  <section aria-labelledby="code-h">
+    <h2 id="code-h">How the code fits together</h2>
+    <p class="lede">Each row is an area and each column an area it imports from; darker cells mean more imports, and a dot marks a link that is new this week. Select a cell, or pick two areas, to see how they talk.</p>
     <dl class="facts" id="facts"></dl>
-    <div class="map" id="map"></div>
+    <div class="pickers">
+      <label>From <select id="pick-from"></select></label>
+      <label>To <select id="pick-to"></select></label>
+    </div>
+    <div class="matrix" id="matrix"></div>
+    <div class="talk" id="talk" aria-live="polite"></div>
   </section>
 
   <section aria-labelledby="areas-h">
@@ -386,102 +417,142 @@ function renderChart() {
   host.prepend(root);
 }
 
-// Columns by dependency depth: an area sits left of everything it imports from.
-function layers(names, edges) {
-  const out = new Map(names.map((n) => [n, []]));
-  edges.forEach((e) => out.has(e.from) && out.has(e.to) && out.get(e.from).push(e.to));
-  const level = new Map();
-  const visiting = new Set();
-  const depth = (n) => {
-    if (level.has(n)) return level.get(n);
-    if (visiting.has(n)) return 0;
-    visiting.add(n);
-    const d = Math.max(0, ...out.get(n).map((m) => depth(m) + 1));
-    visiting.delete(n);
-    level.set(n, d);
-    return d;
-  };
-  names.forEach(depth);
-  const max = Math.max(0, ...level.values());
-  const cols = Array.from({ length: max + 1 }, () => []);
-  names.forEach((n) => cols[max - level.get(n)].push(n));
-  cols.forEach((c) => c.sort((a, b) => (named.indexOf(a) + 1 || 99) - (named.indexOf(b) + 1 || 99) || a.localeCompare(b)));
-  return cols;
-}
+// System map lanes run left to right: what starts the system, then what it depends on.
+const LANES = [
+  { title: "Who and what starts it", kinds: ["client", "mobile", "schedule"] },
+  { title: "Apps and services", kinds: ["web", "service"] },
+  { title: "Shared code", kinds: ["library"] },
+  { title: "Data and queues", kinds: ["datastore", "queue"] },
+  { title: "Outside services", kinds: ["external"] },
+];
+const KIND_WORD = {
+  client: "people", mobile: "app", schedule: "schedule", web: "web app", service: "service",
+  library: "shared package", datastore: "data store", queue: "queue", external: "outside service",
+};
+const nodeLabel = (sys, id) => sys.nodes.find((n) => n.id === id)?.label ?? id;
+const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
-function renderMap() {
+function renderSystem() {
   const w = data.weeks[selected];
-  const s = w.snapshot;
-  const names = Object.keys(s.modules);
-  if (!names.length) {
-    $("map").replaceChildren(el("p", { class: "lede" }, "No TypeScript or JavaScript files in this week's snapshot."));
+  const full = w.snapshot.system || { nodes: [], edges: [] };
+  const sys = foldOutside(full, 12);
+  const host = $("system");
+  if (!sys.nodes.length) {
+    host.replaceChildren(el("p", { class: "lede" }, "No apps, services or data stores found this week. archsnap reads package.json files, Cloudflare wrangler config, Xcode projects and the URLs the code calls."));
+    $("connections-summary").textContent = "No connections found";
+    $("connections").replaceChildren();
     return;
   }
-  const cols = layers(names, s.edges);
-  const NW = 200, NH = 50, GX = 72, GY = 14, PAD = 4;
+  const older = data.weeks[selected + 1]?.snapshot.system;
+  const oldIds = new Set((older?.nodes || []).map((n) => n.id));
+  const oldEdges = new Set((older?.edges || []).map((e) => `${e.from}\u0000${e.to}\u0000${e.label}`));
+  const lanes = LANES.map((l) => ({ ...l, nodes: sys.nodes.filter((n) => l.kinds.includes(n.kind)) })).filter((l) => l.nodes.length);
+  const NW = 220, NH = 54, GX = 64, GY = 12, TOP = 30;
   const pos = new Map();
-  cols.forEach((col, ci) => col.forEach((n, ri) => pos.set(n, { x: PAD + ci * (NW + GX), y: PAD + ri * (NH + GY) })));
-  const width = PAD * 2 + cols.length * NW + (cols.length - 1) * GX;
-  const height = PAD * 2 + Math.max(...cols.map((c) => c.length)) * (NH + GY) - GY + 30;
+  lanes.forEach((l, li) => l.nodes.forEach((n, ri) => pos.set(n.id, { x: 1 + li * (NW + GX), y: TOP + ri * (NH + GY) })));
+  const width = lanes.length * NW + (lanes.length - 1) * GX + 40;
+  const height = TOP + Math.max(...lanes.map((l) => l.nodes.length)) * (NH + GY);
   const root = svg("svg", { width, height, viewBox: `0 0 ${width} ${height}`, role: "img",
-    "aria-label": `Architecture map for ${shortWeek(s.week)}: ${plural(names.length, "area", "areas")}. The Areas table lists the same dependencies.` });
+    "aria-label": `System map: ${plural(sys.nodes.length, "part", "parts")} and ${plural(sys.edges.length, "connection", "connections")}. The list below the map names every connection.` });
   const defs = svg("defs");
-  const marker = svg("marker", { id: "arrow", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 6, markerHeight: 6, orient: "auto-start-reverse" });
+  const marker = svg("marker", { id: "sys-arrow", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 6, markerHeight: 6, orient: "auto-start-reverse" });
   marker.append(svg("path", { d: "M0,0 L10,5 L0,10 z", fill: "var(--ink-3)" }));
   defs.append(marker);
   root.append(defs);
+  lanes.forEach((l, li) => {
+    const t = svg("text", { x: 1 + li * (NW + GX), y: 14, "font-size": 13, fill: "var(--ink-3)" });
+    t.textContent = l.title;
+    root.append(t);
+  });
 
-  const fresh = new Set(w.diff.added_edges.map(([a, b]) => `${a}\u0000${b}`));
-  s.edges.forEach((e) => {
+  sys.edges.forEach((e) => {
     const a = pos.get(e.from), b = pos.get(e.to);
     if (!a || !b) return;
-    const isNew = fresh.has(`${e.from}\u0000${e.to}`);
-    const x1 = a.x + NW, y1 = a.y + NH / 2, x2 = b.x, y2 = b.y + NH / 2;
-    const d = x2 > x1
-      ? `M${x1},${y1} C${x1 + GX / 2},${y1} ${x2 - GX / 2},${y2} ${x2},${y2}`
-      : `M${a.x + NW / 2},${a.y + NH} C${a.x + NW / 2},${a.y + NH + 28} ${b.x + NW / 2},${b.y + NH + 28} ${b.x + NW / 2},${b.y + NH}`;
-    const p = svg("path", { d, fill: "none", stroke: isNew ? "var(--ink)" : "var(--ink-3)", "stroke-width": isNew ? 2 : 1,
-      "stroke-opacity": isNew ? 1 : 0.55, "marker-end": "url(#arrow)" });
+    const isNew = older && !oldEdges.has(`${e.from}\u0000${e.to}\u0000${e.label}`);
+    let d;
+    if (b.x > a.x) {
+      const x1 = a.x + NW, y1 = a.y + NH / 2, x2 = b.x, y2 = b.y + NH / 2;
+      d = `M${x1},${y1} C${x1 + GX / 2},${y1} ${x2 - GX / 2},${y2} ${x2},${y2}`;
+    } else if (b.x < a.x) {
+      const x1 = a.x, y1 = a.y + NH / 2, x2 = b.x + NW, y2 = b.y + NH / 2;
+      d = `M${x1},${y1} C${x1 - GX / 2},${y1} ${x2 + GX / 2},${y2} ${x2},${y2}`;
+    } else {
+      const x = a.x + NW, y1 = a.y + NH / 2 + 6, y2 = b.y + NH / 2 - 6;
+      d = `M${x},${y1} C${x + 34},${y1} ${x + 34},${y2} ${x},${y2}`;
+    }
+    const p = svg("path", { d, fill: "none", stroke: isNew ? "var(--ink)" : "var(--ink-3)", "stroke-width": isNew ? 2 : 1.2,
+      "stroke-opacity": isNew ? 1 : 0.7, "stroke-dasharray": e.label === "uses code from" ? "4 4" : "none", "marker-end": "url(#sys-arrow)" });
     const t = svg("title");
-    t.textContent = `${e.from} imports from ${e.to} (${plural(e.count, "import", "imports")})${isNew ? ", new this week" : ""}`;
+    t.textContent = `${nodeLabel(sys, e.from)} ${e.label} ${nodeLabel(sys, e.to)}${isNew ? ", new this week" : ""}`;
     p.append(t);
     root.append(p);
   });
 
-  names.forEach((n) => {
-    const { x, y } = pos.get(n);
-    const st = statusOf(w, n);
-    const m = s.modules[n];
+  sys.nodes.forEach((n) => {
+    const q = pos.get(n.id);
+    if (!q) return;
+    const isNew = older && !oldIds.has(n.id);
     const g = svg("g");
-    g.append(svg("rect", { x, y, width: NW, height: NH, rx: 6, fill: "var(--surface)", stroke: st ? "var(--ink)" : "var(--rule)", "stroke-width": st ? 1.5 : 1 }));
-    g.append(svg("rect", { x: x + 1, y: y + 1, width: 5, height: NH - 2, rx: 2, fill: colorOf(n) }));
-    const name = svg("text", { x: x + 15, y: y + 21, "font-size": 13, "font-weight": 650, fill: "var(--ink)" });
-    name.textContent = n.length > 22 ? "…" + n.slice(-21) : n;
-    const meta = svg("text", { x: x + 15, y: y + 38, "font-size": 12, fill: "var(--ink-2)" });
-    meta.textContent = `${plural(m.files, "file", "files")}, ${fmt(m.lines)} lines`;
-    g.append(name, meta);
-    if (st) {
-      const badge = svg("text", { x: x + NW - 10, y: y + 21, "font-size": 12, "font-weight": 650, "text-anchor": "end", fill: "var(--ink)" });
-      badge.textContent = st.sym;
-      g.append(badge);
-    }
-    const t = svg("title");
-    t.textContent = `${n}: ${plural(m.files, "file", "files")}, ${fmt(m.lines)} lines${st ? `, ${st.word}` : ""}`;
-    g.append(t);
+    g.append(svg("rect", { x: q.x + 0.5, y: q.y + 0.5, width: NW - 1, height: NH - 1, rx: n.kind === "datastore" || n.kind === "queue" ? 16 : 6,
+      fill: "var(--surface)", stroke: isNew ? "var(--ink)" : "var(--rule)", "stroke-width": isNew ? 1.5 : 1 }));
+    const t1 = svg("text", { x: q.x + 12, y: q.y + 22, "font-size": 13, "font-weight": 650, fill: "var(--ink)" });
+    t1.textContent = clip(n.label, 25) + (isNew ? "  +" : "");
+    const t2 = svg("text", { x: q.x + 12, y: q.y + 40, "font-size": 12, fill: "var(--ink-2)" });
+    t2.textContent = clip(n.detail || KIND_WORD[n.kind], 31);
+    const tt = svg("title");
+    tt.textContent = `${n.label} (${KIND_WORD[n.kind]})${n.detail ? `: ${n.detail}` : ""}${isNew ? ", new this week" : ""}`;
+    g.append(t1, t2, tt);
     root.append(g);
   });
-  $("map").replaceChildren(root);
-  // Shrink to fit when that keeps labels readable; past that the map scrolls sideways.
-  const scale = Math.max(0.72, Math.min(1, $("map").clientWidth / width));
+  host.replaceChildren(root);
+  const scale = Math.max(0.72, Math.min(1, host.clientWidth / width));
   root.setAttribute("width", width * scale);
   root.setAttribute("height", height * scale);
+  $("connections-summary").textContent = `All ${plural(full.edges.length, "connection", "connections")} as a list`;
+  $("connections").replaceChildren(...full.edges.map((e) => el("li", {}, `${nodeLabel(full, e.from)} ${e.label} ${nodeLabel(full, e.to)}`)));
+}
+
+// Big apps talk to dozens of outside services; the most-connected stay, the rest share one box.
+function foldOutside(sys, keep) {
+  const outside = sys.nodes.filter((n) => n.kind === "external");
+  if (outside.length <= keep + 1) return sys;
+  const degree = new Map(outside.map((n) => [n.id, 0]));
+  sys.edges.forEach((e) => { if (degree.has(e.to)) degree.set(e.to, degree.get(e.to) + 1); });
+  const kept = new Set([...outside].sort((a, b) => degree.get(b.id) - degree.get(a.id) || a.label.localeCompare(b.label)).slice(0, keep).map((n) => n.id));
+  const rest = outside.filter((n) => !kept.has(n.id));
+  const more = { id: "more:outside", kind: "external", label: `+${rest.length} more outside services`,
+    detail: rest.map((n) => n.label).join(", ") };
+  const nodes = [...sys.nodes.filter((n) => n.kind !== "external" || kept.has(n.id)), more];
+  const seen = new Set();
+  const edges = [];
+  sys.edges.forEach((e) => {
+    const to = kept.has(e.to) || !degree.has(e.to) ? e.to : more.id;
+    const key = `${e.from}\u0000${to}\u0000${e.label}`;
+    if (!seen.has(key)) { seen.add(key); edges.push({ ...e, to }); }
+  });
+  return { nodes, edges };
+}
+
+let pair = null;
+
+function areaOrder(s) {
+  return Object.keys(s.modules).sort((a, b) => (s.modules[a].package || "").localeCompare(s.modules[b].package || "") || a.localeCompare(b));
+}
+
+const level = (count) => Math.min(6, 1 + Math.floor(Math.log2(count)));
+
+function renderCode() {
+  const w = data.weeks[selected];
+  const s = w.snapshot;
+  const names = areaOrder(s);
+  const edgeMap = new Map(s.edges.map((e) => [`${e.from}\u0000${e.to}`, e]));
 
   const facts = [
     ["Areas", names.length],
     ["Files", s.stats.files],
     ["Lines of code", s.stats.lines],
+    ["Imports between areas", s.edges.reduce((a, e) => a + e.count, 0)],
     ["Packages used", Object.keys(s.externals).length],
-    ["Dependencies", s.edges.length],
   ];
   if (s.stats.skipped) facts.push(["Files skipped (syntax errors)", s.stats.skipped]);
   if (s.stats.unresolved) facts.push(["Unresolved imports", s.stats.unresolved]);
@@ -490,7 +561,146 @@ function renderMap() {
     row.append(el("dt", {}, k), el("dd", {}, fmt(v)));
     return row;
   }));
+
+  if (!pair || !s.modules[pair[0]] || !s.modules[pair[1]]) {
+    const top = [...s.edges].sort((a, b) => b.count - a.count)[0];
+    pair = top ? [top.from, top.to] : names.length > 1 ? [names[0], names[1]] : null;
+  }
+  const fill = (sel, value) => sel.replaceChildren(...names.map((n) => {
+    const o = el("option", { value: n }, n);
+    if (n === value) o.selected = true;
+    return o;
+  }));
+  fill($("pick-from"), pair?.[0]);
+  fill($("pick-to"), pair?.[1]);
+
+  const host = $("matrix");
+  if (names.length < 2) {
+    host.replaceChildren(el("p", { class: "lede" }, "There is only one area, so there is nothing to compare yet."));
+    renderTalk(s, edgeMap, null, null);
+    return;
+  }
+  const older = data.weeks[selected + 1]?.snapshot;
+  const oldEdges = new Set((older?.edges || []).map((e) => `${e.from}\u0000${e.to}`));
+  const n = names.length;
+  const C = n > 60 ? 12 : n > 30 ? 16 : 22;
+  const LW = Math.min(300, 40 + Math.max(...names.map((x) => x.length)) * 7);
+  const HEAD = 26;
+  const width = LW + n * C + 2, height = HEAD + n * C + 2;
+  const root = svg("svg", { width, height, viewBox: `0 0 ${width} ${height}`, role: "group",
+    "aria-label": `Import matrix of ${plural(n, "area", "areas")}. Rows import from columns.` });
+  const idx = new Map(names.map((x, i) => [x, i]));
+
+  names.forEach((x, i) => {
+    const y = HEAD + i * C;
+    const num = svg("text", { x: 0, y: y + C / 2 + 4, "font-size": Math.min(12, C - 4), fill: "var(--ink-3)" });
+    num.textContent = String(i + 1);
+    const name = svg("text", { x: 28, y: y + C / 2 + 4, "font-size": Math.min(12, C - 4), fill: pair && (x === pair[0] || x === pair[1]) ? "var(--ink)" : "var(--ink-2)",
+      "font-weight": pair && (x === pair[0] || x === pair[1]) ? 650 : 400 });
+    name.textContent = clip(x, Math.floor((LW - 36) / 7));
+    const tip = svg("title"); tip.textContent = x; name.append(tip);
+    const col = svg("text", { x: LW + i * C + C / 2, y: HEAD - 8, "font-size": Math.min(11, C - 5), "text-anchor": "middle", fill: "var(--ink-3)" });
+    col.textContent = String(i + 1);
+    root.append(num, name, col);
+    root.append(svg("rect", { x: LW + i * C + 1, y: y + 1, width: C - 2, height: C - 2, rx: 3, fill: "var(--raised)" }));
+  });
+  for (let i = 1; i < n; i++) {
+    if ((s.modules[names[i]].package || "") !== (s.modules[names[i - 1]].package || "")) {
+      root.append(svg("line", { x1: 0, x2: width, y1: HEAD + i * C, y2: HEAD + i * C, stroke: "var(--rule)" }));
+      root.append(svg("line", { x1: LW + i * C, x2: LW + i * C, y1: HEAD - 4, y2: height, stroke: "var(--rule)" }));
+    }
+  }
+
+  s.edges.forEach((e) => {
+    const r = idx.get(e.from), c = idx.get(e.to);
+    if (r === undefined || c === undefined) return;
+    const on = pair && e.from === pair[0] && e.to === pair[1];
+    const isNew = older && !oldEdges.has(`${e.from}\u0000${e.to}`);
+    const g = svg("g", { class: `cell${on ? " on" : ""}`, tabindex: 0, role: "button",
+      "aria-label": `${e.from} imports from ${e.to} ${plural(e.count, "time", "times")}${isNew ? ", new this week" : ""}` });
+    const x = LW + c * C, y = HEAD + r * C;
+    g.append(svg("rect", { x: x + 1, y: y + 1, width: C - 2, height: C - 2, rx: 3, fill: `var(--q${level(e.count)})` }));
+    if (isNew) g.append(svg("circle", { cx: x + C / 2, cy: y + C / 2, r: Math.max(2, C / 7), fill: "var(--surface)" }));
+    const tip = svg("title");
+    tip.textContent = `${e.from} imports from ${e.to}: ${plural(e.count, "import", "imports")}${isNew ? ", new this week" : ""}`;
+    g.append(tip);
+    const pick = () => { pair = [e.from, e.to]; renderCode(); $("matrix").querySelector(".cell.on")?.focus(); };
+    g.addEventListener("click", pick);
+    g.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pick(); } });
+    root.append(g);
+  });
+  host.replaceChildren(root);
+  renderTalk(s, edgeMap, pair?.[0], pair?.[1]);
 }
+
+function relTo(path, area) {
+  const pkg = area.split("/src")[0];
+  return path.startsWith(`${area}/`) ? path.slice(area.length + 1) : path.startsWith(`${pkg}/`) ? path.slice(pkg.length + 1) : path;
+}
+
+function interfaceTable(edge, from, to) {
+  const byTarget = new Map();
+  edge.links.forEach((l) => {
+    const t = byTarget.get(l.to) || { names: new Set(), users: new Set() };
+    l.names.forEach((x) => t.names.add(x));
+    t.users.add(l.from);
+    byTarget.set(l.to, t);
+  });
+  const table = el("table");
+  const head = el("tr");
+  ["What it uses", `Defined in ${to}`, `Used by files in ${from}`].forEach((h) => head.append(el("th", {}, h)));
+  const thead = el("thead"); thead.append(head);
+  const tbody = el("tbody");
+  [...byTarget.entries()].sort((a, b) => b[1].users.size - a[1].users.size).forEach(([target, t]) => {
+    const tr = el("tr");
+    const names = [...t.names];
+    tr.append(
+      el("td", { class: "names" }, names.length ? names.join(", ") : "side-effect import"),
+      el("td", {}, relTo(target, to)),
+      el("td", { class: "users" }, [...t.users].map((u) => relTo(u, from)).join(", ")),
+    );
+    tbody.append(tr);
+  });
+  table.append(thead, tbody);
+  const wrap = el("div", { class: "table-wrap" });
+  wrap.append(table);
+  return wrap;
+}
+
+function renderTalk(s, edgeMap, a, b) {
+  const t = $("talk");
+  if (!a || !b || a === b) {
+    t.replaceChildren(el("p", {}, "Pick two different areas to see how they talk."));
+    return;
+  }
+  const ab = edgeMap.get(`${a}\u0000${b}`), ba = edgeMap.get(`${b}\u0000${a}`);
+  const parts = [el("h3", {}, `How ${a} talks to ${b}`)];
+  if (!ab && !ba) {
+    parts.push(el("p", {}, `${a} and ${b} don't import from each other this week.`));
+    t.replaceChildren(...parts);
+    return;
+  }
+  const files = (e) => new Set(e.links.map((l) => l.from)).size;
+  let lead = ab
+    ? `${a} imports from ${b} ${plural(ab.count, "time", "times")}${ab.links.length ? `, from ${plural(files(ab), "file", "files")}` : ""}.`
+    : `${a} doesn't import from ${b}.`;
+  if (ba) lead += ` ${b} also imports from ${a} ${plural(ba.count, "time", "times")}, so the two depend on each other.`;
+  parts.push(el("p", {}, lead));
+  const detailed = (ab && ab.links.length) || (ba && ba.links.length);
+  if (!detailed) {
+    parts.push(el("p", {}, "File-by-file detail is kept for the newest week only. Select the newest week to see it."));
+  } else {
+    if (ab && ab.links.length) parts.push(interfaceTable(ab, a, b));
+    if (ba && ba.links.length) {
+      parts.push(el("h3", {}, `And ${b} back to ${a}`));
+      parts.push(interfaceTable(ba, b, a));
+    }
+  }
+  t.replaceChildren(...parts);
+}
+
+$("pick-from").addEventListener("change", (e) => { pair = [e.target.value, pair?.[1] ?? e.target.value]; renderCode(); });
+$("pick-to").addEventListener("change", (e) => { pair = [pair?.[0] ?? e.target.value, e.target.value]; renderCode(); });
 
 function renderAreas() {
   const w = data.weeks[selected];
@@ -530,7 +740,8 @@ function renderAreas() {
 function render() {
   renderHeader();
   renderChart();
-  renderMap();
+  renderSystem();
+  renderCode();
   renderAreas();
 }
 

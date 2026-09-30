@@ -9,7 +9,15 @@ Weekly architecture snapshots of a TypeScript/JavaScript repo, for everyone on t
   between areas, packages started or stopped.
 - **How the codebase got here**: lines of code per week, split by the five largest areas. Select a
   week (or use ← →) to read what changed in it. Weeks without commits show as gaps.
-- **Architecture map** and an **areas table**: each area (a folder) and the areas it imports from.
+- **System map**: what runs, what stores data and what it talks to, in five lanes (who and what starts
+  it, apps and services, shared code, data and queues, outside services). Read from `package.json`
+  files, Cloudflare `wrangler` config (Workers, D1, KV, R2, Durable Objects, queues, crons, served
+  assets, routes), well-known SDKs (Stripe, Postgres, Redis, …), Xcode and XcodeGen projects, and the
+  URLs the code actually calls. The week's summary says what changed, e.g. "Added queue emails."
+- **How the code fits together**: an import matrix of every area (rows import from columns), grouped
+  by workspace package. Select a cell, or pick two areas, to see how they talk: which names cross the
+  boundary, which file defines them and which files use them.
+- An **areas table** with the same numbers, readable without colour.
 
 It reads only committed code (never your working tree), makes no network or LLM calls, and a
 12-week run on a ~200-file repo takes about a second.
@@ -29,7 +37,7 @@ archsnap run --weeks 26 --strict
 | `--repo <path>` | current dir | Repository to scan |
 | `--out <dir>` | `<repo>/.archsnap` | Where snapshots and `index.html` go |
 | `--weeks <n>` | 12 | How many weeks that had commits to snapshot (at least 1) |
-| `--depth <n>` | 2 | Folder levels per area, at least 1 (`src/billing/api/x.ts` → `src/billing` at 2). Monorepos read better at 3–4 |
+| `--depth <n>` | 1 | Folder levels per area below each workspace package, after `src/` (`apps/web/src/billing/api/x.ts` → `apps/web/src/billing` at 1) |
 | `--strict` | off | Exit 1 when there are warnings (the report is still written) |
 | `--verbose` | off | Print every git call |
 
@@ -98,6 +106,14 @@ Printed warnings come from the newest week only; older weeks just record counts.
 - `@/x` and `~/x` resolve to `src/x` or `x` under the importing file's folder or any parent, so
   monorepo packages like `apps/web/src` work. Other tsconfig `paths` aliases show up as packages.
 - Imports of stylesheets, images, JSON and other assets are ignored.
+- Workspace package imports (`@shop/core`) resolve to the package's files, so they link areas instead
+  of showing up as packages.
+- An outside URL counts as a service the code calls when it is passed to `fetch`, `axios`, `ky`,
+  `new URL` and similar, stored in an endpoint-named constant (`API_BASE`, `baseURL`), or sits in a file
+  that makes network calls. URLs in comments, JSX attributes and link fields (`href`, `image`, …) do
+  not count, and placeholder domains (`example.com`, `acme.com`, …) are ignored. Hosts group by
+  domain (`api.stripe.com` → Stripe); the map shows the 12 most-connected and folds the rest.
+- File-by-file import detail is kept for the newest week only, to keep the report small on big repos.
 
 ## Tests
 

@@ -67,6 +67,14 @@ pub fn diff(before: Option<&Snapshot>, after: &Snapshot) -> Diff {
         summary: Vec::new(),
     };
     d.summary = summarize(&d, before.is_none(), after);
+    if let Some(b) = before {
+        let mut lines = crate::system::diff_lines(&b.system, &after.system);
+        if !lines.is_empty() {
+            d.summary.retain(|l| l != "No structural changes this week.");
+            lines.append(&mut d.summary);
+            d.summary = lines;
+        }
+    }
     d
 }
 

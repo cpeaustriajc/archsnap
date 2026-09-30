@@ -11,13 +11,13 @@ pub struct Report<'a> {
     pub repo: String,
     pub shallow: bool,
     /// Newest first: report.html reads weeks[0] as the latest.
-    pub weeks: Vec<WeekView<'a>>,
+    pub weeks: Vec<WeekView>,
     pub warnings: &'a [Warning],
 }
 
 #[derive(Serialize)]
-pub struct WeekView<'a> {
-    pub snapshot: &'a Snapshot,
+pub struct WeekView {
+    pub snapshot: Snapshot,
     pub diff: Diff,
 }
 
