@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__ARCHSNAP_TITLE__ architecture</title>
+<style>
+:root {
+  color-scheme: light;
+  --surface: #fcfcfb;
+  --raised: #f3f3f0;
+  --ink: #1f2023;
+  --ink-2: #55565a;
+  --ink-3: #808186;
+  --rule: #e2e2dd;
+  --focus: #2a78d6;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4;
+  --other: #b9b9b3;
+  --gap-mark: #cfcfc9;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface: #1a1a19; --raised: #242423; --ink: #f2f1ec; --ink-2: #c3c2b7; --ink-3: #8f8e87;
+    --rule: #33332f; --focus: #6da7ec;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
+    --other: #5c5c57; --gap-mark: #45453f;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: #1a1a19; --raised: #242423; --ink: #f2f1ec; --ink-2: #c3c2b7; --ink-3: #8f8e87;
+  --rule: #33332f; --focus: #6da7ec;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
+  --other: #5c5c57; --gap-mark: #45453f;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--surface); color: var(--ink);
+  font: 16px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", Roboto, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+.page { max-width: 1120px; margin: 0 auto; padding: 28px 16px 64px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+.repo { margin: 0; font-size: 15px; font-weight: 600; color: var(--ink-2); }
+
+.hero { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; gap: 12px 48px; margin-top: 10px; }
+.week-name { margin: 0; font-size: clamp(48px, 8vw, 84px); line-height: 0.95; font-weight: 750; letter-spacing: -0.035em; }
+.week-when { margin: 10px 0 0; color: var(--ink-2); }
+.week-commit { margin: 2px 0 0; color: var(--ink-3); font-size: 14px; }
+.stepper { display: flex; gap: 8px; margin-top: 16px; }
+.stepper button {
+  font: inherit; font-size: 14px; color: var(--ink); background: var(--raised);
+  border: 1px solid var(--rule); border-radius: 6px; padding: 5px 12px; cursor: pointer;
+}
+.stepper button:disabled { color: var(--ink-3); cursor: default; }
+.compared { margin: 4px 0 12px; color: var(--ink-3); font-size: 14px; }
+.story { margin: 0; padding: 0; list-style: none; font-size: clamp(17px, 2.1vw, 20px); line-height: 1.45; max-width: 64ch; }
+.story li { padding: 7px 0; border-top: 1px solid var(--rule); }
+.story li:first-child { border-top: 0; padding-top: 0; }
+
+.warnings { margin: 28px 0 0; padding: 12px 14px; background: var(--raised); border-radius: 8px; font-size: 14px; }
+.warnings summary { cursor: pointer; font-weight: 600; }
+.warnings ul { margin: 8px 0 0; padding-left: 18px; color: var(--ink-2); }
+.warnings code { color: var(--ink); }
+
+section { margin-top: 44px; }
+h2 { margin: 0 0 4px; font-size: 18px; font-weight: 650; letter-spacing: -0.01em; }
+.lede { margin: 0 0 14px; color: var(--ink-2); font-size: 15px; max-width: 72ch; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 10px; padding: 0; list-style: none; font-size: 14px; color: var(--ink-2); }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: 0; }
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart .col { cursor: pointer; }
+.chart .col:focus { outline: none; }
+.chart .col:focus-visible .hit { stroke: var(--focus); stroke-width: 2; }
+.tip {
+  position: absolute; pointer-events: none; background: var(--ink); color: var(--surface);
+  font-size: 13px; line-height: 1.35; padding: 6px 9px; border-radius: 6px; white-space: nowrap;
+  transform: translate(-50%, calc(-100% - 10px)); opacity: 0;
+}
+.tip.on { opacity: 1; }
+
+.map { overflow-x: auto; margin-top: 18px; }
+.map svg { display: block; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px 36px; margin: 0; padding: 12px 0; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+.facts div { display: flex; flex-direction: column-reverse; }
+.facts dt { color: var(--ink-2); font-size: 14px; }
+.facts dd { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -0.01em; }
+
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 8px 10px 8px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { color: var(--ink-3); font-weight: 500; }
+td.num, th.num { text-align: right; padding-right: 18px; }
+td.area { font-weight: 600; white-space: nowrap; }
+td.deps { color: var(--ink-2); }
+tr.removed td { color: var(--ink-3); }
+.table-wrap { overflow-x: auto; }
+
+@media (max-width: 760px) {
+  .hero { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .tip { transition: opacity 80ms; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <p class="repo" id="repo"></p>
+
+  <div class="hero">
+    <div>
+      <h1 class="week-name" id="week-name"></h1>
+      <p class="week-when" id="week-when"></p>
+      <p class="week-commit" id="week-commit"></p>
+      <div class="stepper">
+        <button type="button" id="prev">Earlier week</button>
+        <button type="button" id="next">Later week</button>
+      </div>
+    </div>
+    <div>
+      <p class="compared" id="compared"></p>
+      <ul class="story" id="story"></ul>
+    </div>
+  </div>
+
+  <div id="warnings"></div>
+
+  <section aria-labelledby="growth-h">
+    <h2 id="growth-h">How the codebase got here</h2>
+    <p class="lede">Lines of code each week, split by area. Select a week to read what changed in it.</p>
+    <ul class="legend" id="legend"></ul>
+    <div class="chart" id="chart"><div class="tip" id="tip" role="status"></div></div>
+  </section>
+
+  <section aria-labelledby="map-h">
+    <h2 id="map-h">Architecture map</h2>
+    <p class="lede">Each box is an area (a folder). Arrows point from an area to the areas it imports from. + marks a new area, ▲ and ▼ mark areas that grew or shrank by 20% or more.</p>
+    <dl class="facts" id="facts"></dl>
+    <div class="map" id="map"></div>
+  </section>
+
+  <section aria-labelledby="areas-h">
+    <h2 id="areas-h">Areas</h2>
+    <div class="table-wrap"><table id="areas"></table></div>
+  </section>
+</div>
+
+<script id="archsnap-data" type="application/json">__ARCHSNAP_DATA__</script>
+<script>
+const data = JSON.parse(document.getElementById("archsnap-data").textContent);
+const $ = (id) => document.getElementById(id);
+const el = (tag, attrs = {}, text) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text !== undefined) e.textContent = text;
+  return e;
+};
+const svg = (tag, attrs = {}) => {
+  const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  return e;
+};
+const fmt = (n) => n.toLocaleString("en-US");
+const compact = (n) => (n >= 1000 ? `${Math.round(n / 100) / 10}k`.replace(".0k", "k") : String(n));
+const plural = (n, one, many) => `${fmt(n)} ${n === 1 ? one : many}`;
+
+// ISO week helpers: "2026-W39" <-> the Monday it starts on (UTC).
+function weekStart(label) {
+  const [y, w] = label.split("-W").map(Number);
+  const jan4 = new Date(Date.UTC(y, 0, 4));
+  const monday = new Date(jan4);
+  monday.setUTCDate(jan4.getUTCDate() - ((jan4.getUTCDay() + 6) % 7) + (w - 1) * 7);
+  return monday;
+}
+function weekLabel(date) {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  d.setUTCDate(d.getUTCDate() + 3 - ((d.getUTCDay() + 6) % 7));
+  const jan4 = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
+  const w = 1 + Math.round(((d - jan4) / 86400000 - 3 + ((jan4.getUTCDay() + 6) % 7)) / 7);
+  return `${d.getUTCFullYear()}-W${String(w).padStart(2, "0")}`;
+}
+const shortWeek = (label) => `W${Number(label.split("-W")[1])}`;
+function weekRange(label) {
+  const start = weekStart(label);
+  const end = new Date(start); end.setUTCDate(start.getUTCDate() + 6);
+  const md = { month: "short", day: "numeric", timeZone: "UTC" };
+  const sameMonth = start.getUTCMonth() === end.getUTCMonth();
+  const a = start.toLocaleDateString("en-US", md);
+  const b = sameMonth ? end.getUTCDate() : end.toLocaleDateString("en-US", md);
+  return `${a}–${b}, ${end.getUTCFullYear()}`;
+}
+const longDate = (iso) => new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+
+// Oldest first, with weeks that had no commits filled in as gaps.
+const chrono = [...data.weeks].reverse();
+const columns = [];
+chrono.forEach((w, i) => {
+  if (i > 0) {
+    const cursor = weekStart(chrono[i - 1].snapshot.week);
+    cursor.setUTCDate(cursor.getUTCDate() + 7);
+    while (weekLabel(cursor) !== w.snapshot.week && cursor < weekStart(w.snapshot.week)) {
+      columns.push({ gap: true, week: weekLabel(cursor) });
+      cursor.setUTCDate(cursor.getUTCDate() + 7);
+    }
+  }
+  columns.push({ gap: false, week: w.snapshot.week, view: w, index: data.weeks.length - 1 - i });
+});
+
+// Colour follows the area: the five areas with the largest peak size keep one colour everywhere.
+const peak = new Map();
+data.weeks.forEach((w) => Object.entries(w.snapshot.modules).forEach(([n, m]) => peak.set(n, Math.max(peak.get(n) || 0, m.lines))));
+const named = [...peak.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([n]) => n);
+const colorOf = (n) => { const i = named.indexOf(n); return i < 0 ? "var(--other)" : `var(--s${i + 1})`; };
+const series = [...named, "Other"];
+
+let selected = 0;
+
+function statusOf(w, name) {
+  if (w.diff.added_modules.includes(name)) return { sym: "+", word: "new" };
+  const g = w.diff.grown.find((c) => c.module === name);
+  if (g) return { sym: "▲", word: `grew ${pct(g)}` };
+  const s = w.diff.shrunk.find((c) => c.module === name);
+  if (s) return { sym: "▼", word: `shrank ${pct(s)}` };
+  return null;
+}
+function pct(c) {
+  const p = Math.round(((c.after - c.before) / Math.max(1, c.before)) * 100);
+  return `${p > 0 ? "+" : "−"}${Math.abs(p)}%`;
+}
+
+function renderHeader() {
+  $("repo").textContent = data.repo;
+  const w = data.weeks[selected];
+  const s = w.snapshot;
+  $("week-name").textContent = `Week ${Number(s.week.split("-W")[1])}`;
+  $("week-when").textContent = weekRange(s.week);
+  $("week-commit").textContent = `Last commit ${s.sha.slice(0, 7)} on ${longDate(s.date)}`;
+  $("prev").disabled = selected >= data.weeks.length - 1;
+  $("next").disabled = selected === 0;
+
+  const older = data.weeks[selected + 1];
+  let compared = "First snapshot in this report.";
+  if (older) {
+    const skipped = columns.filter((c) => c.gap && c.week > older.snapshot.week && c.week < s.week).length;
+    compared = `Compared with week ${Number(older.snapshot.week.split("-W")[1])}` +
+      (skipped ? ` (no commits in the ${plural(skipped, "week", "weeks")} between).` : ".");
+  }
+  $("compared").textContent = compared;
+  const story = $("story");
+  story.replaceChildren(...w.diff.summary.map((line) => el("li", {}, line)));
+}
+
+function renderWarnings() {
+  if (!data.warnings.length) return;
+  const d = el("details", { class: "warnings" });
+  d.append(el("summary", {}, `${plural(data.warnings.length, "warning", "warnings")} from this run`));
+  const ul = el("ul");
+  data.warnings.forEach((w) => {
+    const li = el("li");
+    li.append(el("code", {}, w.code), document.createTextNode(`: ${w.message}`));
+    ul.append(li);
+  });
+  d.append(ul);
+  $("warnings").append(d);
+}
+
+function renderLegend() {
+  const used = series.filter((n) => n !== "Other" || [...peak.keys()].some((k) => !named.includes(k)));
+  $("legend").replaceChildren(...used.map((n) => {
+    const li = el("li");
+    const sw = el("span", { class: "swatch" });
+    sw.style.background = colorOf(n === "Other" ? "" : n);
+    li.append(sw, document.createTextNode(n));
+    return li;
+  }));
+}
+
+function stackOf(snapshot) {
+  const parts = named.map((n) => ({ name: n, lines: snapshot.modules[n]?.lines || 0 }));
+  const other = Object.entries(snapshot.modules).filter(([n]) => !named.includes(n)).reduce((a, [, m]) => a + m.lines, 0);
+  parts.push({ name: "Other", lines: other });
+  return parts;
+}
+
+function niceMax(v) {
+  if (v <= 0) return 10;
+  const p = 10 ** Math.floor(Math.log10(v));
+  return [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].map((m) => m * p).find((m) => m >= v);
+}
+
+function renderChart() {
+  const host = $("chart");
+  host.querySelector("svg")?.remove();
+  const W = 1000, H = 260, L = 44, R = 150, T = 8, B = 28;
+  const plotW = W - L - R, plotH = H - T - B;
+  const max = niceMax(Math.max(...data.weeks.map((w) => w.snapshot.stats.lines)));
+  const slot = plotW / columns.length;
+  const barW = Math.min(56, slot * 0.72);
+  const y = (v) => T + plotH - (v / max) * plotH;
+  const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "group", "aria-label": "Lines of code per week, by area" });
+
+  [0, 0.5, 1].forEach((f) => {
+    const v = max * f;
+    root.append(svg("line", { x1: L, x2: L + plotW, y1: y(v), y2: y(v), stroke: "var(--rule)", "stroke-width": 1 }));
+    const t = svg("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end", "font-size": 12, fill: "var(--ink-3)" });
+    t.textContent = compact(v);
+    root.append(t);
+  });
+
+  const tip = $("tip");
+  const showTip = (evt, text) => {
+    const box = host.getBoundingClientRect();
+    tip.textContent = text;
+    tip.style.left = `${evt.clientX - box.left}px`;
+    tip.style.top = `${evt.clientY - box.top}px`;
+    tip.classList.add("on");
+  };
+  const hideTip = () => tip.classList.remove("on");
+
+  columns.forEach((c, ci) => {
+    const cx = L + slot * ci + slot / 2;
+    const x = cx - barW / 2;
+    const label = svg("text", { x: cx, y: H - 8, "text-anchor": "middle", "font-size": 12,
+      fill: !c.gap && c.index === selected ? "var(--ink)" : "var(--ink-3)", "font-weight": !c.gap && c.index === selected ? 700 : 400 });
+    label.textContent = shortWeek(c.week);
+    if (c.gap) {
+      root.append(svg("line", { x1: x + 4, x2: x + barW - 4, y1: y(0) - 1, y2: y(0) - 1, stroke: "var(--gap-mark)", "stroke-width": 2, "stroke-dasharray": "3 3" }));
+      const g = svg("g");
+      const hit = svg("rect", { x: cx - slot / 2, y: T, width: slot, height: plotH, fill: "transparent" });
+      hit.addEventListener("mousemove", (e) => showTip(e, `${shortWeek(c.week)}: no commits`));
+      hit.addEventListener("mouseleave", hideTip);
+      g.append(hit, label);
+      root.append(g);
+      return;
+    }
+    const s = c.view.snapshot;
+    const isSel = c.index === selected;
+    const g = svg("g", { class: "col", tabindex: 0, role: "button",
+      "aria-label": `${shortWeek(c.week)}, ${fmt(s.stats.lines)} lines${isSel ? ", selected" : ""}`, "aria-pressed": String(isSel) });
+    const hit = svg("rect", { class: "hit", x: cx - slot / 2 + 2, y: T, width: slot - 4, height: plotH, rx: 6,
+      fill: isSel ? "var(--raised)" : "transparent", stroke: "none" });
+    g.append(hit);
+    let base = 0;
+    const parts = stackOf(s).filter((p) => p.lines > 0);
+    parts.forEach((p, pi) => {
+      const top = y(base + p.lines), bottom = y(base);
+      const h = Math.max(0, bottom - top - (pi > 0 ? 2 : 0));
+      const seg = svg("rect", { x, y: top, width: barW, height: h, rx: pi === parts.length - 1 ? 3 : 0,
+        fill: p.name === "Other" ? "var(--other)" : colorOf(p.name), opacity: isSel ? 1 : 0.55 });
+      seg.addEventListener("mousemove", (e) => showTip(e, `${shortWeek(c.week)}, ${p.name}: ${fmt(p.lines)} lines`));
+      seg.addEventListener("mouseleave", hideTip);
+      g.append(seg);
+      base += p.lines;
+    });
+    g.append(label);
+    const pick = () => { selected = c.index; render(); host.querySelector(`[data-week="${c.week}"]`)?.focus(); };
+    g.setAttribute("data-week", c.week);
+    g.addEventListener("click", pick);
+    g.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+    root.append(g);
+  });
+
+  // Direct labels beside the newest column; bands too thin to label rely on the legend.
+  const last = columns[columns.length - 1];
+  if (last && !last.gap) {
+    let base = 0;
+    const lx = L + slot * (columns.length - 1) + slot / 2 + barW / 2 + 8;
+    let lastY = Infinity;
+    stackOf(last.view.snapshot).forEach((p) => {
+      if (p.lines <= 0) return;
+      const mid = y(base + p.lines / 2);
+      base += p.lines;
+      if (y(base - p.lines) - y(base) < 14 || lastY - mid < 14) return;
+      lastY = mid;
+      const t = svg("text", { x: lx, y: mid + 4, "font-size": 12, fill: "var(--ink-2)" });
+      t.textContent = p.name.length > 22 ? "…" + p.name.slice(-21) : p.name;
+      root.append(t);
+    });
+  }
+  host.prepend(root);
+}
+
+// Columns by dependency depth: an area sits left of everything it imports from.
+function layers(names, edges) {
+  const out = new Map(names.map((n) => [n, []]));
+  edges.forEach((e) => out.has(e.from) && out.has(e.to) && out.get(e.from).push(e.to));
+  const level = new Map();
+  const visiting = new Set();
+  const depth = (n) => {
+    if (level.has(n)) return level.get(n);
+    if (visiting.has(n)) return 0;
+    visiting.add(n);
+    const d = Math.max(0, ...out.get(n).map((m) => depth(m) + 1));
+    visiting.delete(n);
+    level.set(n, d);
+    return d;
+  };
+  names.forEach(depth);
+  const max = Math.max(0, ...level.values());
+  const cols = Array.from({ length: max + 1 }, () => []);
+  names.forEach((n) => cols[max - level.get(n)].push(n));
+  cols.forEach((c) => c.sort((a, b) => (named.indexOf(a) + 1 || 99) - (named.indexOf(b) + 1 || 99) || a.localeCompare(b)));
+  return cols;
+}
+
+function renderMap() {
+  const w = data.weeks[selected];
+  const s = w.snapshot;
+  const names = Object.keys(s.modules);
+  if (!names.length) {
+    $("map").replaceChildren(el("p", { class: "lede" }, "No TypeScript or JavaScript files in this week's snapshot."));
+    return;
+  }
+  const cols = layers(names, s.edges);
+  const NW = 200, NH = 50, GX = 72, GY = 14, PAD = 4;
+  const pos = new Map();
+  cols.forEach((col, ci) => col.forEach((n, ri) => pos.set(n, { x: PAD + ci * (NW + GX), y: PAD + ri * (NH + GY) })));
+  const width = PAD * 2 + cols.length * NW + (cols.length - 1) * GX;
+  const height = PAD * 2 + Math.max(...cols.map((c) => c.length)) * (NH + GY) - GY + 30;
+  const root = svg("svg", { width, height, viewBox: `0 0 ${width} ${height}`, role: "img",
+    "aria-label": `Architecture map for ${shortWeek(s.week)}: ${plural(names.length, "area", "areas")}. The Areas table lists the same dependencies.` });
+  const defs = svg("defs");
+  const marker = svg("marker", { id: "arrow", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 6, markerHeight: 6, orient: "auto-start-reverse" });
+  marker.append(svg("path", { d: "M0,0 L10,5 L0,10 z", fill: "var(--ink-3)" }));
+  defs.append(marker);
+  root.append(defs);
+
+  const fresh = new Set(w.diff.added_edges.map(([a, b]) => `${a}\u0000${b}`));
+  s.edges.forEach((e) => {
+    const a = pos.get(e.from), b = pos.get(e.to);
+    if (!a || !b) return;
+    const isNew = fresh.has(`${e.from}\u0000${e.to}`);
+    const x1 = a.x + NW, y1 = a.y + NH / 2, x2 = b.x, y2 = b.y + NH / 2;
+    const d = x2 > x1
+      ? `M${x1},${y1} C${x1 + GX / 2},${y1} ${x2 - GX / 2},${y2} ${x2},${y2}`
+      : `M${a.x + NW / 2},${a.y + NH} C${a.x + NW / 2},${a.y + NH + 28} ${b.x + NW / 2},${b.y + NH + 28} ${b.x + NW / 2},${b.y + NH}`;
+    const p = svg("path", { d, fill: "none", stroke: isNew ? "var(--ink)" : "var(--ink-3)", "stroke-width": isNew ? 2 : 1,
+      "stroke-opacity": isNew ? 1 : 0.55, "marker-end": "url(#arrow)" });
+    const t = svg("title");
+    t.textContent = `${e.from} imports from ${e.to} (${plural(e.count, "import", "imports")})${isNew ? ", new this week" : ""}`;
+    p.append(t);
+    root.append(p);
+  });
+
+  names.forEach((n) => {
+    const { x, y } = pos.get(n);
+    const st = statusOf(w, n);
+    const m = s.modules[n];
+    const g = svg("g");
+    g.append(svg("rect", { x, y, width: NW, height: NH, rx: 6, fill: "var(--surface)", stroke: st ? "var(--ink)" : "var(--rule)", "stroke-width": st ? 1.5 : 1 }));
+    g.append(svg("rect", { x: x + 1, y: y + 1, width: 5, height: NH - 2, rx: 2, fill: colorOf(n) }));
+    const name = svg("text", { x: x + 15, y: y + 21, "font-size": 13, "font-weight": 650, fill: "var(--ink)" });
+    name.textContent = n.length > 22 ? "…" + n.slice(-21) : n;
+    const meta = svg("text", { x: x + 15, y: y + 38, "font-size": 12, fill: "var(--ink-2)" });
+    meta.textContent = `${plural(m.files, "file", "files")}, ${fmt(m.lines)} lines`;
+    g.append(name, meta);
+    if (st) {
+      const badge = svg("text", { x: x + NW - 10, y: y + 21, "font-size": 12, "font-weight": 650, "text-anchor": "end", fill: "var(--ink)" });
+      badge.textContent = st.sym;
+      g.append(badge);
+    }
+    const t = svg("title");
+    t.textContent = `${n}: ${plural(m.files, "file", "files")}, ${fmt(m.lines)} lines${st ? `, ${st.word}` : ""}`;
+    g.append(t);
+    root.append(g);
+  });
+  $("map").replaceChildren(root);
+  // Shrink to fit when that keeps labels readable; past that the map scrolls sideways.
+  const scale = Math.max(0.72, Math.min(1, $("map").clientWidth / width));
+  root.setAttribute("width", width * scale);
+  root.setAttribute("height", height * scale);
+
+  const facts = [
+    ["Areas", names.length],
+    ["Files", s.stats.files],
+    ["Lines of code", s.stats.lines],
+    ["Packages used", Object.keys(s.externals).length],
+    ["Dependencies", s.edges.length],
+  ];
+  if (s.stats.skipped) facts.push(["Files skipped (syntax errors)", s.stats.skipped]);
+  if (s.stats.unresolved) facts.push(["Unresolved imports", s.stats.unresolved]);
+  $("facts").replaceChildren(...facts.map(([k, v]) => {
+    const row = el("div");
+    row.append(el("dt", {}, k), el("dd", {}, fmt(v)));
+    return row;
+  }));
+}
+
+function renderAreas() {
+  const w = data.weeks[selected];
+  const s = w.snapshot;
+  const older = data.weeks[selected + 1]?.snapshot;
+  const t = $("areas");
+  const head = el("tr");
+  [["Area", ""], ["Files", "num"], ["Lines", "num"], ["Change", "num"], ["Imports from", ""]].forEach(([h, c]) => head.append(el("th", c ? { class: c } : {}, h)));
+  const rows = [el("thead"), el("tbody")];
+  rows[0].append(head);
+  const byColor = (a, b) => (named.indexOf(a[0]) + 1 || 99) - (named.indexOf(b[0]) + 1 || 99) || b[1].lines - a[1].lines;
+  Object.entries(s.modules).sort(byColor).forEach(([n, m]) => {
+    const tr = el("tr");
+    const area = el("td", { class: "area" });
+    const sw = el("span", { class: "swatch" });
+    sw.style.background = colorOf(n);
+    area.append(sw, document.createTextNode(n));
+    const st = statusOf(w, n);
+    const before = older?.modules[n]?.lines;
+    let change = "";
+    if (st?.word === "new") change = "new";
+    else if (before !== undefined && before !== m.lines) change = `${m.lines > before ? "+" : "−"}${fmt(Math.abs(m.lines - before))}`;
+    const deps = s.edges.filter((e) => e.from === n).map((e) => e.to).join(", ") || "—";
+    tr.append(area, el("td", { class: "num" }, fmt(m.files)), el("td", { class: "num" }, fmt(m.lines)), el("td", { class: "num" }, change), el("td", { class: "deps" }, deps));
+    rows[1].append(tr);
+  });
+  w.diff.removed_modules.forEach((n) => {
+    const tr = el("tr", { class: "removed" });
+    const area = el("td", { class: "area" });
+    area.textContent = n;
+    tr.append(area, el("td", { class: "num" }, "—"), el("td", { class: "num" }, "—"), el("td", { class: "num" }, "removed"), el("td", { class: "deps" }, "—"));
+    rows[1].append(tr);
+  });
+  t.replaceChildren(...rows);
+}
+
+function render() {
+  renderHeader();
+  renderChart();
+  renderMap();
+  renderAreas();
+}
+
+$("prev").addEventListener("click", () => { if (selected < data.weeks.length - 1) { selected++; render(); } });
+$("next").addEventListener("click", () => { if (selected > 0) { selected--; render(); } });
+document.addEventListener("keydown", (e) => {
+  if (e.target.closest && e.target.closest("input, textarea, select")) return;
+  if (e.key === "ArrowLeft" && selected < data.weeks.length - 1) { selected++; render(); }
+  if (e.key === "ArrowRight" && selected > 0) { selected--; render(); }
+});
+
+renderWarnings();
+renderLegend();
+render();
+</script>
+</body>
+</html>
