@@ -72,7 +72,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }       # full history; a shallow clone only gets this week
-      - run: cargo install --git https://github.com/<you>/archsnap
+      - run: cargo install --git https://github.com/cpeaustriajc/archsnap
       - run: archsnap run
       - uses: actions/upload-artifact@v4
         with: { name: archsnap-report, path: .archsnap/index.html }
