@@ -112,6 +112,14 @@ h2 { margin: 0 0 4px; font-size: 18px; font-weight: 650; letter-spacing: -0.01em
   margin: 0; padding: 12px 14px; background: var(--raised); border-radius: 8px; overflow-x: auto;
   font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); white-space: pre;
 }
+.sequence { overflow-x: auto; margin-top: 10px; }
+.sequence svg { display: block; }
+.seq-label { paint-order: stroke; stroke: var(--surface); stroke-width: 5px; stroke-linejoin: round; }
+.seq-msg:hover .seq-label, .seq-msg.on .seq-label { font-weight: 700; }
+.sequence-words { margin: 14px 0 0; padding-left: 28px; max-width: 80ch; }
+.sequence-words li { margin: 0 0 6px; }
+.sequence-words li.on { font-weight: 650; }
+.sequence-words .muted { color: var(--ink-3); font-size: 13px; }
 .words { list-style: none; margin: 8px 0 0; padding: 0; columns: 2 420px; column-gap: 40px; }
 .words > li { break-inside: avoid; margin: 0 0 16px; }
 .words p { margin: 0 0 4px; }
@@ -230,9 +238,23 @@ tr.removed td { color: var(--ink-3); }
   </section>
 
   <section aria-labelledby="walk-h">
-    <h2 id="walk-h">How the app works</h2>
-    <p class="lede">Each step says in plain words how one part talks to the others, with the same thing as pseudocode underneath. It is written from the code: endpoints it defines, requests it makes, and what each file uses.</p>
-    <div id="walkthrough"></div>
+    <div class="section-head">
+      <h2 id="walk-h">How the app works</h2>
+      <div class="tabs" role="group" aria-label="How the app works view">
+        <button type="button" id="walk-tab-sequence" aria-pressed="true">Sequence</button>
+        <button type="button" id="walk-tab-steps" aria-pressed="false">Steps</button>
+      </div>
+    </div>
+    <div id="sequence-view">
+      <p class="lede">Pick what starts it. Each arrow is one message, top to bottom in order, and the numbered list underneath says the same in words. It is written from the code: the endpoints each service defines, the requests each app makes, and what the handling files call.</p>
+      <div class="chips" id="sequence-stories" role="group" aria-label="What starts it"></div>
+      <div class="sequence" id="sequence"></div>
+      <ol class="sequence-words" id="sequence-words"></ol>
+    </div>
+    <div id="steps-view" hidden>
+      <p class="lede">Each step says in plain words how one part talks to the others, with the same thing as pseudocode underneath. It is written from the code: endpoints it defines, requests it makes, and what each file uses.</p>
+      <div id="walkthrough"></div>
+    </div>
   </section>
 
   <section aria-labelledby="code-h">
@@ -525,6 +547,7 @@ const ICONS = {
   queue: "M3.5 6.5h11v4h-11z M3.5 13.5h11v4h-11z M17 8.5h3.5 M17 15.5h3.5 M19 6.5l2 2-2 2 M19 13.5l2 2-2 2",
   external: "M12 3.5a8.5 8.5 0 1 1 0 17a8.5 8.5 0 1 1 0-17z M3.5 12h17 M12 3.5c2.5 2.4 3.6 5.2 3.6 8.5s-1.1 6.1-3.6 8.5c-2.5-2.4-3.6-5.2-3.6-8.5s1.1-6.1 3.6-8.5z",
   more: "M6 12h.01 M12 12h.01 M18 12h.01",
+  person: "M12 3.5a4 4 0 1 1 0 8a4 4 0 1 1 0-8z M4.5 20.5c.8-4 3.8-6 7.5-6s6.7 2 7.5 6",
 };
 const EDGE_GROUP = {
   "uses code from": "code",
@@ -1446,6 +1469,250 @@ function renderWalkthrough() {
   host.replaceChildren(...parts);
 }
 
+// ---- Sequence view: one story per thing that starts work, drawn as lifelines and numbered arrows ----
+// Guessed from names: a file "reads and writes" a store when it uses an area or package named like one.
+const DATA_HINT = /(^|[/@ ›_-])(db|database|prisma|drizzle|storage|store|repo|repositories|models?)(\b|$)/i;
+
+function fileEffects(ctx, file) {
+  const outside = new Set();
+  let data = false;
+  const check = (area) => {
+    ctx.outsideOfArea(area).forEach((o) => outside.add(o));
+    if (DATA_HINT.test(area) || DATA_HINT.test(ctx.nameOf(area))) data = true;
+  };
+  ctx.usesOfFile(file).forEach((names, area) => { if (!names.size || runtimeNames(names).length) check(area); });
+  check(ctx.areaOfFile(file));
+  return { outside: [...outside], data };
+}
+
+function sequenceStories(snapshot) {
+  const ctx = codeContext(snapshot);
+  const { sys, byId } = ctx;
+  const routes = sys.routes || [];
+  const calls = sys.route_calls || [];
+  const name = (id) => (id === "person" ? "Someone" : byId.get(id)?.label || id);
+  const extId = new Map(sys.nodes.filter((n) => n.kind === "external").map((n) => [n.label, n.id]));
+  const storesOf = (svc) => sys.edges.filter((e) => e.from === svc && byId.get(e.to)?.kind === "datastore").map((e) => e.to);
+
+  const effects = (msgs, svc, file) => {
+    const fx = fileEffects(ctx, file);
+    fx.outside.filter((o) => extId.has(o)).forEach((o) => msgs.push({ from: svc, to: extId.get(o), text: `calls ${o}`, flow: "request", say: `${name(svc)} calls ${o}.` }));
+    if (fx.data) storesOf(svc).forEach((d) => msgs.push({ from: svc, to: d, text: "reads and writes", flow: "data", say: `${name(svc)} reads and writes ${name(d)}.` }));
+  };
+  const request = (msgs, from, c, via) => {
+    const r = routes.find((x) => x.path === c.path && x.method === c.method) || routes.find((x) => x.path === c.path);
+    if (!r) return;
+    msgs.push({ from, to: r.service, text: `${c.method} ${c.path}`, flow: "request",
+      say: `${name(from)} asks ${name(r.service)} for ${c.method} ${c.path}${via ? ` through ${via}` : ""}.`, file: `handled in ${shortFile(r.file)}` });
+    effects(msgs, r.service, r.file);
+    msgs.push({ from: r.service, to: from, text: "response", ret: true, say: `${name(r.service)} sends the answer back to ${name(from)}.` });
+  };
+  const requestsOf = (msgs, from, list, via) => {
+    const seen = new Set();
+    list.forEach((c) => { const k = `${c.method} ${c.path}`; if (!seen.has(k)) { seen.add(k); request(msgs, from, c, via); } });
+  };
+
+  // Direct imports only: a barrel's `export *` would credit every app with every request.
+  const importsFile = (app, file) => {
+    const pkg = app.id.slice(4) === "." ? "" : app.id.slice(4);
+    return snapshot.edges.some((e) => (snapshot.modules[e.from]?.package ?? "") === pkg
+      && e.links.some((l) => l.to === file && runtimeNames(l.names).length));
+  };
+
+  const stories = [];
+  const reached = new Set();
+  sys.nodes.filter((n) => n.kind === "web" || n.kind === "mobile").forEach((app) => {
+    const msgs = [];
+    const web = app.kind === "web";
+    msgs.push({ from: "person", to: app.id, text: web ? "opens in a browser" : "opens the app", flow: "request", say: `Someone opens ${app.label}${web ? " in a browser" : ""}.` });
+    sys.edges.filter((e) => e.to === app.id && e.label === "serves").forEach((e) => {
+      msgs.push({ from: app.id, to: e.from, text: "loads the page", flow: "request", say: `The browser loads ${app.label}'s files from ${name(e.from)}.` });
+      msgs.push({ from: e.from, to: app.id, text: `${app.label} files`, ret: true, say: `${name(e.from)} serves them.` });
+    });
+    requestsOf(msgs, app.id, calls.filter((c) => c.from === app.id));
+    sys.edges.filter((e) => e.from === app.id && e.label === "uses code from").forEach((e) => {
+      const lib = calls.filter((c) => c.from === e.to && importsFile(app, c.file));
+      if (lib.length) { reached.add(e.to); requestsOf(msgs, app.id, lib, name(e.to)); }
+    });
+    sys.edges.filter((e) => e.from === app.id && byId.get(e.to)?.kind === "external").forEach((e) => {
+      msgs.push({ from: app.id, to: e.to, text: `calls ${name(e.to)}`, flow: "request", say: `${app.label} also calls ${name(e.to)}.` });
+    });
+    stories.push({ key: app.id, title: `Someone opens ${app.label}`, msgs });
+  });
+
+  sys.nodes.filter((n) => n.kind === "library" && !reached.has(n.id)).forEach((lib) => {
+    const msgs = [];
+    requestsOf(msgs, lib.id, calls.filter((c) => c.from === lib.id));
+    if (msgs.length) stories.push({ key: lib.id, title: `${lib.label} calls the API`, msgs });
+  });
+
+  const handlerOf = (svc, kind) => (sys.handlers || []).find((h) => h.service === svc && h.kind === kind);
+  const queueStory = (msgs, q, svc) => {
+    const h = handlerOf(svc, "queue");
+    msgs.push({ from: q, to: svc, text: "queue()", flow: "events", say: `${name(q)} hands the work to ${name(svc)}'s queue handler.`, file: h ? `in ${shortFile(h.file)}` : "" });
+    if (h) effects(msgs, svc, h.file);
+  };
+  const queued = new Set();
+  sys.edges.filter((e) => byId.get(e.from)?.kind === "schedule").forEach((e) => {
+    const svc = e.to;
+    const h = handlerOf(svc, "scheduled");
+    const msgs = [{ from: e.from, to: svc, text: "scheduled()", flow: "schedule", say: `${name(e.from)}, Cloudflare starts ${name(svc)}'s scheduled job.`, file: h ? `in ${shortFile(h.file)}` : "" }];
+    if (h) effects(msgs, svc, h.file);
+    sys.edges.filter((q) => q.from === svc && q.label === "sends to").forEach((q) => {
+      msgs.push({ from: svc, to: q.to, text: "send work", flow: "events", say: `${name(svc)} puts work on ${name(q.to)}.` });
+      if (sys.edges.some((d) => d.from === q.to && d.to === svc && d.label === "delivers to")) { queued.add(q.to); queueStory(msgs, q.to, svc); }
+    });
+    stories.push({ key: e.from, title: name(e.from), msgs });
+  });
+  sys.edges.filter((e) => e.label === "delivers to" && !queued.has(e.from)).forEach((e) => {
+    const msgs = [];
+    queueStory(msgs, e.from, e.to);
+    stories.push({ key: e.from, title: `Work arrives on ${name(e.from)}`, msgs });
+  });
+  return { stories, byId };
+}
+
+let seqStory = null;
+let seqOn = -1;
+
+function renderSequence() {
+  const s = data.weeks[selected].snapshot;
+  const { stories, byId } = sequenceStories(s);
+  const host = $("sequence");
+  const words = $("sequence-words");
+  const bar = $("sequence-stories");
+  if (!stories.length) {
+    bar.replaceChildren();
+    words.replaceChildren();
+    host.replaceChildren(el("p", { class: "lede" }, "No endpoints, app requests or scheduled jobs were found this week, so there is no sequence to draw."));
+    return;
+  }
+  const story = stories.find((x) => x.key === seqStory) || stories[0];
+  seqStory = story.key;
+  bar.replaceChildren(...stories.map((x) => {
+    const b = el("button", { type: "button", class: "chip", "aria-pressed": String(x === story) }, x.title);
+    b.onclick = () => { seqStory = x.key; seqOn = -1; renderSequence(); };
+    return b;
+  }));
+
+  const external = (id) => byId.get(id)?.kind === "external";
+  const many = new Set(story.msgs.filter((m) => external(m.to)).map((m) => m.to)).size > 4;
+  const msgs = [];
+  story.msgs.forEach((m) => {
+    const prev = msgs[msgs.length - 1];
+    if (!many || !external(m.to)) { msgs.push(m); return; }
+    const host = byId.get(m.to).label;
+    if (prev && prev.to === "outside" && prev.from === m.from) prev.hosts.push(host);
+    else msgs.push({ ...m, to: "outside", hosts: [host] });
+  });
+  msgs.forEach((m) => {
+    if (!m.hosts) return;
+    m.text = `calls ${m.hosts.length === 1 ? m.hosts[0] : `${m.hosts[0]} +${m.hosts.length - 1}`}`;
+    m.say = `${byId.get(m.from)?.label || m.from} calls ${m.hosts.join(", ")}.`;
+  });
+  const ids = ["person"].filter((id) => msgs.some((m) => m.from === id || m.to === id));
+  msgs.forEach((m) => [m.from, m.to].forEach((id) => { if (!ids.includes(id)) ids.push(id); }));
+  const colW = 150, headH = 58, top = 12, rowH = 42, pad = 76;
+  const xOf = new Map(ids.map((id, i) => [id, pad + i * colW]));
+  const firstY = top + headH + 34;
+  const W = pad * 2 + (ids.length - 1) * colW;
+  const H = firstY + msgs.length * rowH + 10;
+  const root = svg("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `${story.title}: ${msgs.length} messages, listed below.` });
+  const defs = svg("defs");
+  [...Object.keys(FLOWS), "ret"].forEach((f) => {
+    const mk = svg("marker", { id: `seq-${f}`, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" });
+    mk.append(svg("path", { d: "M0,0 L10,5 L0,10 z", fill: f === "ret" ? "var(--ink-3)" : FLOWS[f].color }));
+    defs.append(mk);
+  });
+  root.append(defs);
+
+  const rowY = (i) => firstY + i * rowH;
+  ids.forEach((id) => {
+    const x = xOf.get(id);
+    root.append(svg("line", { x1: x, y1: top + headH, x2: x, y2: H - 4, stroke: "var(--rule)", "stroke-dasharray": "4 4" }));
+  });
+  ids.forEach((id, i) => {
+    if (i === 0) return;
+    const rows = msgs.map((m, j) => (m.from === id || m.to === id ? j : -1)).filter((j) => j >= 0);
+    const y1 = rowY(rows[0]) - 8, y2 = rowY(rows[rows.length - 1]) + 8;
+    root.append(svg("rect", { x: xOf.get(id) - 5, y: y1, width: 10, height: y2 - y1, rx: 2, fill: "var(--raised)", stroke: "var(--ink-3)" }));
+  });
+
+  ids.forEach((id) => {
+    const x = xOf.get(id);
+    const n = id === "person" ? { kind: "person", label: "Someone", detail: "" }
+      : id === "outside" ? { kind: "external", label: "Outside services", detail: [...new Set(msgs.flatMap((m) => m.hosts || []))].join(", ") } : byId.get(id);
+    const g = svg("g");
+    g.append(svg("rect", { x: x - 64, y: top, width: 128, height: headH, rx: 10, fill: "var(--raised)", stroke: "var(--rule)" }));
+    const slug = n.kind === "person" ? null : brandOf(n);
+    const s = 20 / 24;
+    const at = `translate(${x - 10},${top + 8}) scale(${s})`;
+    if (slug && BRANDS[slug]) g.append(svg("path", { d: BRANDS[slug].path, fill: brandFill(BRANDS[slug].hex), transform: at }));
+    else g.append(svg("path", { d: ICONS[n.kind] || ICONS.external, fill: "none", stroke: "var(--ink)", "stroke-width": 1.6, "stroke-linecap": "round", "stroke-linejoin": "round", transform: at }));
+    const t = svg("text", { x, y: top + 45, "text-anchor": "middle", "font-size": 12.5, "font-weight": 650, fill: "var(--ink)" });
+    t.textContent = clip(n.label, 18);
+    const tip = svg("title");
+    tip.textContent = n.detail ? `${n.label}, ${n.detail}` : n.label;
+    g.append(t, tip);
+    root.append(g);
+  });
+
+  const items = msgs.map((m, i) => {
+    const y = rowY(i);
+    const x1 = xOf.get(m.from), x2 = xOf.get(m.to);
+    const dir = x2 > x1 ? 1 : -1;
+    const g = svg("g", { class: `seq-msg${i === seqOn ? " on" : ""}` });
+    const color = m.ret ? "var(--ink-3)" : FLOWS[m.flow].color;
+    g.append(svg("line", { x1: x1 + dir * 30, y1: y, x2: x2 - dir * 7, y2: y, stroke: color, "stroke-width": i === seqOn ? 3 : 2,
+      ...(m.ret ? { "stroke-dasharray": "5 4" } : {}), "marker-end": `url(#seq-${m.ret ? "ret" : m.flow})` }));
+    g.append(svg("circle", { cx: x1 + dir * 18, cy: y, r: 10, fill: "var(--ink)" }));
+    const num = svg("text", { x: x1 + dir * 18, y: y + 4, "text-anchor": "middle", "font-size": 11, "font-weight": 700, fill: "var(--surface)" });
+    num.textContent = String(i + 1);
+    const label = svg("text", { class: "seq-label", x: x1 + dir * 34, y: y - 8, "text-anchor": dir > 0 ? "start" : "end", "font-size": 12.5, fill: m.ret ? "var(--ink-2)" : "var(--ink)" });
+    label.textContent = m.text;
+    const tip = svg("title");
+    tip.textContent = `${i + 1}. ${m.say}`;
+    g.append(num, label, tip);
+    g.addEventListener("mouseenter", () => mark(i));
+    g.addEventListener("mouseleave", () => mark(-1));
+    root.append(g);
+    return g;
+  });
+  host.replaceChildren(root);
+
+  const lis = msgs.map((m, i) => {
+    const li = el("li", { class: i === seqOn ? "on" : "" }, m.say);
+    if (m.file) li.append(el("span", { class: "muted" }, `  ${m.file}`));
+    li.addEventListener("mouseenter", () => mark(i));
+    li.addEventListener("mouseleave", () => mark(-1));
+    return li;
+  });
+  words.replaceChildren(...lis);
+  function mark(i) {
+    seqOn = i;
+    items.forEach((g, j) => { g.classList.toggle("on", j === i); g.querySelector("line").setAttribute("stroke-width", j === i ? 3 : 2); });
+    lis.forEach((li, j) => li.classList.toggle("on", j === i));
+  }
+}
+
+let walkView = (() => { try { return localStorage.getItem("archsnap-walk") || "sequence"; } catch { return "sequence"; } })();
+
+function renderWalkTabs() {
+  $("walk-tab-sequence").setAttribute("aria-pressed", String(walkView === "sequence"));
+  $("walk-tab-steps").setAttribute("aria-pressed", String(walkView === "steps"));
+  $("sequence-view").hidden = walkView !== "sequence";
+  $("steps-view").hidden = walkView !== "steps";
+}
+
+function setWalkView(v) {
+  walkView = v;
+  try { localStorage.setItem("archsnap-walk", v); } catch { /* private mode: the choice just isn't remembered */ }
+  renderWalkTabs();
+}
+
+$("walk-tab-sequence").addEventListener("click", () => setWalkView("sequence"));
+$("walk-tab-steps").addEventListener("click", () => setWalkView("steps"));
+
 let codeView = "words";
 
 function renderCodeWords() {
@@ -1497,6 +1764,7 @@ function render() {
   renderChart();
   renderSystemView();
   renderWalkthrough();
+  renderSequence();
   renderCode();
   renderCodeWords();
   renderAreas();
@@ -1513,6 +1781,7 @@ document.addEventListener("keydown", (e) => {
 renderWarnings();
 renderLegend();
 setView(view);
+renderWalkTabs();
 render();
 </script>
 </body>

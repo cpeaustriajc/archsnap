@@ -18,7 +18,12 @@ Weekly architecture snapshots of a TypeScript/JavaScript repo, for everyone on t
   files, Cloudflare `wrangler` config (Workers, D1, KV, R2, Durable Objects, queues, crons, served
   assets, routes), well-known SDKs (Stripe, Postgres, Redis, …), Xcode and XcodeGen projects, and the
   URLs the code actually calls. The week's summary says what changed, e.g. "Added queue emails."
-- **How the app works**: numbered steps in plain words, each with pseudocode underneath: who opens
+- **How the app works, Sequence**: a sequence diagram for each thing that starts work (someone
+  opening an app, a cron, a queue): one lifeline per part, numbered arrows top to bottom, and the
+  same steps listed in words underneath. A service "reads and writes" its database when the handling
+  file uses an area or package named like one (`db`, `prisma`, `store`, …). More than four outside
+  services fold into one "Outside services" lifeline.
+- **How the app works, Steps**: numbered steps in plain words, each with pseudocode underneath: who opens
   what, which endpoints each app requests, what every endpoint (`on GET /api/fx-rates`) uses and
   calls, what scheduled and queue handlers do, and where data lives. Endpoints come from Hono,
   Express-style `router.get("/…")` calls with their `app.route(prefix, …)` mounts, and Next.js
