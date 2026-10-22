@@ -9,7 +9,10 @@ Status: decisions agreed, nothing built yet.
 2. **Fearless parallelism.** An agent can do anything inside its workspace and nothing it does can
    hurt another agent, main, or your work. Every state is recoverable; conflicts never stop an agent.
 
-Target scale: **100+ agents at once on one machine**, for many users, not just us.
+Target scale: **anywhere from 1 to 100+ agents at once on one machine**, for many users, not just us.
+A single agent (or a single human) must pay no extra cost or ceremony: no queue wait when nothing
+else is landing, no batching delay, workspaces optional. The machinery for many agents switches on
+as more of them run.
 
 ## Decisions
 
@@ -139,7 +142,7 @@ archsnap report                      # weekly report + per-change review pages
 | M3 | Hook snapshots + operation log + `undo`/`restore` + `gc` | Nothing lost |
 | M4 | Symbol tables (TS/JS, Rust) + `archsnap diff` + per-change report | Seeing what agents did |
 | M5 | Per-symbol merge + checks + conflict objects | Never blocked |
-| M6 | Land queue: affected tests, batching, bisect | Main safe at 100+ agents |
+| M6 | Land queue: affected tests, batching, bisect | Main safe from 1 to 100+ agents |
 | M7 | Two-way git sync of landed history | GitHub/CI keep working |
 | Later | Virtual filesystem, shared/remote store | Scale past one machine |
 
@@ -153,5 +156,5 @@ M7 comes late, but until it ships `archsnap import` can be re-run, so nobody is 
 
 1. Which agent runner gets the snapshot hook first (Claude Code, others)?
 2. cj-stack as the first repo to dogfood on: its GitHub owner/name.
-3. 100 agents on one box also need CPU/RAM for 100 dev servers and test runs. Does Archsnap
+3. Many agents on one box also need CPU/RAM for their dev servers and test runs. Does Archsnap
    schedule that (limit concurrent checks, queue builds), or is it the user's problem?
