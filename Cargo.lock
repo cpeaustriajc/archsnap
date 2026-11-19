@@ -119,6 +119,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "earnest_chart"
+version = "0.1.0"
+dependencies = [
+ "earnest_check",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "earnest_check"
 version = "0.1.0"
 dependencies = [
