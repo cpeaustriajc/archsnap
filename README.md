@@ -72,7 +72,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }       # full history; a shallow clone only gets this week
-      - run: cargo install --git https://github.com/cpeaustriajc/archsnap
+      - run: cargo install --git https://github.com/cpeaustriajc/earnest
       - run: earnest run
       - uses: actions/upload-artifact@v4
         with: { name: earnest-report, path: .earnest/index.html }
@@ -137,4 +137,22 @@ End-to-end tests drive the real binary against throwaway git repos:
 
 ```sh
 cargo test
+```
+
+## Development
+
+One command runs every check:
+
+```sh
+just check
+```
+
+The `justfile` lists the checks: `cargo fmt --check`, clippy with warnings denied, `cargo deny check`,
+`cargo machete` and the tests. It needs `just`, `cargo-deny` and `cargo-machete` on your `PATH`. `just fix` formats the code and applies clippy's
+fixes.
+
+To run the checks before each commit, enable the hook once per clone:
+
+```sh
+git config core.hooksPath .githooks
 ```

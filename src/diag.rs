@@ -15,7 +15,10 @@ pub enum Fatal {
     #[error("`git {args}` failed: {stderr}")]
     GitFailed { args: String, stderr: String },
     #[error("can't write to {}: {source}", path.display())]
-    OutputNotWritable { path: PathBuf, source: std::io::Error },
+    OutputNotWritable {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("{0} warning(s) and --strict is set")]
     Strict(usize),
 }
@@ -79,7 +82,13 @@ pub struct Source {
 
 impl Warning {
     pub fn new(code: &'static str, message: impl Into<String>, help: impl Into<String>) -> Self {
-        Warning { code, message: message.into(), file: None, help: help.into(), source: None }
+        Warning {
+            code,
+            message: message.into(),
+            file: None,
+            help: help.into(),
+            source: None,
+        }
     }
 
     pub fn in_file(mut self, file: &str, source: Source) -> Self {
@@ -96,7 +105,10 @@ impl Warning {
             (Some(file), Some(src)) => {
                 for (start, end, label) in &src.labels {
                     let span = oxc_span::Span::new(*start, *end);
-                    d = d.and_label(oxc_diagnostics::LabeledSpan::new_with_span(label.clone(), span));
+                    d = d.and_label(oxc_diagnostics::LabeledSpan::new_with_span(
+                        label.clone(),
+                        span,
+                    ));
                 }
                 Some((file.as_str(), src.text.clone()))
             }
@@ -108,7 +120,11 @@ impl Warning {
 
 fn render(d: OxcDiagnostic, source: Option<(&str, String)>) -> String {
     let color = std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
-    let theme = if color { GraphicalTheme::unicode() } else { GraphicalTheme::unicode_nocolor() };
+    let theme = if color {
+        GraphicalTheme::unicode()
+    } else {
+        GraphicalTheme::unicode_nocolor()
+    };
     let handler = GraphicalReportHandler::new_themed(theme).with_links(false);
     let mut out = String::new();
     let _ = match source {
