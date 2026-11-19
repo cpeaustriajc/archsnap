@@ -1,9 +1,10 @@
 use super::terms::apply;
 use super::types::{Binding, Scope, Type, Typed};
 use super::{Lowerer, Lowering};
-use crate::ir::{Expr, MapOp, Math, Op, Order, SeqOp, SetOp, Shelf, Sweep};
-use crate::surface::{Place, Term, TermKind};
-use crate::value::Value;
+use earnest_ast::{Term, TermKind};
+use earnest_diagnostics::Place;
+use earnest_ir::{Expr, MapOp, Math, Op, Order, SeqOp, SetOp, Shelf, Sweep};
+use earnest_value::Value;
 
 #[derive(Clone, Copy)]
 enum Takes {
@@ -180,7 +181,7 @@ impl Lowerer<'_> {
     fn unknown(&mut self, ty: &Type, call: &Call<'_>) -> super::Stop {
         self.stop(
             call.place,
-            &format!("`{}` on a {}", call.name, ty.kind()),
+            &format!("`{}` on {}", call.name, ty.kind()),
             "it is not one of the library's primitives, so the checker can't know what it does",
         )
     }
@@ -189,9 +190,13 @@ impl Lowerer<'_> {
         if call.arguments.len() == wanted {
             return Ok(());
         }
+        let given = match call.arguments.len() {
+            1 => "1 argument".to_owned(),
+            count => format!("{count} arguments"),
+        };
         Err(self.stop(
             call.place,
-            &format!("`{}` with {} arguments", call.name, call.arguments.len()),
+            &format!("`{}` with {given}", call.name),
             &format!("this primitive takes {wanted}"),
         ))
     }
@@ -237,11 +242,11 @@ impl Lowerer<'_> {
                     Takes::Number => &Type::Int,
                     Takes::Same | Takes::Nothing | Takes::KeyAndValue => &shelves.same,
                 };
-                let given = self.argument(call, 0, want, scope)?;
+                let passed = self.argument(call, 0, want, scope)?;
                 if matches!(takes, Takes::Item) {
-                    same = with_item(&same, given.ty);
+                    same = with_item(&same, passed.ty);
                 }
-                arguments.push(given.expr);
+                arguments.push(passed.expr);
             }
             Takes::KeyAndValue => {
                 self.arity(call, 2)?;
@@ -267,7 +272,7 @@ impl Lowerer<'_> {
         &mut self,
         on: Expr,
         shelves: &Shelves,
-        shelf: Shelf,
+        kind: Shelf,
         signature: Option<Signature>,
         call: &Call<'_>,
         scope: &mut Scope,
@@ -275,9 +280,10 @@ impl Lowerer<'_> {
         if let Some(found) = signature {
             return self.signed(on, shelves, found, call, scope);
         }
-        let size = match shelf {
-            Shelf::Set => Op::Set(SetOp::Size),
-            Shelf::Seq => Op::Seq(SeqOp::Size),
+        let size = if kind == Shelf::Set {
+            Op::Set(SetOp::Size)
+        } else {
+            Op::Seq(SeqOp::Size)
         };
         let sweep = match call.name {
             "is_empty" => {
@@ -292,14 +298,15 @@ impl Lowerer<'_> {
         };
         self.arity(call, 1)?;
         let (slot, body) = self.test(call, &shelves.item, scope)?;
-        let ty = match sweep {
-            Sweep::Every | Sweep::Some => Type::Bool,
-            Sweep::Filter => shelves.same.clone(),
+        let ty = if sweep == Sweep::Filter {
+            shelves.same.clone()
+        } else {
+            Type::Bool
         };
         Ok(Typed::new(
             Expr::Sweep {
                 sweep,
-                shelf,
+                shelf: kind,
                 slot,
                 source: Box::new(on),
                 body: Box::new(body),
@@ -425,6 +432,9 @@ impl Lowerer<'_> {
         let null = Expr::Const(Value::Null);
         let lock = Type::Lock(Some(Box::new(owner.clone())));
         let takes_owner = matches!(call.name, "is_held_by" | "acquire");
+        if !takes_owner && !matches!(call.name, "is_free" | "is_held" | "holder" | "release") {
+            return Err(self.unknown(&lock, call));
+        }
         self.arity(call, usize::from(takes_owner))?;
         if takes_owner {
             let given = self.argument(call, 0, owner, scope)?;
@@ -445,15 +455,16 @@ impl Lowerer<'_> {
     }
 
     fn on_plain_lock(&mut self, on: Expr, call: &Call<'_>) -> Lowering<Typed> {
-        self.arity(call, 0)?;
         let lock = Type::Lock(None);
-        match call.name {
-            "is_free" => Ok(Typed::new(apply(Op::Not, vec![on]), Type::Bool)),
-            "is_held" => Ok(Typed::new(on, Type::Bool)),
-            "acquire" => Ok(Typed::new(Expr::Const(Value::Bool(true)), lock)),
-            "release" => Ok(Typed::new(Expr::Const(Value::Bool(false)), lock)),
-            _ => Err(self.unknown(&lock, call)),
-        }
+        let lowered = match call.name {
+            "is_free" => Typed::new(apply(Op::Not, vec![on]), Type::Bool),
+            "is_held" => Typed::new(on, Type::Bool),
+            "acquire" => Typed::new(Expr::Const(Value::Bool(true)), lock),
+            "release" => Typed::new(Expr::Const(Value::Bool(false)), lock),
+            _ => return Err(self.unknown(&lock, call)),
+        };
+        self.arity(call, 0)?;
+        Ok(lowered)
     }
 
     fn stage(&mut self, name: &str) -> Expr {
@@ -461,7 +472,6 @@ impl Lowerer<'_> {
     }
 
     fn on_timer(&mut self, on: Expr, call: &Call<'_>) -> Lowering<Typed> {
-        self.arity(call, 0)?;
         let (stage, moves) = match call.name {
             "is_idle" => ("idle", false),
             "is_running" => ("running", false),
@@ -471,6 +481,7 @@ impl Lowerer<'_> {
             "cancel" | "reset" => ("idle", true),
             _ => return Err(self.unknown(&Type::Timer, call)),
         };
+        self.arity(call, 0)?;
         let wanted = self.stage(stage);
         Ok(if moves {
             Typed::new(wanted, Type::Timer)
@@ -480,7 +491,6 @@ impl Lowerer<'_> {
     }
 
     fn on_request(&mut self, on: Expr, call: &Call<'_>) -> Lowering<Typed> {
-        self.arity(call, 0)?;
         let (stage, moves) = match call.name {
             "is_idle" => ("idle", false),
             "is_pending" => ("pending", false),
@@ -491,6 +501,7 @@ impl Lowerer<'_> {
             "fail" => ("failed", true),
             "reset" => ("idle", true),
             "is_settled" => {
+                self.arity(call, 0)?;
                 let succeeded = is(on.clone(), self.stage("succeeded"));
                 let failed = is(on, self.stage("failed"));
                 return Ok(Typed::new(
@@ -500,6 +511,7 @@ impl Lowerer<'_> {
             }
             _ => return Err(self.unknown(&Type::Request, call)),
         };
+        self.arity(call, 0)?;
         let wanted = self.stage(stage);
         Ok(if moves {
             Typed::new(wanted, Type::Request)
@@ -509,25 +521,23 @@ impl Lowerer<'_> {
     }
 
     fn on_retry(&mut self, on: Expr, most: i64, call: &Call<'_>) -> Lowering<Typed> {
-        self.arity(call, 0)?;
         let retry = Type::Retry(most);
-        match call.name {
-            "attempts" => Ok(Typed::new(on, Type::Int)),
-            "can_retry" => Ok(Typed::new(
+        let lowered = match call.name {
+            "attempts" => Typed::new(on, Type::Int),
+            "can_retry" => Typed::new(
                 apply(Op::Order(Order::Less), vec![on, int(most)]),
                 Type::Bool,
-            )),
-            "is_exhausted" => Ok(Typed::new(
+            ),
+            "is_exhausted" => Typed::new(
                 apply(Op::Order(Order::GreaterOrEqual), vec![on, int(most)]),
                 Type::Bool,
-            )),
-            "again" => Ok(Typed::new(
-                apply(Op::Math(Math::Add), vec![on, int(1)]),
-                retry,
-            )),
-            "reset" => Ok(Typed::new(int(0), retry)),
-            _ => Err(self.unknown(&retry, call)),
-        }
+            ),
+            "again" => Typed::new(apply(Op::Math(Math::Add), vec![on, int(1)]), retry),
+            "reset" => Typed::new(int(0), retry),
+            _ => return Err(self.unknown(&retry, call)),
+        };
+        self.arity(call, 0)?;
+        Ok(lowered)
     }
 }
 

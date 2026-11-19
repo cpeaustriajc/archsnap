@@ -1,7 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["apps/*"]
-exclude = ["crates/earnest_check"]
+members = ["apps/*", "crates/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -9,12 +8,17 @@ edition = "2024"
 publish = false
 
 [workspace.dependencies]
-earnest_chart = { path = "crates/earnest_chart" }
-earnest_check = { path = "crates/earnest_check" }
-earnest_macros = { path = "crates/earnest_macros" }
-earnest_rs = { path = "crates/earnest_rs" }
-earnest_tla = { path = "crates/earnest_tla" }
-earnest_ts = { path = "crates/earnest_ts" }
+earnest_ast = { path = "crates/earnest_ast", version = "0.1.0" }
+earnest_chart = { path = "crates/earnest_chart", version = "0.1.0" }
+earnest_check = { path = "crates/earnest_check", version = "0.1.0" }
+earnest_diagnostics = { path = "crates/earnest_diagnostics", version = "0.1.0" }
+earnest_ir = { path = "crates/earnest_ir", version = "0.1.0" }
+earnest_macros = { path = "crates/earnest_macros", version = "0.1.0" }
+earnest_rs = { path = "crates/earnest_rs", version = "0.1.0" }
+earnest_semantic = { path = "crates/earnest_semantic", version = "0.1.0" }
+earnest_tla = { path = "crates/earnest_tla", version = "0.1.0" }
+earnest_ts = { path = "crates/earnest_ts", version = "0.1.0" }
+earnest_value = { path = "crates/earnest_value", version = "0.1.0" }
 
 clap = { version = "4.6.7", features = ["derive"] }
 oxc_allocator = "0.152.0"

@@ -1,8 +1,9 @@
 use super::types::{Binding, Scope, Type, Typed};
 use super::{Lowerer, Lowering};
-use crate::ir::{Expr, Math, Op, Order, Shelf, Sweep};
-use crate::surface::{Binary, Place, Reach, Shape, Term, TermKind, Unary};
-use crate::value::Value;
+use earnest_ast::{Binary, Reach, Shape, Term, TermKind, Unary};
+use earnest_diagnostics::Place;
+use earnest_ir::{Expr, Math, Op, Order, Shelf, Sweep};
+use earnest_value::{Sym, Value};
 
 pub(super) fn apply(op: Op, arguments: Vec<Expr>) -> Expr {
     Expr::Apply(op, arguments)
@@ -84,7 +85,16 @@ impl Lowerer<'_> {
                 "a template string",
                 "text is built only in a view's state and group labels",
             )),
+            _ => Err(self.unknown_syntax(place, "an expression")),
         }
+    }
+
+    fn unknown_syntax(&mut self, place: Place, feature: &str) -> super::Stop {
+        self.stop(
+            place,
+            feature,
+            "this version of the checker does not know it",
+        )
     }
 
     pub(super) fn text(&mut self, text: &str) -> Typed {
@@ -131,8 +141,17 @@ impl Lowerer<'_> {
                 "it is not defined in the model file, so the checker can't know its value",
             ));
         };
+        if self.in_flight.iter().any(|running| running == name) {
+            return Err(self.stop(
+                place,
+                &format!("recursion in `{name}`"),
+                "a constant can't be defined by itself",
+            ));
+        }
         let mut fresh = Scope::starting_at(scope.slots);
+        self.in_flight.push(name.to_owned());
         let lowered = self.term(constant, &mut fresh);
+        self.in_flight.pop();
         scope.slots = fresh.slots;
         lowered
     }
@@ -288,6 +307,7 @@ impl Lowerer<'_> {
                 let lowered = self.number(inner, scope)?;
                 Ok(Typed::new(apply(Op::Negate, vec![lowered]), Type::Int))
             }
+            _ => Err(self.unknown_syntax(inner.place, "an operator")),
         }
     }
 
@@ -313,7 +333,12 @@ impl Lowerer<'_> {
             Binary::Equal | Binary::Differ => {
                 let first = self.term(left, scope)?;
                 let second = self.term(right, scope)?;
-                return self.equality(binary == Binary::Differ, first, second, place);
+                let op = if binary == Binary::Equal {
+                    Op::Equal
+                } else {
+                    Op::Differ
+                };
+                return self.equality(op, first, second, place);
             }
             Binary::Less => (Op::Order(Order::Less), Type::Bool),
             Binary::LessOrEqual => (Op::Order(Order::LessOrEqual), Type::Bool),
@@ -323,6 +348,7 @@ impl Lowerer<'_> {
             Binary::Subtract => (Op::Math(Math::Subtract), Type::Int),
             Binary::Multiply => (Op::Math(Math::Multiply), Type::Int),
             Binary::Remainder => (Op::Math(Math::Remainder), Type::Int),
+            _ => return Err(self.unknown_syntax(place, "an operator")),
         };
         let first = self.number(left, scope)?;
         let second = self.number(right, scope)?;
@@ -331,12 +357,11 @@ impl Lowerer<'_> {
 
     pub(super) fn equality(
         &mut self,
-        differ: bool,
+        op: Op,
         left: Typed,
         right: Typed,
         place: Place,
     ) -> Lowering<Typed> {
-        let op = if differ { Op::Differ } else { Op::Equal };
         let (first, second) = if left.ty.fits(&right.ty) {
             (left.expr, right.expr)
         } else {
@@ -348,7 +373,7 @@ impl Lowerer<'_> {
                     (apply(Op::SomeOf, vec![left.expr]), right.expr)
                 }
                 (have, other) => {
-                    let feature = format!("a {} compared with a {}", have.kind(), other.kind());
+                    let feature = format!("{} compared with {}", have.kind(), other.kind());
                     return Err(self.stop(
                         place,
                         &feature,
@@ -409,7 +434,7 @@ impl Lowerer<'_> {
                 right.ty.clone(),
             )),
             (have, other) => {
-                let feature = format!("a choice between a {} and a {}", have.kind(), other.kind());
+                let feature = format!("a choice between {} and {}", have.kind(), other.kind());
                 Err(self.stop(
                     place,
                     &feature,
@@ -441,21 +466,22 @@ impl Lowerer<'_> {
         let Type::Record(mut known) = on.ty else {
             return Err(self.stop(
                 place,
-                &format!("a spread of a {}", on.ty.kind()),
+                &format!("a spread of {}", on.ty.kind()),
                 "only a record can be spread into a record",
             ));
         };
         let mut changes = Vec::with_capacity(exprs.len());
         for ((sym, expr), (name, ty)) in exprs.into_iter().zip(types) {
-            match known.iter_mut().find(|(have, _)| *have == name) {
-                Some((_, wanted)) => {
-                    let coerced = self.coerce(Typed::new(expr, ty), &wanted.clone(), place)?;
-                    changes.push((sym, coerced));
-                }
-                None => {
-                    known.push((name, ty));
-                    changes.push((sym, expr));
-                }
+            let wanted = known
+                .iter()
+                .find(|(have, _)| *have == name)
+                .map(|(_, wanted)| wanted.clone());
+            if let Some(wanted_type) = wanted {
+                let coerced = self.coerce(Typed::new(expr, ty), &wanted_type, place)?;
+                changes.push((sym, coerced));
+            } else {
+                known.push((name, ty));
+                changes.push((sym, expr));
             }
         }
         Ok(Typed::new(
@@ -467,7 +493,7 @@ impl Lowerer<'_> {
     fn listed(
         &mut self,
         items: &[Term],
-        shelf: Shelf,
+        kind: Shelf,
         place: Place,
         scope: &mut Scope,
     ) -> Lowering<Typed> {
@@ -485,9 +511,10 @@ impl Lowerer<'_> {
         for typed in lowered {
             exprs.push(self.coerce(typed, &item_type, place)?);
         }
-        Ok(match shelf {
-            Shelf::Set => Typed::new(Expr::SetOf(exprs), Type::Set(Box::new(item_type))),
-            Shelf::Seq => Typed::new(Expr::SeqOf(exprs), Type::Seq(Box::new(item_type))),
+        Ok(if kind == Shelf::Set {
+            Typed::new(Expr::SetOf(exprs), Type::Set(Box::new(item_type)))
+        } else {
+            Typed::new(Expr::SeqOf(exprs), Type::Seq(Box::new(item_type)))
         })
     }
 
@@ -527,6 +554,11 @@ impl Lowerer<'_> {
         body: &Term,
         scope: &mut Scope,
     ) -> Lowering<Typed> {
+        let sweep = match reach {
+            Reach::Every => Sweep::Every,
+            Reach::Some => Sweep::Some,
+            _ => return Err(self.unknown_syntax(body.place, "a choice over a declaration")),
+        };
         let shaped = self.shape(shape)?;
         let values = self.all_values(&shaped.domain, shape.place)?;
         let slot = scope.slot();
@@ -537,10 +569,7 @@ impl Lowerer<'_> {
         scope.names.pop();
         Ok(Typed::new(
             Expr::Sweep {
-                sweep: match reach {
-                    Reach::Every => Sweep::Every,
-                    Reach::Some => Sweep::Some,
-                },
+                sweep,
                 shelf: Shelf::Set,
                 slot,
                 source: Box::new(Expr::Const(Value::set(values.into_iter().collect()))),
@@ -577,7 +606,7 @@ impl Lowerer<'_> {
                 Ok(Expr::SeqOf(self.coerce_each(items, &item, wanted, place)?))
             }
             (_, ty, wanted) => {
-                let feature = format!("a {} where a {} is needed", ty.kind(), wanted.kind());
+                let feature = format!("{} where {} is needed", ty.kind(), wanted.kind());
                 Err(self.stop(
                     place,
                     &feature,
@@ -603,7 +632,7 @@ impl Lowerer<'_> {
 
     fn coerce_record(
         &mut self,
-        fields: Vec<(crate::value::Sym, Expr)>,
+        fields: Vec<(Sym, Expr)>,
         have: &[(String, Type)],
         want: &[(String, Type)],
         place: Place,

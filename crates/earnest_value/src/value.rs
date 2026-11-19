@@ -3,45 +3,71 @@ use serde_json::Value as Json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+/// An interned name: a text value, or the name of a record field.
+///
+/// Only the [`Symbols`] that handed it out can turn it back into text. Two names from the same
+/// `Symbols` are equal exactly when their text is equal, and they sort in the order they were
+/// first interned, not alphabetically.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct Sym(u32);
 
+/// What one field of a model holds in one state.
+///
+/// An optional value has no wrapper: it is [`Value::Null`] when absent and the plain value when
+/// present. A queue is a [`Value::Seq`], an owned lock is its owner or `Null`, and a timer or a
+/// request is the [`Value::Str`] naming its stage. Collections are shared, so a clone is cheap.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+#[non_exhaustive]
 pub enum Value {
+    /// An absent optional value.
     Null,
+    /// True or false.
     Bool(bool),
+    /// A whole number.
     Int(i64),
+    /// A text value or an enum value.
     Str(Sym),
+    /// Named fields, sorted by name. Build one with [`Value::record`] to keep them sorted.
     Record(Arc<Vec<(Sym, Value)>>),
+    /// Distinct items in sorted order.
     Set(Arc<BTreeSet<Value>>),
+    /// Keys in sorted order, each with one value.
     Map(Arc<BTreeMap<Value, Value>>),
+    /// Items in the order they were added.
     Seq(Arc<Vec<Value>>),
 }
 
 impl Value {
+    /// A record of `fields`, in any order. Two records with the same fields are equal however
+    /// they were listed.
     #[must_use]
-    pub fn record(mut fields: Vec<(Sym, Value)>) -> Self {
+    pub fn record(mut fields: Vec<(Sym, Self)>) -> Self {
         fields.sort_by_key(|(name, _)| *name);
         Self::Record(Arc::new(fields))
     }
 
+    /// A set holding `items`.
     #[must_use]
-    pub fn set(items: BTreeSet<Value>) -> Self {
+    pub fn set(items: BTreeSet<Self>) -> Self {
         Self::Set(Arc::new(items))
     }
 
+    /// A map holding `entries`.
     #[must_use]
-    pub fn map(entries: BTreeMap<Value, Value>) -> Self {
+    pub fn map(entries: BTreeMap<Self, Self>) -> Self {
         Self::Map(Arc::new(entries))
     }
 
+    /// A sequence or a queue holding `items`, first item first.
     #[must_use]
-    pub fn seq(items: Vec<Value>) -> Self {
+    pub fn seq(items: Vec<Self>) -> Self {
         Self::Seq(Arc::new(items))
     }
 
+    /// The value of the record field `name`. `None` when this is not a record or the record has
+    /// no such field.
     #[must_use]
-    pub fn field(&self, name: Sym) -> Option<&Value> {
+    pub fn field(&self, name: Sym) -> Option<&Self> {
         match self {
             Self::Record(fields) => fields
                 .iter()
@@ -58,6 +84,10 @@ impl Value {
     }
 }
 
+/// Every name one model uses, and the way its values are printed.
+///
+/// A [`Sym`] means something only to the `Symbols` that made it. Keep one per model and pass it
+/// along with the model's values.
 #[derive(Clone, Debug, Default)]
 pub struct Symbols {
     names: Vec<String>,
@@ -65,21 +95,26 @@ pub struct Symbols {
 }
 
 impl Symbols {
-    pub fn intern(&mut self, name: &str) -> Sym {
-        if let Some(found) = self.ids.get(name) {
+    /// The name for `text`. Interning the same text again gives the same name back.
+    pub fn intern(&mut self, text: &str) -> Sym {
+        if let Some(found) = self.ids.get(text) {
             return *found;
         }
         let sym = Sym(u32::try_from(self.names.len()).unwrap_or(u32::MAX));
-        self.names.push(name.to_owned());
-        self.ids.insert(name.to_owned(), sym);
+        self.names.push(text.to_owned());
+        self.ids.insert(text.to_owned(), sym);
         sym
     }
 
+    /// The name for `text` if it was interned before. Unlike [`Symbols::intern`], it adds
+    /// nothing.
     #[must_use]
-    pub fn find(&self, name: &str) -> Option<Sym> {
-        self.ids.get(name).copied()
+    pub fn find(&self, text: &str) -> Option<Sym> {
+        self.ids.get(text).copied()
     }
 
+    /// The text behind `sym`. Empty when `sym` came from a different `Symbols` that holds more
+    /// names than this one.
     #[must_use]
     pub fn name(&self, sym: Sym) -> &str {
         usize::try_from(sym.0)
@@ -88,6 +123,8 @@ impl Symbols {
             .map_or("", String::as_str)
     }
 
+    /// `value` as the text report prints it: `"text"`, `12`, `true`, `null`, `{a, b}` for a set,
+    /// `[a, b]` for a sequence or queue, `{k -> v}` for a map and `{name: value}` for a record.
     #[must_use]
     pub fn show(&self, value: &Value) -> String {
         let mut out = String::new();
@@ -95,6 +132,8 @@ impl Symbols {
         out
     }
 
+    /// `value` as a chart label prints it: a text value loses its quotes, and everything else is
+    /// as [`Symbols::show`] prints it.
     #[must_use]
     pub fn plain(&self, value: &Value) -> String {
         match value {
@@ -140,6 +179,8 @@ impl Symbols {
         }
     }
 
+    /// `value` as the JSON output holds it: a set and a sequence are arrays, a map is an array
+    /// of `[key, value]` pairs and a record is an object.
     #[must_use]
     pub fn json(&self, value: &Value) -> Json {
         match value {

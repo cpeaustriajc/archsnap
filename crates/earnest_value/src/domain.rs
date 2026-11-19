@@ -1,21 +1,50 @@
 use crate::value::{Sym, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// The finite set of values a field or an input declares.
+///
+/// A value outside its field's domain is what the checker reports as out of range.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Domain {
+    /// True and false.
     Bool,
-    Int { lo: i64, hi: i64 },
+    /// The whole numbers from `lo` to `hi`, both included. Empty when `lo` is above `hi`.
+    Int {
+        /// The smallest number.
+        lo: i64,
+        /// The largest number.
+        hi: i64,
+    },
+    /// Exactly the listed values. List each value once, or [`Domain::count`] counts it twice.
     OneOf(Vec<Value>),
-    Optional(Box<Domain>),
-    Record(Vec<(Sym, Domain)>),
-    Set(Box<Domain>),
-    Map(Box<Domain>, Box<Domain>),
-    Seq { item: Box<Domain>, max: usize },
+    /// `null` and every value of the inner domain. The inner domain must not hold `null` itself.
+    Optional(Box<Self>),
+    /// Records with exactly these fields. The fields must be sorted by name, as
+    /// [`Value::record`] sorts them.
+    Record(Vec<(Sym, Self)>),
+    /// Every set of items from the inner domain, the empty set included.
+    Set(Box<Self>),
+    /// Every map from some keys of the first domain to values of the second, the empty map
+    /// included.
+    Map(Box<Self>, Box<Self>),
+    /// Every sequence of at most `max` items. A queue's domain is this, with its capacity as
+    /// `max`.
+    Seq {
+        /// The domain of each item.
+        item: Box<Self>,
+        /// The most items a sequence holds.
+        max: usize,
+    },
 }
 
+/// The most values the checker lists for one declaration. Compare [`Domain::count`] with it
+/// before calling [`Domain::values`].
 pub const MOST_VALUES_LISTED: u128 = 1_000_000;
 
 impl Domain {
+    /// How many values the domain holds, without listing them. A count too large for `u128` is
+    /// given as `u128::MAX`.
     #[must_use]
     pub fn count(&self) -> u128 {
         match self {
@@ -33,6 +62,10 @@ impl Domain {
         }
     }
 
+    /// Every value of the domain, each once, in the same order on every call.
+    ///
+    /// The list is as long as [`Domain::count`] says, so check the count first: a wide number
+    /// range or a set of many items does not fit in memory.
     #[must_use]
     pub fn values(&self) -> Vec<Value> {
         match self {
@@ -51,6 +84,7 @@ impl Domain {
         }
     }
 
+    /// Whether `value` is one of the domain's values.
     #[must_use]
     pub fn contains(&self, value: &Value) -> bool {
         match (self, value) {
@@ -96,9 +130,17 @@ fn field_fits(pair: (&(Sym, Domain), &(Sym, Value))) -> bool {
 }
 
 fn seq_count(each: u128, max: usize) -> u128 {
+    match each {
+        0 => return 1,
+        1 => return u128::try_from(max).map_or(u128::MAX, |most| most.saturating_add(1)),
+        _ => {}
+    }
     let mut total = 0_u128;
     let mut of_length = 1_u128;
     for _ in 0..=max {
+        if total == u128::MAX {
+            break;
+        }
         total = total.saturating_add(of_length);
         of_length = of_length.saturating_mul(each);
     }
@@ -107,21 +149,27 @@ fn seq_count(each: u128, max: usize) -> u128 {
 
 fn power(base: u128, exponent: u128) -> u128 {
     let mut total = 1_u128;
+    let mut square = base;
     let mut left = exponent;
-    while left > 0 && total < u128::MAX {
-        total = total.saturating_mul(base);
-        left = left.saturating_sub(1);
+    while left > 0 {
+        if left % 2 == 1 {
+            total = total.saturating_mul(square);
+        }
+        left /= 2;
+        if left > 0 {
+            square = square.saturating_mul(square);
+        }
     }
     total
 }
 
-pub(crate) fn extended<T: Clone>(prefix: &[T], last: T) -> Vec<T> {
+fn extended<T: Clone>(prefix: &[T], last: T) -> Vec<T> {
     let mut longer = prefix.to_vec();
     longer.push(last);
     longer
 }
 
-pub(crate) fn product<T: Clone>(prefixes: &[Vec<T>], options: &[T]) -> Vec<Vec<T>> {
+fn product<T: Clone>(prefixes: &[Vec<T>], options: &[T]) -> Vec<Vec<T>> {
     prefixes
         .iter()
         .flat_map(|prefix| {
@@ -189,4 +237,49 @@ fn seq_values(items: &[Value], max: usize) -> Vec<Value> {
         all.extend(longest.iter().cloned());
     }
     all.into_iter().map(Value::seq).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{power, seq_count};
+
+    const TWO_TO_THE_127: u128 = 170_141_183_460_469_231_731_687_303_715_884_105_728;
+
+    #[test]
+    fn a_power_multiplies_the_base_exponent_times() {
+        assert_eq!(power(2, 0), 1);
+        assert_eq!(power(2, 10), 1024);
+        assert_eq!(power(3, 4), 81);
+        assert_eq!(power(7, 1), 7);
+    }
+
+    #[test]
+    fn a_power_of_one_or_zero_needs_no_loop_over_a_huge_exponent() {
+        assert_eq!(power(1, u128::MAX), 1);
+        assert_eq!(power(0, u128::MAX), 0);
+        assert_eq!(power(0, 0), 1);
+    }
+
+    #[test]
+    fn a_power_too_large_to_hold_is_the_largest_number() {
+        assert_eq!(power(2, 127), TWO_TO_THE_127);
+        assert_eq!(power(2, 128), u128::MAX);
+        assert_eq!(power(10, u128::MAX), u128::MAX);
+    }
+
+    #[test]
+    fn sequences_are_counted_per_length() {
+        assert_eq!(seq_count(2, 0), 1);
+        assert_eq!(seq_count(2, 2), 1 + 2 + 4);
+        assert_eq!(seq_count(3, 3), 1 + 3 + 9 + 27);
+        assert_eq!(seq_count(0, 5), 1);
+        assert_eq!(seq_count(1, 5), 6);
+    }
+
+    #[test]
+    fn counting_sequences_stops_once_the_count_can_no_longer_change() {
+        assert_eq!(seq_count(0, usize::MAX), 1);
+        assert_eq!(seq_count(1, 1_000_000_000_000), 1_000_000_000_001);
+        assert_eq!(seq_count(2, usize::MAX), u128::MAX);
+    }
 }

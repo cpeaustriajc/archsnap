@@ -1,21 +1,31 @@
 use crate::cut::cut_points;
-use crate::eval::{Fault, Frame, eval, truth};
-use crate::graph::{Edge, Graph, Node};
-use crate::ir::{Action, Label, Model, Piece};
-use crate::outcome::{
-    Change, Finding, FindingKind, Named, Outcome, Path, RuleOutcome, Shown, Status, Step, Verdict,
-};
-use crate::value::Value;
+use crate::expand::{Expanded, State, Whence, expand_state};
+use crate::outcome::Outcome;
+use earnest_ir::{Fault, Field, Model};
+use earnest_value::Value;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// How far a search may go and what it keeps.
+///
+/// The default is the CLI's defaults on one thread: five million states, no time limit, no
+/// graph and every rule.
 #[derive(Clone, Debug)]
 pub struct Limits {
+    /// The most distinct states to visit. The search stops as unfinished when it finds one
+    /// more.
     pub max_states: usize,
+    /// How long the search may run before it stops as unfinished. `None` is no limit.
     pub time_limit: Option<Duration>,
+    /// Worker threads for a level of 512 states or more. 0 counts as 1. The outcome is the
+    /// same for every number.
     pub jobs: usize,
+    /// Whether [`Outcome::graph`] is filled. It costs memory for every arrow, so leave it off
+    /// unless a chart is wanted.
     pub keep_graph: bool,
+    /// Check only the rule with this id. The others are not evaluated and are left out of
+    /// [`Outcome::rules`]. An id no rule has leaves no rule checked.
     pub only_rule: Option<String>,
 }
 
@@ -31,74 +41,55 @@ impl Default for Limits {
     }
 }
 
-type State = Arc<[Value]>;
-
 const SMALLEST_SHARED_LEVEL: usize = 512;
 const STATES_BETWEEN_CLOCK_READS: usize = 64;
 
-#[derive(Clone, Copy)]
-struct Parent {
-    state: usize,
-    action: usize,
-    input: usize,
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Parent {
+    pub(crate) state: usize,
+    pub(crate) action: usize,
+    pub(crate) input: usize,
 }
 
-#[derive(Clone, Copy)]
-enum Whence {
-    Rule(usize),
-    Guard(usize),
-    Update(usize),
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Note {
+    pub(crate) end: bool,
+    pub(crate) stuck: bool,
+    pub(crate) outside: Option<usize>,
+    pub(crate) broken: Vec<usize>,
 }
 
-struct Successor {
-    action: usize,
-    input: usize,
-    next: State,
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Arrow {
+    pub(crate) from: usize,
+    pub(crate) to: usize,
+    pub(crate) action: usize,
 }
 
-#[derive(Default)]
-struct Expanded {
-    broken: Vec<usize>,
-    outside: Option<usize>,
-    trouble: Option<(Whence, Fault)>,
-    enabled: bool,
-    ended: bool,
-    successors: Vec<Successor>,
-}
-
-impl Expanded {
-    fn note(&mut self, whence: Whence, fault: Fault) {
-        if self.trouble.is_none() {
-            self.trouble = Some((whence, fault));
-        }
-    }
-}
-
-#[derive(Clone, Copy, Default)]
-struct Marks {
-    start: bool,
-    end: bool,
-    stuck: bool,
-    broken: bool,
-}
-
-struct Search<'a> {
-    model: &'a Model,
-    limits: &'a Limits,
+pub(crate) struct Search<'a> {
+    pub(crate) model: &'a Model,
+    pub(crate) limits: &'a Limits,
     slots: usize,
-    states: Vec<State>,
+    pub(crate) states: Vec<State>,
     index: FxHashMap<State, usize>,
-    parents: Vec<Option<Parent>>,
-    marks: Vec<Marks>,
-    broken_rules: Vec<Vec<usize>>,
-    edges: Vec<(usize, usize, usize)>,
-    first_broken: Vec<Option<usize>>,
-    stuck: Option<usize>,
-    outside: Option<(usize, usize)>,
-    trouble: Option<(usize, Whence, Fault)>,
-    reason: Option<String>,
+    pub(crate) parents: Vec<Option<Parent>>,
+    pub(crate) notes: Vec<Note>,
+    pub(crate) arrows: Vec<Arrow>,
+    pub(crate) first_broken: Vec<Option<usize>>,
+    pub(crate) unjudged: Vec<bool>,
+    pub(crate) stuck: Option<usize>,
+    pub(crate) outside: Option<(usize, usize)>,
+    pub(crate) trouble: Option<(usize, Whence, Fault)>,
+    pub(crate) reason: Option<String>,
 }
 
+/// Visits every state `model` can reach from its start states, breadth first, and says what
+/// it found.
+///
+/// A rule is checked in every state, so the path given for a broken rule is a shortest one.
+/// A state out of range is counted and reported but not searched further. The search stops
+/// early only at a limit, and then the outcome is unfinished unless something was already
+/// found broken.
 #[must_use]
 pub fn explore(model: &Model, limits: &Limits) -> Outcome {
     let slots = model
@@ -116,10 +107,10 @@ pub fn explore(model: &Model, limits: &Limits) -> Outcome {
         states: Vec::new(),
         index: FxHashMap::default(),
         parents: Vec::new(),
-        marks: Vec::new(),
-        broken_rules: Vec::new(),
-        edges: Vec::new(),
+        notes: Vec::new(),
+        arrows: Vec::new(),
         first_broken: vec![None; model.rules.len()],
+        unjudged: vec![false; model.rules.len()],
         stuck: None,
         outside: None,
         trouble: None,
@@ -129,113 +120,53 @@ pub fn explore(model: &Model, limits: &Limits) -> Outcome {
     search.outcome()
 }
 
-fn start_states(model: &Model) -> Vec<Vec<Value>> {
-    let mut partial: Vec<Vec<Value>> = vec![Vec::new()];
-    for field in &model.fields {
-        let mut grown = Vec::with_capacity(partial.len().saturating_mul(field.starts.len()));
-        for prefix in &partial {
-            for start in &field.starts {
-                let mut next = prefix.clone();
-                next.push(start.clone());
-                grown.push(next);
+struct Starts<'a> {
+    fields: &'a [Field],
+    digits: Vec<usize>,
+    done: bool,
+}
+
+impl<'a> Starts<'a> {
+    fn new(fields: &'a [Field]) -> Self {
+        Self {
+            fields,
+            digits: vec![0; fields.len()],
+            done: false,
+        }
+    }
+
+    fn advance(&mut self) {
+        for (digit, field) in self.digits.iter_mut().zip(self.fields).rev() {
+            let next = digit.saturating_add(1);
+            if next < field.starts.len() {
+                *digit = next;
+                return;
             }
+            *digit = 0;
         }
-        partial = grown;
-    }
-    partial
-}
-
-fn set_inputs(action: &Action, input: usize, frame: &mut Frame<'_>) {
-    let mut rest = input;
-    for each in &action.inputs {
-        let count = each.values.len();
-        let digit = rest.checked_rem(count).unwrap_or(0);
-        rest = rest.checked_div(count).unwrap_or(0);
-        if let Some(value) = each.values.get(digit) {
-            frame.put(each.slot, value.clone());
-        }
+        self.done = true;
     }
 }
 
-fn input_count(action: &Action) -> usize {
-    action.inputs.iter().fold(1_usize, |total, each| {
-        total.saturating_mul(each.values.len())
-    })
-}
+impl Iterator for Starts<'_> {
+    type Item = Vec<Value>;
 
-fn next_state(action: &Action, state: &[Value], frame: &mut Frame<'_>) -> Result<State, Fault> {
-    let mut next = Vec::with_capacity(state.len());
-    for (update, old) in action.updates.iter().zip(state) {
-        next.push(match update {
-            Some(expr) => eval(expr, frame)?,
-            None => old.clone(),
-        });
-    }
-    Ok(Arc::from(next))
-}
-
-fn expand_action(
-    position: usize,
-    action: &Action,
-    state: &[Value],
-    frame: &mut Frame<'_>,
-    found: &mut Expanded,
-) {
-    for input in 0..input_count(action) {
-        set_inputs(action, input, frame);
-        match truth(&action.guard, frame) {
-            Ok(true) => {}
-            Ok(false) => continue,
-            Err(fault) => {
-                found.note(Whence::Guard(position), fault);
-                continue;
-            }
+    fn next(&mut self) -> Option<Vec<Value>> {
+        if self.done {
+            return None;
         }
-        found.enabled = true;
-        match next_state(action, state, frame) {
-            Ok(next) => found.successors.push(Successor {
-                action: position,
-                input,
-                next,
-            }),
-            Err(fault) => found.note(Whence::Update(position), fault),
-        }
-    }
-}
-
-fn expand_state(model: &Model, only_rule: Option<&str>, slots: usize, state: &[Value]) -> Expanded {
-    let mut found = Expanded {
-        outside: model
+        let state: Option<Vec<Value>> = self
             .fields
             .iter()
-            .zip(state)
-            .position(|(field, value)| !field.domain.contains(value)),
-        ..Expanded::default()
-    };
-    if found.outside.is_some() {
-        return found;
-    }
-    let mut frame = Frame::new(state, slots);
-    for (position, rule) in model.rules.iter().enumerate() {
-        if only_rule.is_some_and(|wanted| wanted != rule.id) {
-            continue;
+            .zip(&self.digits)
+            .map(|(field, digit)| field.starts.get(*digit).cloned())
+            .collect();
+        if state.is_none() {
+            self.done = true;
         }
-        match truth(&rule.holds, &mut frame) {
-            Ok(true) => {}
-            Ok(false) => found.broken.push(position),
-            Err(fault) => found.note(Whence::Rule(position), fault),
-        }
+        self.advance();
+        state
     }
-    for (position, action) in model.actions.iter().enumerate() {
-        expand_action(position, action, state, &mut frame, &mut found);
-    }
-    if !found.enabled {
-        found.ended = model
-            .ends
-            .iter()
-            .any(|end| truth(&end.when, &mut frame).unwrap_or(false));
-    }
-    found
 }
 
 impl Search<'_> {
@@ -246,12 +177,12 @@ impl Search<'_> {
             .time_limit
             .and_then(|limit| began.checked_add(limit));
         let mut frontier = Vec::new();
-        for start in start_states(self.model) {
+        for start in Starts::new(&self.model.fields) {
             if let Some(id) = self.insert(Arc::from(start), None) {
-                if let Some(marks) = self.marks.get_mut(id) {
-                    marks.start = true;
-                }
                 frontier.push(id);
+            }
+            if self.reason.is_some() {
+                break;
             }
         }
         while !frontier.is_empty() && self.reason.is_none() {
@@ -276,8 +207,6 @@ impl Search<'_> {
         self.index.insert(Arc::clone(&state), id);
         self.states.push(state);
         self.parents.push(parent);
-        self.marks.push(Marks::default());
-        self.broken_rules.push(Vec::new());
         Some(id)
     }
 
@@ -285,7 +214,7 @@ impl Search<'_> {
         let only_rule = self.limits.only_rule.as_deref();
         let mut level = Vec::with_capacity(ids.len());
         for (position, id) in ids.iter().enumerate() {
-            let clock_due = position.checked_rem(STATES_BETWEEN_CLOCK_READS) == Some(0);
+            let clock_due = position.is_multiple_of(STATES_BETWEEN_CLOCK_READS);
             if clock_due && deadline.is_some_and(|limit| Instant::now() >= limit) {
                 return None;
             }
@@ -311,11 +240,18 @@ impl Search<'_> {
                 })
                 .map(|ids| scope.spawn(move || self.expand_ids(ids, deadline)))
                 .collect();
-            let mut level = Vec::with_capacity(frontier.len());
+            let mut level = Some(Vec::with_capacity(frontier.len()));
             for worker in workers {
-                level.extend(worker.join().ok().flatten()?);
+                let part = match worker.join() {
+                    Ok(part) => part,
+                    Err(panic) => std::panic::resume_unwind(panic),
+                };
+                level = level.zip(part).map(|(mut whole, found)| {
+                    whole.extend(found);
+                    whole
+                });
             }
-            Some(level)
+            level
         })
     }
 
@@ -339,7 +275,11 @@ impl Search<'_> {
                     return next;
                 };
                 if self.limits.keep_graph {
-                    self.edges.push((id, to, successor.action));
+                    self.arrows.push(Arrow {
+                        from: id,
+                        to,
+                        action: successor.action,
+                    });
                 }
             }
         }
@@ -355,296 +295,83 @@ impl Search<'_> {
                 first.get_or_insert(id);
             }
         }
+        for rule in &expanded.unjudged {
+            if let Some(unjudged) = self.unjudged.get_mut(*rule) {
+                *unjudged = true;
+            }
+        }
         if let Some((whence, fault)) = expanded.trouble {
             self.trouble.get_or_insert((id, whence, fault));
         }
-        let stuck = !expanded.enabled && !expanded.ended && expanded.outside.is_none();
-        if stuck {
+        if expanded.stuck {
             self.stuck.get_or_insert(id);
         }
-        if let Some(marks) = self.marks.get_mut(id) {
-            marks.end = expanded.ended;
-            marks.stuck = stuck;
-            marks.broken = !expanded.broken.is_empty() || expanded.outside.is_some();
-        }
-        if let Some(broken) = self.broken_rules.get_mut(id) {
-            broken.clone_from(&expanded.broken);
-        }
-    }
-
-    fn shown(&self, value: &Value) -> Shown {
-        Shown {
-            text: self.model.symbols.show(value),
-            json: self.model.symbols.json(value),
-        }
-    }
-
-    fn named(&self, state: &[Value]) -> Vec<Named> {
-        self.model
-            .fields
-            .iter()
-            .zip(state)
-            .map(|(field, value)| Named {
-                name: field.name.clone(),
-                value: self.shown(value),
-            })
-            .collect()
-    }
-
-    fn step(&self, parent: Parent, before: &[Value], after: &[Value]) -> Option<Step> {
-        let action = self.model.actions.get(parent.action)?;
-        let mut rest = parent.input;
-        let mut input = Vec::with_capacity(action.inputs.len());
-        for each in &action.inputs {
-            let count = each.values.len();
-            let digit = rest.checked_rem(count).unwrap_or(0);
-            rest = rest.checked_div(count).unwrap_or(0);
-            input.push(Named {
-                name: each.name.clone(),
-                value: self.shown(each.values.get(digit)?),
-            });
-        }
-        let changes = self
-            .model
-            .fields
-            .iter()
-            .zip(before.iter().zip(after))
-            .filter(|(_, (old, new))| old != new)
-            .map(|(field, (old, new))| Change {
-                field: field.name.clone(),
-                before: self.shown(old),
-                after: self.shown(new),
-            })
-            .collect();
-        Some(Step {
-            action: action.id.clone(),
-            label: action.label.clone(),
-            input,
-            changes,
-            state: self.named(after),
-        })
-    }
-
-    fn path_to(&self, target: usize) -> Path {
-        let mut chain = vec![target];
-        let mut at = target;
-        while let Some(Some(parent)) = self.parents.get(at) {
-            chain.push(parent.state);
-            at = parent.state;
-        }
-        chain.reverse();
-        let start = chain
-            .first()
-            .and_then(|id| self.states.get(*id))
-            .map(|state| self.named(state))
-            .unwrap_or_default();
-        let steps = chain
-            .windows(2)
-            .filter_map(|pair| {
-                let [from, to] = pair else { return None };
-                let parent = (*self.parents.get(*to)?)?;
-                self.step(parent, self.states.get(*from)?, self.states.get(*to)?)
-            })
-            .collect();
-        Path { start, steps }
-    }
-
-    fn findings(&self) -> Vec<Finding> {
-        let mut findings = Vec::new();
-        if let Some(id) = self.stuck {
-            findings.push(Finding {
-                kind: FindingKind::Stuck,
-                message: "no action can happen here, and the model does not mark it as an end"
-                    .to_owned(),
-                path: self.path_to(id),
-            });
-        }
-        if let Some((id, field)) = self.outside {
-            let name = self
-                .model
-                .fields
-                .get(field)
-                .map_or("", |found| found.name.as_str());
-            findings.push(Finding {
-                kind: FindingKind::OutOfRange,
-                message: format!("the field `{name}` leaves the values it declares"),
-                path: self.path_to(id),
-            });
-        }
-        if let Some((id, whence, fault)) = self.trouble {
-            let part = match whence {
-                Whence::Rule(rule) => format!(
-                    "the rule `{}`",
-                    self.model.rules.get(rule).map_or("", |found| &found.id)
-                ),
-                Whence::Guard(action) => format!(
-                    "the `when` of the action `{}`",
-                    self.model.actions.get(action).map_or("", |found| &found.id)
-                ),
-                Whence::Update(action) => format!(
-                    "the `then` of the action `{}`",
-                    self.model.actions.get(action).map_or("", |found| &found.id)
-                ),
-            };
-            findings.push(Finding {
-                kind: FindingKind::Fault,
-                message: format!("{part} {} in this state", fault.describe()),
-                path: self.path_to(id),
-            });
-        }
-        findings
-    }
-
-    fn outcome(&self) -> Outcome {
-        let only_rule = self.limits.only_rule.as_deref();
-        let rules: Vec<RuleOutcome> = self
-            .model
-            .rules
-            .iter()
-            .zip(&self.first_broken)
-            .filter(|(rule, _)| only_rule.is_none_or(|wanted| wanted == rule.id))
-            .map(|(rule, first)| RuleOutcome {
-                id: rule.id.clone(),
-                says: rule.says.clone(),
-                verdict: match (first, &self.reason) {
-                    (Some(_), _) => Verdict::Broken,
-                    (None, Some(_)) => Verdict::Unknown,
-                    (None, None) => Verdict::Holds,
-                },
-                path: first.map(|id| self.path_to(id)),
-            })
-            .collect();
-        let findings = self.findings();
-        let failed =
-            !findings.is_empty() || rules.iter().any(|rule| rule.verdict == Verdict::Broken);
-        let status = match (failed, &self.reason) {
-            (true, _) => Status::Fail,
-            (false, Some(_)) => Status::Unfinished,
-            (false, None) => Status::Pass,
-        };
-        Outcome {
-            status,
-            states: self.states.len(),
-            rules,
-            findings,
-            reason: self.reason.clone(),
-            graph: self.limits.keep_graph.then(|| self.graph()),
-        }
-    }
-
-    fn label(&self, label: &Label, state: &[Value]) -> String {
-        let mut frame = Frame::new(state, label.slots);
-        let mut text = String::new();
-        for piece in &label.pieces {
-            match piece {
-                Piece::Text(plain) => text.push_str(plain),
-                Piece::Shown(expr) => match eval(expr, &mut frame) {
-                    Ok(value) => text.push_str(&self.model.symbols.plain(&value)),
-                    Err(_) => text.push('?'),
-                },
-            }
-        }
-        text
-    }
-
-    fn default_label(&self, state: &[Value]) -> String {
-        self.model
-            .fields
-            .iter()
-            .zip(state)
-            .map(|(field, value)| format!("{} = {}", field.name, self.model.symbols.plain(value)))
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-
-    fn step_label(&self, action: usize) -> String {
-        let Some(found) = self.model.actions.get(action) else {
-            return String::new();
-        };
-        self.model
-            .view
-            .steps
-            .iter()
-            .find(|(id, _)| *id == found.id)
-            .map_or_else(|| found.label.clone(), |(_, label)| label.clone())
-    }
-
-    fn graph(&self) -> Graph {
-        let view = &self.model.view;
-        let mut graph = Graph {
-            title: view.title.clone(),
-            colors: view.colors.clone(),
-            ..Graph::default()
-        };
-        let mut places: FxHashMap<(Option<String>, String), usize> = FxHashMap::default();
-        let mut node_of = Vec::with_capacity(self.states.len());
-        for (id, state) in self.states.iter().enumerate() {
-            let label = view.state.as_ref().map_or_else(
-                || self.default_label(state),
-                |found| self.label(found, state),
-            );
-            let group = view.group.as_ref().map(|found| self.label(found, state));
-            let position = *places
-                .entry((group.clone(), label.clone()))
-                .or_insert_with(|| {
-                    graph.nodes.push(Node {
-                        label,
-                        group,
-                        ..Node::default()
-                    });
-                    graph.nodes.len().saturating_sub(1)
-                });
-            node_of.push(position);
-            self.mark_node(graph.nodes.get_mut(position), id);
-        }
-        let mut edge_at: FxHashMap<(usize, usize), usize> = FxHashMap::default();
-        for (from, to, action) in &self.edges {
-            let (Some(source), Some(target)) = (node_of.get(*from), node_of.get(*to)) else {
-                continue;
-            };
-            let position = *edge_at.entry((*source, *target)).or_insert_with(|| {
-                graph.edges.push(Edge {
-                    from: *source,
-                    to: *target,
-                    labels: Vec::new(),
-                });
-                graph.edges.len().saturating_sub(1)
-            });
-            let label = self.step_label(*action);
-            if let Some(edge) = graph.edges.get_mut(position)
-                && !edge.labels.contains(&label)
-            {
-                edge.labels.push(label);
-            }
-        }
-        graph
-    }
-
-    fn mark_node(&self, node: Option<&mut Node>, id: usize) {
-        let (Some(found), Some(marks)) = (node, self.marks.get(id)) else {
+        if !self.limits.keep_graph {
             return;
-        };
-        found.states = found.states.saturating_add(1);
-        found.start |= marks.start;
-        found.end |= marks.end;
-        found.stuck |= marks.stuck;
-        if marks.broken && found.broken.is_empty() {
-            found.broken.push("values out of range".to_owned());
         }
-        for rule in self.broken_rules.get(id).into_iter().flatten() {
-            let Some(broken) = self.model.rules.get(*rule) else {
-                continue;
+        if self.notes.len() <= id {
+            self.notes.resize_with(id.saturating_add(1), Note::default);
+        }
+        if let Some(note) = self.notes.get_mut(id) {
+            *note = Note {
+                end: expanded.ended,
+                stuck: expanded.stuck,
+                outside: expanded.outside,
+                broken: expanded.broken.clone(),
             };
-            if found
-                .broken
-                .first()
-                .is_some_and(|only| only == "values out of range")
-            {
-                found.broken.clear();
-            }
-            if !found.broken.contains(&broken.id) {
-                found.broken.push(broken.id.clone());
-            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Starts;
+    use earnest_ir::Field;
+    use earnest_value::{Domain, Symbols, Value};
+
+    fn field(symbols: &mut Symbols, name: &str, starts: &[i64]) -> Field {
+        Field {
+            name: name.to_owned(),
+            sym: symbols.intern(name),
+            domain: Domain::Int { lo: 0, hi: 9 },
+            starts: starts.iter().copied().map(Value::Int).collect(),
+        }
+    }
+
+    fn listed(fields: &[Field]) -> Vec<Vec<Value>> {
+        Starts::new(fields).collect()
+    }
+
+    fn numbers(all: &[i64]) -> Vec<Value> {
+        all.iter().copied().map(Value::Int).collect()
+    }
+
+    #[test]
+    fn start_states_are_every_combination_and_the_last_field_turns_fastest() {
+        let mut symbols = Symbols::default();
+        let fields = [
+            field(&mut symbols, "a", &[0, 1]),
+            field(&mut symbols, "b", &[5, 6, 7]),
+        ];
+        let expected: Vec<Vec<Value>> = [[0, 5], [0, 6], [0, 7], [1, 5], [1, 6], [1, 7]]
+            .iter()
+            .map(|pair| numbers(pair))
+            .collect();
+        assert_eq!(listed(&fields), expected);
+    }
+
+    #[test]
+    fn a_model_without_fields_has_one_empty_start_state() {
+        assert_eq!(listed(&[]), vec![Vec::new()]);
+    }
+
+    #[test]
+    fn a_field_with_no_start_value_leaves_no_start_state() {
+        let mut symbols = Symbols::default();
+        let fields = [
+            field(&mut symbols, "a", &[0, 1]),
+            field(&mut symbols, "b", &[]),
+        ];
+        assert_eq!(listed(&fields), Vec::<Vec<Value>>::new());
     }
 }

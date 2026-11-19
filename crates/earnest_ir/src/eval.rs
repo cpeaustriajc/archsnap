@@ -1,17 +1,30 @@
-use crate::ir::{Expr, MapOp, Math, Op, Order, SeqOp, SetOp, Shelf, Sweep};
-use crate::value::{Sym, Value};
+use crate::{Expr, MapOp, Math, Op, Order, SeqOp, SetOp, Shelf, Sweep};
+use earnest_value::{Sym, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+/// Why an expression has no value in a state.
+///
+/// The search reports a fault as a finding with the path to the state. The first three can
+/// happen in a well-typed model. [`Fault::WrongKind`] means the expression itself is malformed,
+/// which a model lowered by `earnest_semantic` never is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Fault {
+    /// A value that must be present is `null`.
     NullRead,
+    /// A number does not fit in 64 bits.
     Overflow,
+    /// A remainder with a negative number or a divisor below 1, where languages disagree.
     Remainder,
+    /// An operation got a value of a kind it has no meaning for, too few arguments, or a field
+    /// or slot that does not exist.
     WrongKind,
 }
 
 impl Fault {
+    /// The fault as the end of a sentence that starts with what was evaluated, such as "the
+    /// rule `total` reads a value that is null".
     #[must_use]
     pub fn describe(self) -> &'static str {
         match self {
@@ -23,20 +36,32 @@ impl Fault {
     }
 }
 
-pub(crate) struct Frame<'a> {
+/// One state and the local values an expression is evaluated with.
+///
+/// Slots hold inputs, bindings and the current item of a test. Evaluation writes to them, so
+/// reuse a frame only for expressions that were lowered together, such as one action's guard
+/// and updates.
+#[derive(Debug)]
+pub struct Frame<'a> {
     state: &'a [Value],
     locals: Vec<Value>,
 }
 
 impl<'a> Frame<'a> {
-    pub(crate) fn new(state: &'a [Value], slots: usize) -> Self {
+    /// A frame over `state` with `slots` local slots, all `null`.
+    ///
+    /// `slots` must be at least the `slots` of the action, rule, end or label being evaluated.
+    #[must_use]
+    pub fn new(state: &'a [Value], slots: usize) -> Self {
         Self {
             state,
             locals: vec![Value::Null; slots],
         }
     }
 
-    pub(crate) fn put(&mut self, slot: usize, value: Value) {
+    /// Puts `value` in `slot`, as the search does with an action's inputs. A slot the frame
+    /// does not have is left out, and reading it later is [`Fault::WrongKind`].
+    pub fn put(&mut self, slot: usize, value: Value) {
         if let Some(place) = self.locals.get_mut(slot) {
             *place = value;
         }
@@ -45,7 +70,12 @@ impl<'a> Frame<'a> {
 
 type Evaluated = Result<Value, Fault>;
 
-pub(crate) fn eval(expr: &Expr, frame: &mut Frame<'_>) -> Evaluated {
+/// The value of `expr` in the state and locals of `frame`.
+///
+/// # Errors
+///
+/// A [`Fault`] when the expression has no value in this state.
+pub fn eval(expr: &Expr, frame: &mut Frame<'_>) -> Result<Value, Fault> {
     match expr {
         Expr::Const(value) => Ok(value.clone()),
         Expr::Field(index) => frame.state.get(*index).cloned().ok_or(Fault::WrongKind),
@@ -66,10 +96,13 @@ pub(crate) fn eval(expr: &Expr, frame: &mut Frame<'_>) -> Evaluated {
             eval(body, frame)
         }
         Expr::Record(fields) => Ok(Value::record(named(fields, frame)?)),
-        Expr::Get(inner, name) => eval(inner, frame)?
-            .field(*name)
-            .cloned()
-            .ok_or(Fault::NullRead),
+        Expr::Get(inner, name) => {
+            let record = eval(inner, frame)?;
+            record
+                .field(*name)
+                .cloned()
+                .ok_or_else(|| wrong_or_null(&record))
+        }
         Expr::With(base, changes) => with_fields(base, changes, frame),
         Expr::SetOf(items) => Ok(Value::set(each(items, frame)?.into_iter().collect())),
         Expr::SeqOf(items) => Ok(Value::seq(each(items, frame)?)),
@@ -93,7 +126,13 @@ pub(crate) fn eval(expr: &Expr, frame: &mut Frame<'_>) -> Evaluated {
     }
 }
 
-pub(crate) fn truth(expr: &Expr, frame: &mut Frame<'_>) -> Result<bool, Fault> {
+/// Whether `expr` is true in the state and locals of `frame`, for a guard or a rule.
+///
+/// # Errors
+///
+/// A [`Fault`] when the expression has no value in this state, and [`Fault::NullRead`] or
+/// [`Fault::WrongKind`] when its value is not a boolean.
+pub fn truth(expr: &Expr, frame: &mut Frame<'_>) -> Result<bool, Fault> {
     as_bool(&eval(expr, frame)?)
 }
 
@@ -114,8 +153,9 @@ fn named(fields: &[(Sym, Expr)], frame: &mut Frame<'_>) -> Result<Vec<(Sym, Valu
 }
 
 fn with_fields(base: &Expr, changes: &[(Sym, Expr)], frame: &mut Frame<'_>) -> Evaluated {
-    let Value::Record(old) = eval(base, frame)? else {
-        return Err(Fault::NullRead);
+    let old = match eval(base, frame)? {
+        Value::Record(old) => old,
+        other => return Err(wrong_or_null(&other)),
     };
     let mut fields = Arc::unwrap_or_clone(old);
     for (name, value) in named(changes, frame)? {
@@ -131,10 +171,7 @@ fn members(source: Value) -> Result<Vec<Value>, Fault> {
     match source {
         Value::Set(items) => Ok(items.iter().cloned().collect()),
         Value::Seq(items) => Ok(Arc::unwrap_or_clone(items)),
-        Value::Null => Err(Fault::NullRead),
-        Value::Bool(_) | Value::Int(_) | Value::Str(_) | Value::Record(_) | Value::Map(_) => {
-            Err(Fault::WrongKind)
-        }
+        other => Err(wrong_or_null(&other)),
     }
 }
 
@@ -178,8 +215,8 @@ fn apply(op: Op, arguments: &[Expr], frame: &mut Frame<'_>) -> Evaluated {
             .ok_or(Fault::Overflow),
         Op::Unwrap if first == Value::Null => Err(Fault::NullRead),
         Op::SomeOf | Op::Unwrap => Ok(first),
-        Op::Equal => Ok(Value::Bool(Some(first) == second)),
-        Op::Differ => Ok(Value::Bool(Some(first) != second)),
+        Op::Equal => Ok(Value::Bool(first == second.ok_or(Fault::WrongKind)?)),
+        Op::Differ => Ok(Value::Bool(first != second.ok_or(Fault::WrongKind)?)),
         Op::Order(order) => compare(order, &first, second.as_ref()),
         Op::Math(math) => arithmetic(math, &first, second.as_ref()),
         Op::Set(set_op) => on_set(set_op, first, second),
@@ -267,51 +304,58 @@ fn size_of(count: usize) -> Evaluated {
         .or(Err(Fault::Overflow))
 }
 
+fn needed(argument: Option<Value>) -> Evaluated {
+    argument.ok_or(Fault::WrongKind)
+}
+
 fn on_set(op: SetOp, first: Value, second: Option<Value>) -> Evaluated {
     let mut items = as_set(first)?;
-    if op == SetOp::Size {
-        return size_of(items.len());
-    }
-    let other = second.ok_or(Fault::WrongKind)?;
-    Ok(match op {
-        SetOp::Size => Value::Null,
-        SetOp::Has => Value::Bool(items.contains(&other)),
+    match op {
+        SetOp::Size => size_of(items.len()),
+        SetOp::Has => Ok(Value::Bool(items.contains(&needed(second)?))),
         SetOp::Add => {
-            items.insert(other);
-            Value::set(items)
+            items.insert(needed(second)?);
+            Ok(Value::set(items))
         }
         SetOp::Delete => {
-            items.remove(&other);
-            Value::set(items)
+            items.remove(&needed(second)?);
+            Ok(Value::set(items))
         }
-        SetOp::Union => Value::set(items.union(&as_set(other)?).cloned().collect()),
-        SetOp::Intersect => Value::set(items.intersection(&as_set(other)?).cloned().collect()),
-        SetOp::Subtract => Value::set(items.difference(&as_set(other)?).cloned().collect()),
-        SetOp::IsSubset => Value::Bool(items.is_subset(&as_set(other)?)),
-    })
+        SetOp::Union => {
+            let other = as_set(needed(second)?)?;
+            Ok(Value::set(items.union(&other).cloned().collect()))
+        }
+        SetOp::Intersect => {
+            let other = as_set(needed(second)?)?;
+            Ok(Value::set(items.intersection(&other).cloned().collect()))
+        }
+        SetOp::Subtract => {
+            let other = as_set(needed(second)?)?;
+            Ok(Value::set(items.difference(&other).cloned().collect()))
+        }
+        SetOp::IsSubset => Ok(Value::Bool(items.is_subset(&as_set(needed(second)?)?))),
+    }
 }
 
 fn on_map(op: MapOp, first: Value, second: Option<Value>, third: Option<Value>) -> Evaluated {
     let mut entries = as_map(first)?;
     match op {
-        MapOp::Size => return size_of(entries.len()),
-        MapOp::Keys => return Ok(Value::set(entries.keys().cloned().collect())),
-        MapOp::Has | MapOp::Get | MapOp::Set | MapOp::Delete => {}
-    }
-    let key = second.ok_or(Fault::WrongKind)?;
-    Ok(match op {
-        MapOp::Size | MapOp::Keys => Value::Null,
-        MapOp::Has => Value::Bool(entries.contains_key(&key)),
-        MapOp::Get => entries.get(&key).cloned().unwrap_or(Value::Null),
+        MapOp::Size => size_of(entries.len()),
+        MapOp::Keys => Ok(Value::set(entries.keys().cloned().collect())),
+        MapOp::Has => Ok(Value::Bool(entries.contains_key(&needed(second)?))),
+        MapOp::Get => Ok(entries
+            .get(&needed(second)?)
+            .cloned()
+            .unwrap_or(Value::Null)),
         MapOp::Delete => {
-            entries.remove(&key);
-            Value::map(entries)
+            entries.remove(&needed(second)?);
+            Ok(Value::map(entries))
         }
         MapOp::Set => {
-            entries.insert(key, third.ok_or(Fault::WrongKind)?);
-            Value::map(entries)
+            entries.insert(needed(second)?, needed(third)?);
+            Ok(Value::map(entries))
         }
-    })
+    }
 }
 
 fn on_seq(op: SeqOp, first: Value, second: Option<Value>) -> Evaluated {
@@ -326,20 +370,16 @@ fn on_seq(op: SeqOp, first: Value, second: Option<Value>) -> Evaluated {
             Ok(Value::seq(items))
         }
         SeqOp::Get => {
-            let Some(Value::Int(position)) = second else {
-                return Err(Fault::WrongKind);
-            };
+            let position = as_int(&needed(second)?)?;
             let found = usize::try_from(position)
                 .ok()
                 .and_then(|index| items.get(index));
             Ok(found.cloned().unwrap_or(Value::Null))
         }
         SeqOp::Push => {
-            items.push(second.ok_or(Fault::WrongKind)?);
+            items.push(needed(second)?);
             Ok(Value::seq(items))
         }
-        SeqOp::Includes => Ok(Value::Bool(
-            items.contains(&second.ok_or(Fault::WrongKind)?),
-        )),
+        SeqOp::Includes => Ok(Value::Bool(items.contains(&needed(second)?))),
     }
 }

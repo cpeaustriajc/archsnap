@@ -8,13 +8,17 @@ publish.workspace = true
 verify = true
 
 [dependencies]
+earnest_ir.workspace = true
+earnest_value.workspace = true
 rustc-hash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 vstd.workspace = true
 
 [dev-dependencies]
-proptest.workspace = true
+earnest_ast.workspace = true
+earnest_diagnostics.workspace = true
+earnest_semantic.workspace = true
 
 [lints]
 workspace = true

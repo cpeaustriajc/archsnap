@@ -1,23 +1,23 @@
+//! The typed lowering: tree to checked model, where each primitive gets its meaning.
+//!
+//! [`lower`] takes one [`Draft`] from a reader and gives back a [`Model`] the search can run,
+//! or every [`Problem`] that stops it: a name the file does not define, a primitive that does
+//! not exist, a value of the wrong kind, a helper that calls itself, a starting value outside
+//! its field, or a declaration with too many values to try.
+
 mod methods;
 mod terms;
 mod types;
 
-use crate::domain::{Domain, MOST_VALUES_LISTED};
-use crate::eval::{Frame, eval};
-use crate::ir::{Action, End, Expr, Field, Input, Label, Model, Piece, Rule, View};
-use crate::surface::{
-    ActionDraft, Draft, EndDraft, FieldDraft, LabelDraft, Place, Problem, RuleDraft, Shape,
-    ShapeKind, TemplatePiece, Term, TermKind,
+use earnest_ast::{
+    ActionDraft, Draft, EndDraft, FieldDraft, LabelDraft, RuleDraft, Shape, ShapeKind,
+    TemplatePiece, Term, TermKind,
 };
-use crate::value::{Symbols, Value};
+use earnest_diagnostics::{Place, Problem};
+use earnest_ir::{Action, End, Expr, Field, Frame, Input, Label, Model, Piece, Rule, View, eval};
+use earnest_value::{Domain, MOST_VALUES_LISTED, Symbols, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use types::{Binding, Scope, Type, Typed};
-
-#[derive(Debug)]
-pub struct Lowered {
-    pub model: Option<Model>,
-    pub problems: Vec<Problem>,
-}
 
 pub(crate) struct Stop;
 
@@ -37,8 +37,18 @@ struct Shaped {
     start: Option<Value>,
 }
 
-#[must_use]
-pub fn lower(draft: &Draft) -> Lowered {
+/// Checks every name and kind in `draft` and gives the model the search runs.
+///
+/// Fields keep the draft's order, and so do actions, rules and ends. A field without a
+/// starting value starts at every value it declares, or empty, free, idle or at zero for a
+/// collection, lock, timer, request or retry.
+///
+/// # Errors
+///
+/// Every problem found, each at the place of the term or declaration that caused it, in the
+/// draft's file. With any problem there is no model: a partly understood model would be
+/// checked against the wrong rules.
+pub fn lower(draft: &Draft) -> Result<Model, Vec<Problem>> {
     let mut lowerer = Lowerer {
         draft,
         symbols: Symbols::default(),
@@ -78,25 +88,19 @@ pub fn lower(draft: &Draft) -> Lowered {
         colors: draft.view.colors.clone(),
     };
     if !lowerer.problems.is_empty() {
-        return Lowered {
-            model: None,
-            problems: lowerer.problems,
-        };
+        return Err(lowerer.problems);
     }
-    Lowered {
-        model: Some(Model {
-            name: draft.name.clone(),
-            file: draft.file.clone(),
-            line: draft.place.line,
-            symbols: lowerer.symbols,
-            fields,
-            actions,
-            rules,
-            ends,
-            view,
-        }),
-        problems: Vec::new(),
-    }
+    Ok(Model {
+        name: draft.name.clone(),
+        file: draft.file.clone(),
+        line: draft.place.line,
+        symbols: lowerer.symbols,
+        fields,
+        actions,
+        rules,
+        ends,
+        view,
+    })
 }
 
 impl Lowerer<'_> {
@@ -314,23 +318,31 @@ impl Lowerer<'_> {
         let found = draft?;
         let mut scope = Scope::default();
         bind_state(&mut scope, found.state_name.as_ref());
-        let mut pieces = Vec::new();
-        if let TermKind::Template(parts) = &found.term.kind {
+        let pieces = if let TermKind::Template(parts) = &found.term.kind {
+            let mut pieces = Vec::with_capacity(parts.len());
             for part in parts {
-                pieces.push(match part {
-                    TemplatePiece::Text(text) => Piece::Text(text.clone()),
-                    TemplatePiece::Value(term) => {
-                        Piece::Shown(self.term(term, &mut scope).ok()?.expr)
-                    }
-                });
+                pieces.push(self.piece(part, found.term.place, &mut scope).ok()?);
             }
+            pieces
         } else {
-            pieces.push(Piece::Shown(self.term(&found.term, &mut scope).ok()?.expr));
-        }
+            vec![Piece::Shown(self.term(&found.term, &mut scope).ok()?.expr)]
+        };
         Some(Label {
             pieces,
             slots: scope.slots,
         })
+    }
+
+    fn piece(&mut self, part: &TemplatePiece, place: Place, scope: &mut Scope) -> Lowering<Piece> {
+        match part {
+            TemplatePiece::Text(text) => Ok(Piece::Text(text.clone())),
+            TemplatePiece::Value(term) => Ok(Piece::Shown(self.term(term, scope)?.expr)),
+            _ => Err(self.stop(
+                place,
+                "a part of a template string",
+                "this version of the checker does not know it",
+            )),
+        }
     }
 
     fn shape(&mut self, shape: &Shape) -> Lowering<Shaped> {
@@ -406,11 +418,25 @@ impl Lowerer<'_> {
             ShapeKind::Request => {
                 Ok(self.staged(&["idle", "pending", "succeeded", "failed"], Type::Request))
             }
-            ShapeKind::Retry { max } => Ok(Shaped {
-                domain: Domain::Int { lo: 0, hi: *max },
-                ty: Type::Retry(*max),
-                start: Some(Value::Int(0)),
-            }),
+            ShapeKind::Retry { max } => {
+                if *max < 0 {
+                    return Err(self.stop(
+                        shape.place,
+                        &format!("a retry counter with a max of {max}"),
+                        "the most attempts can't be below zero",
+                    ));
+                }
+                Ok(Shaped {
+                    domain: Domain::Int { lo: 0, hi: *max },
+                    ty: Type::Retry(*max),
+                    start: Some(Value::Int(0)),
+                })
+            }
+            _ => Err(self.stop(
+                shape.place,
+                "a declaration",
+                "this version of the checker does not know it",
+            )),
         }
     }
 

@@ -133,8 +133,8 @@ unreadable  src/clock.model.ts
 }
 ```
 
-`status` is `pass`, `fail` or `unfinished`. `verdict` is `holds`, `broken` or `unknown` (the model
-was unfinished and the rule was not seen broken). `kind` is `stuck`, `out-of-range` or `fault`.
+`status` is `pass`, `fail` or `unfinished`. `verdict` is `holds`, `broken` or `unknown` (the rule
+was not seen broken, but the model was unfinished or the rule faulted in a state). `kind` is `stuck`, `out-of-range` or `fault`.
 In JSON a set and a sequence are arrays, a map is an array of `[key, value]` pairs and a record is
 an object. Two runs on the same files give the same JSON apart from `milliseconds` and `cached`.
 
@@ -359,9 +359,9 @@ it is, with apps, npm packages and tasks beside them.
 | `crates/earnest_ast` | The language-neutral tree both readers produce |
 | `crates/earnest_ts` | The TypeScript reader: model file to tree |
 | `crates/earnest_rs` | The Rust reader: model file to tree |
-| `crates/earnest_ir` | The typed expression language and the checked model |
+| `crates/earnest_ir` | The typed expression language, its evaluator and the checked model |
 | `crates/earnest_semantic` | The typed lowering: tree to checked model, where each primitive gets its meaning |
-| `crates/earnest_check` | The evaluator and the search over every reachable state |
+| `crates/earnest_check` | The search over every reachable state |
 | `crates/earnest_tla` | The TLA+ writer |
 | `crates/earnest_chart` | The Mermaid chart and Markdown report writer |
 | `crates/earnest`, `crates/earnest_macros` | The Rust model library and its macros |
