@@ -1,0 +1,20 @@
+[package]
+name = "earnest_check"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[package.metadata.verus]
+verify = true
+
+[dependencies]
+rustc-hash.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+vstd.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
