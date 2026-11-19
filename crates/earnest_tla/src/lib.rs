@@ -48,6 +48,40 @@ pub struct Files {
     pub config: String,
 }
 
+const INVARIANT: &str = "INVARIANT ";
+
+impl Files {
+    /// The invariants `config` names, one per rule, in the order of the model's rules.
+    #[must_use]
+    pub fn invariants(&self) -> Vec<&str> {
+        self.config
+            .lines()
+            .filter_map(|line| line.strip_prefix(INVARIANT))
+            .collect()
+    }
+
+    /// The text of a configuration that checks only the invariants in `kept`, with everything
+    /// else as in `config`.
+    ///
+    /// TLC reports one broken invariant per state, so a run that checks one rule alone is how
+    /// to learn that rule's verdict whatever the other rules do. An empty `kept` gives a run
+    /// that only counts the states. A name `config` does not have is ignored.
+    #[must_use]
+    pub fn config_checking(&self, kept: &[&str]) -> String {
+        self.config
+            .lines()
+            .filter(|line| {
+                line.strip_prefix(INVARIANT)
+                    .is_none_or(|invariant| kept.contains(&invariant))
+            })
+            .fold(String::new(), |mut text, line| {
+                text.push_str(line);
+                text.push('\n');
+                text
+            })
+    }
+}
+
 const INDENT: &str = "    ";
 const EXTENDED: &str = "EXTENDS Integers, Sequences, FiniteSets, TLC";
 const FILLER: &str = "nothing";
@@ -294,7 +328,7 @@ fn steps(actions: &[String]) -> String {
 fn config(rules: &[String]) -> String {
     let mut text = format!("INIT {STARTS}\nNEXT {STEPS}\nCHECK_DEADLOCK FALSE\n");
     for rule in rules {
-        text.push_str("INVARIANT ");
+        text.push_str(INVARIANT);
         text.push_str(rule);
         text.push('\n');
     }

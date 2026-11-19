@@ -2,6 +2,7 @@
 //! whose text must at least be well formed.
 
 mod build;
+mod configs;
 mod domains;
 mod exprs;
 mod faults;

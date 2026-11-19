@@ -87,7 +87,10 @@ INVARIANT Rule_bounded
 
 Run TLC with `-continue`: without it TLC stops at the first broken rule and has counted fewer
 states than the search. In one state TLC reports only the first invariant it finds broken, so a
-rule that breaks only where an earlier rule breaks needs a run of its own.
+rule that breaks only where an earlier rule breaks needs a run of its own. `Files::invariants`
+lists the invariants of the configuration, and `Files::config_checking` gives the configuration
+that checks only the ones it is given: one for a run on a single rule, none for a run that only
+counts the states.
 
 ## Tests
 

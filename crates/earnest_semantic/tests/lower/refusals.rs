@@ -55,8 +55,17 @@ fn unknown_method(known: &str, method: &str) -> String {
 
 #[test]
 fn a_name_the_file_does_not_define_is_refused() {
-    let feature = refused_here(equal(here(name("missing")), int(1)));
-    assert_eq!(feature, "the name `missing`");
+    let problem = refusal(fields(), equal(here(name("missing")), int(1)));
+    assert_eq!(problem.place(), HERE, "the problem is where the name is");
+    assert_eq!(
+        problem.feature, "`missing`",
+        "the feature is the name alone, in backticks"
+    );
+    assert_eq!(
+        problem.message,
+        "the model file does not define this name, so the checker can't know its value",
+        "the sentence says what is wrong with the name"
+    );
 }
 
 #[test]
@@ -340,10 +349,6 @@ fn a_broken_rule_does_not_hide_a_broken_declaration() {
         .collect();
     assert_eq!(
         features,
-        [
-            "a number range from 3 to 0",
-            "the name `missing`",
-            "the name `absent`",
-        ]
+        ["a number range from 3 to 0", "`missing`", "`absent`",]
     );
 }

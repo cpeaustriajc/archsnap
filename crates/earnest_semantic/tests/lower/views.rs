@@ -112,5 +112,5 @@ fn a_label_that_reads_an_unknown_name_is_refused() {
     source.view.state = Some(label(term(TermKind::Template(vec![missing]))));
     let problem = the_problem(&source);
     assert_eq!(problem.place(), HERE);
-    assert_eq!(problem.feature, "the name `missing`");
+    assert_eq!(problem.feature, "`missing`");
 }

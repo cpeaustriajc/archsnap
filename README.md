@@ -60,7 +60,7 @@ fail        Turnstile  3 states  1 ms
 unfinished  Ledger  1000 states so far  3 ms  (state limit of 1000)
 unreadable  src/clock.model.ts
   src/clock.model.ts:12:17  `Date.now`  the system clock is outside the library
-3 models: 1 pass, 1 fail, 1 unfinished; 1 unreadable file
+4 models: 1 pass, 1 fail, 1 unfinished, 1 unreadable
 ```
 
 - The status word is `pass`, `fail`, `unfinished` or `unreadable`.
@@ -76,8 +76,9 @@ unreadable  src/clock.model.ts
   action that can't be evaluated in a state, for example because it reads a field of `null`.
 - An `unreadable` file lists each problem as `file:line:column`, the feature in backticks and a
   sentence. No model in that file is checked.
-- The summary line counts models. Unreadable files are counted after a semicolon, and only when
-  there are some.
+- The summary line counts each model and each unreadable file once in its total, then lists
+  `pass`, `fail` and `unfinished`, and adds `<n> unreadable` only when there are unreadable
+  files. In JSON, `summary.models` counts models only and `summary.unreadable` counts files.
 - Values print as `"text"`, `12`, `true`, `null`, `{a, b}` for a set, `[a, b]` for a sequence or
   queue, `{k -> v}` for a map and `{name: value}` for a record.
 

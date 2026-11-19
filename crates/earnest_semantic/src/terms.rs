@@ -137,8 +137,8 @@ impl Lowerer<'_> {
         let Some((_, constant)) = draft.constants.iter().find(|(known, _)| known == name) else {
             return Err(self.stop(
                 place,
-                &format!("the name `{name}`"),
-                "it is not defined in the model file, so the checker can't know its value",
+                &format!("`{name}`"),
+                "the model file does not define this name, so the checker can't know its value",
             ));
         };
         if self.in_flight.iter().any(|running| running == name) {

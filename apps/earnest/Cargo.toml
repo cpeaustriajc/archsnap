@@ -8,5 +8,37 @@ publish.workspace = true
 name = "earnest"
 path = "src/main.rs"
 
+[[test]]
+name = "behavior"
+path = "tests/behavior/main.rs"
+
+[[test]]
+name = "reference"
+path = "tests/reference/main.rs"
+
+[[test]]
+name = "workspace"
+path = "tests/workspace/main.rs"
+
+[dependencies]
+clap.workspace = true
+earnest_ast.workspace = true
+earnest_chart.workspace = true
+earnest_check.workspace = true
+earnest_diagnostics.workspace = true
+earnest_ir.workspace = true
+earnest_rs.workspace = true
+earnest_semantic.workspace = true
+earnest_tla.workspace = true
+earnest_ts.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+predicates.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+
 [lints]
 workspace = true
