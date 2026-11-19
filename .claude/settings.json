@@ -16,7 +16,7 @@
       "Edit(/.githooks/**)",
       "Edit(/tests/behavior/**)",
       "Edit(/tests/behavior.rs)",
-      "Edit(/CLAUDE.md)",
+      "Edit(/AGENTS.md)",
       "Edit(/.claude/settings.json)"
     ]
   }
