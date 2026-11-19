@@ -56,21 +56,14 @@ impl Type {
             (Self::Optional(left), Self::Optional(right))
             | (Self::Set(left), Self::Set(right))
             | (Self::Lock(Some(left)), Self::Lock(Some(right)))
-            | (
-                Self::Seq(left) | Self::Queue(left, _),
-                Self::Seq(right) | Self::Queue(right, _),
-            ) => left.fits(right),
+            | (Self::Seq(left) | Self::Queue(left, _), Self::Seq(right) | Self::Queue(right, _)) => {
+                left.fits(right)
+            }
             (Self::Map(left_key, left_value), Self::Map(right_key, right_value)) => {
                 left_key.fits(right_key) && left_value.fits(right_value)
             }
             (Self::Record(left), Self::Record(right)) => {
-                left.len() == right.len()
-                    && left
-                        .iter()
-                        .zip(right.iter())
-                        .all(|((left_name, left_type), (right_name, right_type))| {
-                            left_name == right_name && left_type.fits(right_type)
-                        })
+                left.len() == right.len() && left.iter().zip(right.iter()).all(field_fits)
             }
             _ => false,
         }
@@ -113,6 +106,11 @@ impl Type {
     pub(crate) fn optional(inner: Self) -> Self {
         Self::Optional(Box::new(inner))
     }
+}
+
+fn field_fits(pair: (&(String, Type), &(String, Type))) -> bool {
+    let ((left_name, left_type), (right_name, right_type)) = pair;
+    left_name == right_name && left_type.fits(right_type)
 }
 
 #[derive(Clone, Debug)]

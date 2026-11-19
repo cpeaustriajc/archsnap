@@ -32,9 +32,7 @@ impl Lowerer<'_> {
                 self.binary(*binary, left, right, place, scope)
             }
             TermKind::Choose(test, yes, no) => self.choose(test, yes, no, place, scope),
-            TermKind::Record { base, fields } => {
-                self.record(base.as_deref(), fields, place, scope)
-            }
+            TermKind::Record { base, fields } => self.record(base.as_deref(), fields, place, scope),
             TermKind::SetOf(items) => self.listed(items, Shelf::Set, place, scope),
             TermKind::SeqOf(items) => self.listed(items, Shelf::Seq, place, scope),
             TermKind::MapOf(entries) => self.map_of(entries, place, scope),
@@ -375,7 +373,11 @@ impl Lowerer<'_> {
         let second = self.term(no, scope)?;
         let (first_expr, second_expr, ty) = self.join(first, second, place)?;
         Ok(Typed::new(
-            Expr::Choose(Box::new(tested), Box::new(first_expr), Box::new(second_expr)),
+            Expr::Choose(
+                Box::new(tested),
+                Box::new(first_expr),
+                Box::new(second_expr),
+            ),
             ty,
         ))
     }
@@ -408,7 +410,11 @@ impl Lowerer<'_> {
             )),
             (have, other) => {
                 let feature = format!("a choice between a {} and a {}", have.kind(), other.kind());
-                Err(self.stop(place, &feature, "both branches must give the same kind of value"))
+                Err(self.stop(
+                    place,
+                    &feature,
+                    "both branches must give the same kind of value",
+                ))
             }
         }
     }
@@ -549,9 +555,12 @@ impl Lowerer<'_> {
             return Ok(have.expr);
         }
         match (have.expr, have.ty, want) {
-            (expr, Type::Optional(inner), wanted) if !matches!(wanted, Type::Optional(_)) => {
-                self.coerce(Typed::new(apply(Op::Unwrap, vec![expr]), *inner), wanted, place)
-            }
+            (expr, Type::Optional(inner), wanted) if !matches!(wanted, Type::Optional(_)) => self
+                .coerce(
+                    Typed::new(apply(Op::Unwrap, vec![expr]), *inner),
+                    wanted,
+                    place,
+                ),
             (expr, ty, Type::Optional(inner)) if !matches!(ty, Type::Optional(_)) => {
                 let coerced = self.coerce(Typed::new(expr, ty), inner, place)?;
                 Ok(apply(Op::SomeOf, vec![coerced]))
@@ -561,15 +570,19 @@ impl Lowerer<'_> {
             {
                 self.coerce_record(fields, &have_types, want_types, place)
             }
-            (Expr::SetOf(items), Type::Set(item), Type::Set(wanted)) => Ok(Expr::SetOf(
-                self.coerce_each(items, &item, wanted, place)?,
-            )),
+            (Expr::SetOf(items), Type::Set(item), Type::Set(wanted)) => {
+                Ok(Expr::SetOf(self.coerce_each(items, &item, wanted, place)?))
+            }
             (Expr::SeqOf(items), Type::Seq(item), Type::Seq(wanted) | Type::Queue(wanted, _)) => {
                 Ok(Expr::SeqOf(self.coerce_each(items, &item, wanted, place)?))
             }
             (_, ty, wanted) => {
                 let feature = format!("a {} where a {} is needed", ty.kind(), wanted.kind());
-                Err(self.stop(place, &feature, "the value has the wrong kind for this place"))
+                Err(self.stop(
+                    place,
+                    &feature,
+                    "the value has the wrong kind for this place",
+                ))
             }
         }
     }

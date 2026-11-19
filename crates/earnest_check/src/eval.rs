@@ -94,16 +94,7 @@ pub(crate) fn eval(expr: &Expr, frame: &mut Frame<'_>) -> Evaluated {
 }
 
 pub(crate) fn truth(expr: &Expr, frame: &mut Frame<'_>) -> Result<bool, Fault> {
-    match eval(expr, frame)? {
-        Value::Bool(flag) => Ok(flag),
-        Value::Null
-        | Value::Int(_)
-        | Value::Str(_)
-        | Value::Record(_)
-        | Value::Set(_)
-        | Value::Map(_)
-        | Value::Seq(_) => Err(Fault::WrongKind),
-    }
+    as_bool(&eval(expr, frame)?)
 }
 
 fn each(items: &[Expr], frame: &mut Frame<'_>) -> Result<Vec<Value>, Fault> {
@@ -180,19 +171,13 @@ fn apply(op: Op, arguments: &[Expr], frame: &mut Frame<'_>) -> Evaluated {
     let second = values.next();
     let third = values.next();
     match op {
-        Op::Not => match first {
-            Value::Bool(flag) => Ok(Value::Bool(!flag)),
-            other => Err(wrong_or_null(&other)),
-        },
-        Op::Negate => match first {
-            Value::Int(number) => number.checked_neg().map(Value::Int).ok_or(Fault::Overflow),
-            other => Err(wrong_or_null(&other)),
-        },
-        Op::SomeOf => Ok(first),
-        Op::Unwrap => match first {
-            Value::Null => Err(Fault::NullRead),
-            inner => Ok(inner),
-        },
+        Op::Not => Ok(Value::Bool(!as_bool(&first)?)),
+        Op::Negate => as_int(&first)?
+            .checked_neg()
+            .map(Value::Int)
+            .ok_or(Fault::Overflow),
+        Op::Unwrap if first == Value::Null => Err(Fault::NullRead),
+        Op::SomeOf | Op::Unwrap => Ok(first),
         Op::Equal => Ok(Value::Bool(Some(first) == second)),
         Op::Differ => Ok(Value::Bool(Some(first) != second)),
         Op::Order(order) => compare(order, &first, second.as_ref()),
@@ -211,12 +196,43 @@ fn wrong_or_null(value: &Value) -> Fault {
     }
 }
 
+fn as_bool(value: &Value) -> Result<bool, Fault> {
+    let Value::Bool(flag) = value else {
+        return Err(wrong_or_null(value));
+    };
+    Ok(*flag)
+}
+
+fn as_int(value: &Value) -> Result<i64, Fault> {
+    let Value::Int(number) = value else {
+        return Err(wrong_or_null(value));
+    };
+    Ok(*number)
+}
+
+fn as_set(value: Value) -> Result<BTreeSet<Value>, Fault> {
+    let Value::Set(shared) = value else {
+        return Err(wrong_or_null(&value));
+    };
+    Ok(Arc::unwrap_or_clone(shared))
+}
+
+fn as_map(value: Value) -> Result<BTreeMap<Value, Value>, Fault> {
+    let Value::Map(shared) = value else {
+        return Err(wrong_or_null(&value));
+    };
+    Ok(Arc::unwrap_or_clone(shared))
+}
+
+fn as_seq(value: Value) -> Result<Vec<Value>, Fault> {
+    let Value::Seq(shared) = value else {
+        return Err(wrong_or_null(&value));
+    };
+    Ok(Arc::unwrap_or_clone(shared))
+}
+
 fn int_pair(first: &Value, second: Option<&Value>) -> Result<(i64, i64), Fault> {
-    match (first, second) {
-        (Value::Int(left), Some(Value::Int(right))) => Ok((*left, *right)),
-        (Value::Null, _) | (_, Some(Value::Null)) => Err(Fault::NullRead),
-        _ => Err(Fault::WrongKind),
-    }
+    Ok((as_int(first)?, as_int(second.ok_or(Fault::WrongKind)?)?))
 }
 
 fn compare(order: Order, first: &Value, second: Option<&Value>) -> Evaluated {
@@ -248,14 +264,7 @@ fn arithmetic(math: Math, first: &Value, second: Option<&Value>) -> Evaluated {
 fn size_of(count: usize) -> Evaluated {
     i64::try_from(count)
         .map(Value::Int)
-        .map_err(|_| Fault::Overflow)
-}
-
-fn as_set(value: Value) -> Result<BTreeSet<Value>, Fault> {
-    match value {
-        Value::Set(shared) => Ok(Arc::unwrap_or_clone(shared)),
-        other => Err(wrong_or_null(&other)),
-    }
+        .or(Err(Fault::Overflow))
 }
 
 fn on_set(op: SetOp, first: Value, second: Option<Value>) -> Evaluated {
@@ -283,10 +292,7 @@ fn on_set(op: SetOp, first: Value, second: Option<Value>) -> Evaluated {
 }
 
 fn on_map(op: MapOp, first: Value, second: Option<Value>, third: Option<Value>) -> Evaluated {
-    let mut entries = match first {
-        Value::Map(shared) => Arc::unwrap_or_clone(shared),
-        other => return Err(wrong_or_null(&other)),
-    };
+    let mut entries = as_map(first)?;
     match op {
         MapOp::Size => return size_of(entries.len()),
         MapOp::Keys => return Ok(Value::set(entries.keys().cloned().collect())),
@@ -309,10 +315,7 @@ fn on_map(op: MapOp, first: Value, second: Option<Value>, third: Option<Value>) 
 }
 
 fn on_seq(op: SeqOp, first: Value, second: Option<Value>) -> Evaluated {
-    let mut items = match first {
-        Value::Seq(shared) => Arc::unwrap_or_clone(shared),
-        other => return Err(wrong_or_null(&other)),
-    };
+    let mut items = as_seq(first)?;
     match op {
         SeqOp::Size => size_of(items.len()),
         SeqOp::First => Ok(items.first().cloned().unwrap_or(Value::Null)),
@@ -335,6 +338,8 @@ fn on_seq(op: SeqOp, first: Value, second: Option<Value>) -> Evaluated {
             items.push(second.ok_or(Fault::WrongKind)?);
             Ok(Value::seq(items))
         }
-        SeqOp::Includes => Ok(Value::Bool(items.contains(&second.ok_or(Fault::WrongKind)?))),
+        SeqOp::Includes => Ok(Value::Bool(
+            items.contains(&second.ok_or(Fault::WrongKind)?),
+        )),
     }
 }

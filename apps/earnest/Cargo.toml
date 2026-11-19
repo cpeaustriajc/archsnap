@@ -1,0 +1,15 @@
+[package]
+name = "earnest-cli"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "earnest"
+path = "src/main.rs"
+
+[dependencies]
+earnest_check.workspace = true
+
+[lints]
+workspace = true
