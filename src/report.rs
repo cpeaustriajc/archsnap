@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::diag::{Fatal, Warning};
 use crate::diff::Diff;
 use crate::scan::Snapshot;
-use crate::system::site_of;
+use crate::system::registrable_domain;
 
 const TEMPLATE: &str = include_str!("report.html");
 const BRANDS_NAMED_IN_TEMPLATE: &str = include_str!("brands.json");
@@ -79,7 +79,7 @@ fn brands_with_outside_service_logos(report: &Report) -> Result<String, Fatal> {
 }
 
 fn brand_slug(label: &str) -> Option<String> {
-    let site = site_of(label);
+    let site = registrable_domain(label);
     let first_label = site
         .split_once('.')
         .map_or(site.as_str(), |(first, _)| first);
