@@ -13,7 +13,7 @@ opens a draft; any other word is the base. Paths are relative to this skill's fo
 
 ## Code host
 
-archsnap is on GitHub (`cpeaustriajc/archsnap`, default branch `main`). Use `gh` 2.99 or later.
+This project is on GitHub (`cpeaustriajc/earnest`, default branch `main`). Use `gh` 2.99 or later.
 
 - **Fast checks**: `cargo fmt --check`, then `cargo clippy --all-targets -- -D warnings`.
 - **Open a PR**: `gh pr create --base <base> --title "<title>" --body-file <body file>`. Add
