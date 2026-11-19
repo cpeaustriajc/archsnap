@@ -4,8 +4,10 @@ A model checker for models written in your app's own language. A coding agent st
 a change as a model in TypeScript or Rust, `earnest verify` visits every reachable state, and the
 result goes into the PR as a statechart and a report.
 
-Status: version 1 is being built. This README is the contract the code and the tests are written
-against. The spec is the Claude Doc "A formal verification suite for agents".
+Status: version 1 is built and passes its own checks, and is not yet proven. Two adversarial
+passes each found models with a broken rule that were reported as passing; those are fixed, and
+a third pass has not been run. TLC has not confirmed the TLA+ export in CI. The spec is the
+Claude Doc "A formal verification suite for agents".
 
 ## Commands
 
