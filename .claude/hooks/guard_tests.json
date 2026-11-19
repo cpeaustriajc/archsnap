@@ -1,0 +1,7 @@
+{
+  "mode": "rigs",
+  "extra_test_dirs": [],
+  "extra_test_names": [],
+  "shared_files": [],
+  "picked": {"at": "2026-11-19", "by": "Claude, from replay.py: full asks on 3 of 5 changes, rigs on 0"}
+}
