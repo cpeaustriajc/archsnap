@@ -14,10 +14,9 @@ pub(crate) struct System {
     #[serde(default)]
     pub(crate) route_calls: Vec<RouteCall>,
     #[serde(default)]
-    pub(crate) handlers: Vec<Handler>,
+    pub(crate) handlers: Vec<WorkerHandler>,
 }
 
-/// An endpoint a service answers, with its mount prefix applied.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct Route {
     pub(crate) method: String,
@@ -26,7 +25,6 @@ pub(crate) struct Route {
     pub(crate) service: String,
 }
 
-/// A place in client code that requests one of the routes above.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct RouteCall {
     pub(crate) from: String,
@@ -35,23 +33,38 @@ pub(crate) struct RouteCall {
     pub(crate) path: String,
 }
 
-/// A Worker entry point other than fetch: `scheduled` (cron) or `queue` (consumer).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(crate) struct Handler {
+pub(crate) struct WorkerHandler {
     pub(crate) kind: String,
     pub(crate) file: String,
     pub(crate) service: String,
 }
 
-/// What one source file says about HTTP: routes it defines, routers it mounts, paths it requests.
+#[derive(Debug, Clone)]
+pub(crate) struct RouteDefinition {
+    pub(crate) method: String,
+    pub(crate) path: String,
+    pub(crate) router_variable: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RouterMount {
+    pub(crate) parent_router: Option<String>,
+    pub(crate) prefix: String,
+    pub(crate) child_router: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RequestedPath {
+    pub(crate) pattern_with_stars: String,
+    pub(crate) method: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct CodeFacts {
-    /// (method, path, router variable)
-    pub(crate) routes: Vec<(String, String, Option<String>)>,
-    /// (parent router, prefix, child router variable)
-    pub(crate) mounts: Vec<(Option<String>, String, String)>,
-    /// (path pattern with `*` for interpolations, method if known)
-    pub(crate) paths: Vec<(String, Option<String>)>,
+    pub(crate) routes: Vec<RouteDefinition>,
+    pub(crate) mounts: Vec<RouterMount>,
+    pub(crate) paths: Vec<RequestedPath>,
     pub(crate) handlers: Vec<String>,
     pub(crate) exports: Vec<String>,
 }
@@ -69,7 +82,6 @@ fn is_param(seg: &str) -> bool {
     seg == "*" || seg.starts_with(':') || seg.starts_with('[') || seg.starts_with('{')
 }
 
-/// `/api/rates/*/refresh` (client) matches `/api/rates/:id/refresh` (server).
 fn path_matches(client: &str, server: &str) -> bool {
     let (c, s) = (segments(client), segments(server));
     c.len() == s.len()
@@ -85,8 +97,7 @@ fn join_route(prefix: &str, path: &str) -> String {
     format!("/{}", parts.join("/"))
 }
 
-/// Next.js file routes: `app/api/links/[id]/route.ts` -> `/api/links/:id`, `pages/api/x.ts` -> `/api/x`.
-fn next_route(file: &str, package_dir: &str) -> Option<String> {
+fn next_file_route(file: &str, package_dir: &str) -> Option<String> {
     let in_package = if package_dir.is_empty() {
         file
     } else {
@@ -143,12 +154,9 @@ fn route_param(segment: String) -> String {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct SysNode {
     pub(crate) id: String,
-    /// One of: client, web, mobile, service, library, datastore, queue, schedule, external, feature.
-    /// report.html switches on these strings.
     pub(crate) kind: String,
     pub(crate) label: String,
     pub(crate) detail: String,
-    /// For a feature: the service or web app it lives in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) parent: Option<String>,
 }
@@ -206,8 +214,7 @@ pub(crate) fn parse_package(
     })
 }
 
-/// The package whose folder holds `path`; the root package has dir "".
-pub(crate) fn package_of<'a>(packages: &'a [Package], path: &str) -> Option<&'a Package> {
+pub(crate) fn owning_package<'a>(packages: &'a [Package], path: &str) -> Option<&'a Package> {
     packages
         .iter()
         .filter(|p| p.dir.is_empty() || path.starts_with(&format!("{}/", p.dir)))
@@ -215,19 +222,36 @@ pub(crate) fn package_of<'a>(packages: &'a [Package], path: &str) -> Option<&'a 
 }
 
 fn package_of_dir<'a>(packages: &'a [Package], dir: &str) -> Option<&'a Package> {
-    package_of(packages, &format!("{dir}/x"))
+    owning_package(packages, &format!("{dir}/x"))
+}
+
+pub(crate) struct WranglerFile {
+    pub(crate) path: String,
+    pub(crate) text: String,
+}
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct XcodeProject {
+    pub(crate) dir: String,
+    pub(crate) name: String,
+}
+
+pub(crate) struct OutsideUrl {
+    pub(crate) file: String,
+    pub(crate) host: String,
+}
+
+pub(crate) struct CodeArea {
+    pub(crate) area: String,
+    pub(crate) package_dir: String,
 }
 
 pub(crate) struct Inputs<'a> {
     pub(crate) packages: &'a [Package],
-    /// (path, text) of each wrangler.toml / wrangler.json / wrangler.jsonc.
-    pub(crate) wranglers: Vec<(String, String)>,
-    /// (dir, name) of each Xcode project.
-    pub(crate) xcode: Vec<(String, String)>,
-    /// (file, host) of each outside URL found in string literals.
-    pub(crate) urls: Vec<(String, String)>,
-    /// (area, package dir) of every code area, and the area each file belongs to.
-    pub(crate) areas: Vec<(String, String)>,
+    pub(crate) wranglers: Vec<WranglerFile>,
+    pub(crate) xcode: Vec<XcodeProject>,
+    pub(crate) urls: Vec<OutsideUrl>,
+    pub(crate) areas: Vec<CodeArea>,
     pub(crate) area_of: &'a dyn Fn(&str) -> String,
     pub(crate) code: Vec<(String, CodeFacts)>,
 }
@@ -279,7 +303,6 @@ const GENERIC_FOLDERS: &[&str] = &[
     "icons",
 ];
 
-/// `apps/api/src/net-worth` -> "Net worth"; folders that name a layer rather than a feature give None.
 fn feature_name(area: &str, package_dir: &str) -> Option<String> {
     if area == package_dir || area.is_empty() {
         return None;
@@ -336,8 +359,12 @@ const CONFIG_PACKAGE_SUFFIXES: &[&str] = &[
     "biome-config",
 ];
 
-/// SDK label -> the domain its API lives on, so URL hosts merge into the SDK's box.
-const SDK_DOMAINS: &[(&str, &str)] = &[
+type SdkLabel = &'static str;
+type ApiDomain = &'static str;
+type PackagePrefix = &'static str;
+type NodeKind = &'static str;
+
+const SDK_DOMAINS: &[(SdkLabel, ApiDomain)] = &[
     ("Stripe", "stripe.com"),
     ("Resend", "resend.com"),
     ("PlanetScale", "planetscale.com"),
@@ -354,8 +381,7 @@ const SDK_DOMAINS: &[(&str, &str)] = &[
     ("Firebase", "firebaseio.com"),
     ("Auth0", "auth0.com"),
 ];
-/// Each subdomain on these hosting platforms is a different service, so they are not grouped by domain.
-const PLATFORMS: &[&str] = &[
+const SHARED_HOSTING_DOMAINS: &[&str] = &[
     "appspot.com",
     "herokuapp.com",
     "vercel.app",
@@ -392,8 +418,7 @@ const PLACEHOLDERS: &[&str] = &[
     "company.com",
 ];
 
-/// npm package prefix -> (node kind, label).
-const SDKS: &[(&str, &str, &str)] = &[
+const SDKS: &[(PackagePrefix, NodeKind, SdkLabel)] = &[
     ("pg", "datastore", "PostgreSQL"),
     ("postgres", "datastore", "PostgreSQL"),
     ("@neondatabase/serverless", "datastore", "Neon PostgreSQL"),
@@ -511,20 +536,20 @@ pub(crate) fn host_of(url: &str) -> Option<String> {
     let reserved = [".example", ".local", ".localhost", ".test", ".invalid"]
         .iter()
         .any(|t| host.ends_with(t))
-        || ["example.com", "example.org", "example.net"].contains(&site_of(&host).as_str())
-        || private_ip(&host);
+        || ["example.com", "example.org", "example.net"]
+            .contains(&registrable_domain(&host).as_str())
+        || is_non_public_ipv4(&host);
     if !valid
         || reserved
         || IGNORED_HOSTS.contains(&host.as_str())
-        || PLACEHOLDERS.contains(&site_of(&host).as_str())
+        || PLACEHOLDERS.contains(&registrable_domain(&host).as_str())
     {
         return None;
     }
     Some(host)
 }
 
-/// Loopback, private, link-local (cloud metadata) and unspecified IPv4 addresses.
-fn private_ip(host: &str) -> bool {
+fn is_non_public_ipv4(host: &str) -> bool {
     let Ok(ip) = host.parse::<std::net::Ipv4Addr>() else {
         return false;
     };
@@ -753,11 +778,11 @@ fn sdk_matches(prefix: &str, dep: &str) -> bool {
 fn add_workers(
     graph: &mut Builder,
     packages: &[Package],
-    wranglers: &[(String, String)],
+    wranglers: &[WranglerFile],
     warnings: &mut Vec<Warning>,
 ) -> Workers {
     let mut workers = Workers::default();
-    for (path, text) in wranglers {
+    for WranglerFile { path, text } in wranglers {
         if let Some(config) = parse_wrangler(path, text, warnings) {
             add_worker(graph, packages, &mut workers, path, &config);
         }
@@ -941,8 +966,8 @@ fn add_service_calls(
     }
 }
 
-fn add_xcode_apps(graph: &mut Builder, xcode: &[(String, String)]) {
-    for (dir, name) in xcode {
+fn add_xcode_apps(graph: &mut Builder, xcode: &[XcodeProject]) {
+    for XcodeProject { dir, name } in xcode {
         graph.node(
             &xcode_id(dir, name),
             "mobile",
@@ -952,15 +977,15 @@ fn add_xcode_apps(graph: &mut Builder, xcode: &[(String, String)]) {
     }
 }
 
-fn add_features(graph: &mut Builder, areas: &[(String, String)]) -> BTreeMap<String, String> {
+fn add_features(graph: &mut Builder, areas: &[CodeArea]) -> BTreeMap<String, String> {
     let mut features = BTreeMap::new();
-    for (area, dir) in areas {
-        let parent = package_id(dir);
+    for CodeArea { area, package_dir } in areas {
+        let parent = package_id(package_dir);
         let hosts_features = matches!(graph.kind_of(&parent), "service" | "web");
         if !hosts_features {
             continue;
         }
-        let Some(label) = feature_name(area, dir) else {
+        let Some(label) = feature_name(area, package_dir) else {
             continue;
         };
         let id = format!("feat:{area}");
@@ -979,15 +1004,15 @@ fn add_features(graph: &mut Builder, areas: &[(String, String)]) -> BTreeMap<Str
 
 struct UrlSources<'a> {
     packages: &'a [Package],
-    xcode: &'a [(String, String)],
+    xcode: &'a [XcodeProject],
     workers: &'a Workers,
     features: &'a BTreeMap<String, String>,
     area_of: &'a dyn Fn(&str) -> String,
 }
 
-fn add_url_calls(graph: &mut Builder, sources: &UrlSources, urls: &[(String, String)]) {
+fn add_url_calls(graph: &mut Builder, sources: &UrlSources, urls: &[OutsideUrl]) {
     let mut mirrors: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for (file, host) in urls {
+    for OutsideUrl { file, host } in urls {
         let Some(owner) = url_owner(graph, sources, file) else {
             continue;
         };
@@ -1011,14 +1036,14 @@ fn url_owner(graph: &Builder, sources: &UrlSources, file: &str) -> Option<String
     sources
         .xcode
         .iter()
-        .filter(|(dir, _)| dir.is_empty() || file.starts_with(&format!("{dir}/")))
-        .max_by_key(|(dir, _)| dir.len())
+        .filter(|project| project.dir.is_empty() || file.starts_with(&format!("{}/", project.dir)))
+        .max_by_key(|project| project.dir.len())
         .or(sources.xcode.first())
-        .map(|(dir, name)| xcode_id(dir, name))
+        .map(|project| xcode_id(&project.dir, &project.name))
 }
 
 fn package_owner(graph: &Builder, packages: &[Package], file: &str) -> Option<String> {
-    package_of(packages, file)
+    owning_package(packages, file)
         .map(pkg_id)
         .filter(|id| graph.has(id))
 }
@@ -1090,10 +1115,10 @@ type RouterPrefixes = BTreeMap<(String, String), String>;
 fn http(
     graph: &Builder,
     packages: &[Package],
-    xcode: &[(String, String)],
+    xcode: &[XcodeProject],
     code: &[(String, CodeFacts)],
     mains: &[(String, String)],
-) -> (Vec<Route>, Vec<RouteCall>, Vec<Handler>) {
+) -> (Vec<Route>, Vec<RouteCall>, Vec<WorkerHandler>) {
     let owned: Vec<OwnedCode> = code
         .iter()
         .filter_map(|(file, facts)| {
@@ -1113,11 +1138,13 @@ fn http(
 fn code_owner(
     graph: &Builder,
     packages: &[Package],
-    xcode: &[(String, String)],
+    xcode: &[XcodeProject],
     file: &str,
 ) -> Option<String> {
     if has_extension(file, "swift") {
-        return xcode.first().map(|(dir, name)| xcode_id(dir, name));
+        return xcode
+            .first()
+            .map(|project| xcode_id(&project.dir, &project.name));
     }
     package_owner(graph, packages, file)
 }
@@ -1128,9 +1155,12 @@ fn mount_prefixes(code: &[OwnedCode]) -> RouterPrefixes {
         let mounts = code
             .iter()
             .flat_map(|unit| unit.facts.mounts.iter().map(|mount| (&unit.owner, mount)));
-        for (owner, (parent, prefix, child)) in mounts {
-            let base = router_prefix(&prefixes, owner, parent.as_deref());
-            prefixes.insert((owner.clone(), child.clone()), join_route(&base, prefix));
+        for (owner, mount) in mounts {
+            let base = router_prefix(&prefixes, owner, mount.parent_router.as_deref());
+            prefixes.insert(
+                (owner.clone(), mount.child_router.clone()),
+                join_route(&base, &mount.prefix),
+            );
         }
     }
     prefixes
@@ -1172,16 +1202,16 @@ fn router_routes(unit: &OwnedCode, prefixes: &RouterPrefixes) -> Vec<Route> {
     unit.facts
         .routes
         .iter()
-        .map(|(method, path, router)| {
-            let base = router_prefix(prefixes, &unit.owner, router.as_deref());
-            unit.route(method, join_route(&base, path))
+        .map(|route| {
+            let base = router_prefix(prefixes, &unit.owner, route.router_variable.as_deref());
+            unit.route(&route.method, join_route(&base, &route.path))
         })
         .collect()
 }
 
 fn file_routes(unit: &OwnedCode, packages: &[Package]) -> Vec<Route> {
-    let package_dir = package_of(packages, unit.file).map_or("", |p| p.dir.as_str());
-    let Some(path) = next_route(unit.file, package_dir) else {
+    let package_dir = owning_package(packages, unit.file).map_or("", |p| p.dir.as_str());
+    let Some(path) = next_file_route(unit.file, package_dir) else {
         return Vec::new();
     };
     let pages_api = unit.file.contains("/pages/api/") || unit.file.starts_with("pages/api/");
@@ -1219,12 +1249,13 @@ fn route_calls(code: &[OwnedCode], routes: &[Route]) -> Vec<RouteCall> {
 }
 
 fn calls_from<'a>(unit: &'a OwnedCode, routes: &'a [Route]) -> impl Iterator<Item = RouteCall> {
-    unit.facts.paths.iter().filter_map(move |(path, method)| {
+    unit.facts.paths.iter().filter_map(move |requested| {
         let route = routes
             .iter()
-            .filter(|r| r.file != unit.file && path_matches(path, &r.path))
+            .filter(|r| r.file != unit.file && path_matches(&requested.pattern_with_stars, &r.path))
             .find(|r| {
-                method
+                requested
+                    .method
                     .as_ref()
                     .is_none_or(|m| *m == r.method || r.method == "ANY")
             })?;
@@ -1237,13 +1268,13 @@ fn calls_from<'a>(unit: &'a OwnedCode, routes: &'a [Route]) -> impl Iterator<Ite
     })
 }
 
-fn worker_handlers(code: &[(String, CodeFacts)], mains: &[(String, String)]) -> Vec<Handler> {
+fn worker_handlers(code: &[(String, CodeFacts)], mains: &[(String, String)]) -> Vec<WorkerHandler> {
     let mut handlers = Vec::new();
     for (owner, main) in mains {
         let Some((file, facts)) = entry_point(code, main) else {
             continue;
         };
-        handlers.extend(facts.handlers.iter().map(|kind| Handler {
+        handlers.extend(facts.handlers.iter().map(|kind| WorkerHandler {
             kind: kind.clone(),
             file: file.clone(),
             service: owner.clone(),
@@ -1273,7 +1304,6 @@ const WEEKDAYS: [(&str, &str); 7] = [
 ];
 const DAYS_IN_WEEK: u32 = 7;
 
-/// Cloudflare crons run in UTC. Uncommon patterns fall back to the raw expression.
 fn describe_cron(expression: &str) -> String {
     describe_schedule(expression).unwrap_or_else(|| format!("Schedule {expression}"))
 }
@@ -1331,8 +1361,7 @@ fn weekday_name(field: &str) -> Option<&'static str> {
         .map(|(_, name)| *name)
 }
 
-/// The registrable domain: api.stripe.com -> stripe.com, www.bdo.com.ph -> bdo.com.ph.
-pub(crate) fn site_of(host: &str) -> String {
+pub(crate) fn registrable_domain(host: &str) -> String {
     if host.parse::<std::net::Ipv4Addr>().is_ok() {
         return host.to_string();
     }
@@ -1351,16 +1380,15 @@ fn is_country_second_level(top: &str, second: &str) -> bool {
 }
 
 fn service_key(host: &str) -> String {
-    let site = site_of(host);
-    if PLATFORMS.contains(&site.as_str()) {
-        mirror_key(host)
+    let site = registrable_domain(host);
+    if SHARED_HOSTING_DOMAINS.contains(&site.as_str()) {
+        numbered_mirror_key(host)
     } else {
         site
     }
 }
 
-/// query1.finance.yahoo.com and query2.finance.yahoo.com are one service.
-fn mirror_key(host: &str) -> String {
+fn numbered_mirror_key(host: &str) -> String {
     let (first, rest) = host.split_once('.').unwrap_or((host, ""));
     let without_digits = first.trim_end_matches(|c: char| c.is_ascii_digit());
     let name = if matches!(without_digits, "" | "-") {
@@ -1379,7 +1407,7 @@ fn parse_wrangler(path: &str, text: &str, warnings: &mut Vec<Warning>) -> Option
     let parsed = if has_extension(path, "toml") {
         parse_toml(text)
     } else {
-        parse_json(&strip_json_comments(text))
+        parse_json(&jsonc_to_json(text))
     };
     match parsed {
         Ok(config) => Some(config),
@@ -1469,8 +1497,7 @@ fn config_warning(path: &str, text: &str, failure: &ParseFailure) -> Warning {
     )
 }
 
-/// Drops `//` and `/* */` comments and trailing commas outside strings (wrangler.jsonc).
-fn strip_json_comments(text: &str) -> String {
+fn jsonc_to_json(text: &str) -> String {
     remove_trailing_commas(&remove_comments(text))
 }
 

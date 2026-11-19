@@ -5,19 +5,16 @@ use serde::{Deserialize, Serialize};
 use crate::diag::{Fatal, Warning};
 use crate::diff::Diff;
 use crate::scan::Snapshot;
-use crate::system::site_of;
+use crate::system::registrable_domain;
 
 const TEMPLATE: &str = include_str!("report.html");
-/// Logos from simple-icons (CC0), fetched by hand; see `source` inside the file.
-/// report.html names BRANDS slugs directly; `BRANDS_MORE` is matched to outside services by domain.
-const BRANDS: &str = include_str!("brands.json");
-const BRANDS_MORE: &str = include_str!("brands-more.json");
+const BRANDS_NAMED_IN_TEMPLATE: &str = include_str!("brands.json");
+const BRANDS_MATCHED_BY_DOMAIN: &str = include_str!("brands-more.json");
 
 #[derive(Serialize)]
 pub(crate) struct Report<'a> {
     pub(crate) repo: String,
     pub(crate) shallow: bool,
-    /// Newest first: report.html reads weeks[0] as the latest.
     pub(crate) weeks: Vec<WeekView>,
     pub(crate) warnings: &'a [Warning],
 }
@@ -39,24 +36,24 @@ struct Brands {
 pub(crate) fn render(report: &Report) -> Result<String, Fatal> {
     let json = serde_json::to_string(report)
         .map_err(|error| Fatal::internal("encoding the report data", &error))?;
-    // `<` escaped so file names like `</script>` can't end the data block early.
-    let escaped_json = json.replace('<', "\\u003c");
-    // Title first: substituting data first would let repo contents inject a title marker.
-    Ok(TEMPLATE
-        .replace("__EARNEST_TITLE__", &html_escape(&report.repo))
+    let titled_before_repo_content =
+        TEMPLATE.replace("__EARNEST_TITLE__", &html_escape(&report.repo));
+    Ok(titled_before_repo_content
         .replace(
             "__EARNEST_BRANDS__",
-            &brands(report)?.replace('<', "\\u003c"),
+            &escape_script_end(&brands_with_outside_service_logos(report)?),
         )
-        .replace("__EARNEST_DATA__", &escaped_json))
+        .replace("__EARNEST_DATA__", &escape_script_end(&json)))
 }
 
-/// The hand-picked logos, plus a logo for each outside service whose domain names a simple-icons slug
-/// (api.buffer.com -> buffer), under `domains` keyed by the node label.
-fn brands(report: &Report) -> Result<String, Fatal> {
-    let mut out: Brands = serde_json::from_str(BRANDS)
+fn escape_script_end(json: &str) -> String {
+    json.replace('<', "\\u003c")
+}
+
+fn brands_with_outside_service_logos(report: &Report) -> Result<String, Fatal> {
+    let mut out: Brands = serde_json::from_str(BRANDS_NAMED_IN_TEMPLATE)
         .map_err(|error| Fatal::internal("parsing brands.json", &error))?;
-    let more: Brands = serde_json::from_str(BRANDS_MORE)
+    let more: Brands = serde_json::from_str(BRANDS_MATCHED_BY_DOMAIN)
         .map_err(|error| Fatal::internal("parsing brands-more.json", &error))?;
     for node in report
         .weeks
@@ -82,7 +79,7 @@ fn brands(report: &Report) -> Result<String, Fatal> {
 }
 
 fn brand_slug(label: &str) -> Option<String> {
-    let site = site_of(label);
+    let site = registrable_domain(label);
     let first_label = site
         .split_once('.')
         .map_or(site.as_str(), |(first, _)| first);
