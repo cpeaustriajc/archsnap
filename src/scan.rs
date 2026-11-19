@@ -1188,6 +1188,7 @@ fn skip_parenthesized(chars: &mut impl Iterator<Item = char>) {
     }
 }
 
+#[derive(Debug, PartialEq)]
 enum Target {
     File(String),
     Asset,

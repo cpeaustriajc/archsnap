@@ -156,7 +156,7 @@ impl WeeklyScan<'_> {
         point: &WeekPoint,
         warnings: &mut Vec<Warning>,
     ) -> Result<Snapshot, Fatal> {
-        let newest = position == self.total;
+        let reports_warnings = position == self.total;
         let cached = match self.store.load(&point.week, &point.sha, self.depth) {
             Ok(cached) => cached,
             Err(corrupt) => {
@@ -170,8 +170,7 @@ impl WeeklyScan<'_> {
             point.week,
             short_sha(&point.sha)
         );
-        let rescan_to_report_warnings = newest;
-        if let Some(snapshot) = cached.filter(|_| !rescan_to_report_warnings) {
+        if let Some(snapshot) = cached.filter(|_| !reports_warnings) {
             writeln!(io::stderr().lock(), "{progress} cached").map_err(Fatal::StderrNotWritable)?;
             return Ok(snapshot);
         }
@@ -186,7 +185,7 @@ impl WeeklyScan<'_> {
             found.len()
         )
         .map_err(Fatal::StderrNotWritable)?;
-        if newest {
+        if reports_warnings {
             warnings.extend(found);
         }
         Ok(snapshot)
@@ -209,12 +208,12 @@ fn week_views_newest_first(snapshots: Vec<Snapshot>) -> Vec<WeekView> {
         .map(|(snapshot, diff)| WeekView { snapshot, diff })
         .collect();
     weeks.reverse();
-    keep_page_small_by_dropping_file_links(weeks.iter_mut().skip(1));
+    drop_file_links_from_older_weeks(&mut weeks);
     weeks
 }
 
-fn keep_page_small_by_dropping_file_links<'a>(older_weeks: impl Iterator<Item = &'a mut WeekView>) {
-    for older in older_weeks {
+fn drop_file_links_from_older_weeks(weeks_newest_first: &mut [WeekView]) {
+    for older in weeks_newest_first.iter_mut().skip(1) {
         older
             .snapshot
             .edges
