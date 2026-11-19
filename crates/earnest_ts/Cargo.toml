@@ -1,0 +1,22 @@
+[package]
+name = "earnest_ts"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+earnest_ast.workspace = true
+earnest_diagnostics.workspace = true
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_parser.workspace = true
+oxc_span.workspace = true
+oxc_syntax.workspace = true
+
+[dev-dependencies]
+earnest_check.workspace = true
+earnest_ir.workspace = true
+earnest_semantic.workspace = true
+
+[lints]
+workspace = true
