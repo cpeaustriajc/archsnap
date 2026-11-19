@@ -1,0 +1,6 @@
+disallowed-names = ["..", "data", "info", "handle", "process", "util", "manager"]
+excessive-nesting-threshold = 3
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

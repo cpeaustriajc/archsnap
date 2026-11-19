@@ -5,123 +5,128 @@ use serde::Serialize;
 use crate::scan::Snapshot;
 
 #[derive(Debug, Serialize)]
-pub struct Diff {
-    pub added_modules: Vec<String>,
-    pub removed_modules: Vec<String>,
-    pub grown: Vec<SizeChange>,
-    pub shrunk: Vec<SizeChange>,
-    pub added_edges: Vec<(String, String)>,
-    pub removed_edges: Vec<(String, String)>,
-    pub added_packages: Vec<String>,
-    pub removed_packages: Vec<String>,
-    pub summary: Vec<String>,
+pub(crate) struct Diff {
+    pub(crate) added_modules: Vec<String>,
+    pub(crate) removed_modules: Vec<String>,
+    pub(crate) grown: Vec<SizeChange>,
+    pub(crate) shrunk: Vec<SizeChange>,
+    pub(crate) added_edges: Vec<(String, String)>,
+    pub(crate) removed_edges: Vec<(String, String)>,
+    pub(crate) added_packages: Vec<String>,
+    pub(crate) removed_packages: Vec<String>,
+    pub(crate) summary: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct SizeChange {
-    pub module: String,
-    pub before: u32,
-    pub after: u32,
+pub(crate) struct SizeChange {
+    pub(crate) module: String,
+    pub(crate) before: u32,
+    pub(crate) after: u32,
+}
+
+impl SizeChange {
+    fn is_notable(&self) -> bool {
+        let delta = self.after.abs_diff(self.before);
+        delta >= MIN_LINES && f64::from(delta) >= f64::from(self.before.max(1)) * MIN_RATIO
+    }
+
+    fn grew(&self) -> bool {
+        self.after > self.before
+    }
+
+    fn percent(&self) -> String {
+        let change = (f64::from(self.after) - f64::from(self.before))
+            / f64::from(self.before.max(1))
+            * 100.0;
+        format!("{change:+.0}%")
+    }
 }
 
 const MIN_LINES: u32 = 20;
 const MIN_RATIO: f64 = 0.2;
+const NO_CHANGES: &str = "No structural changes this week.";
 
-pub fn diff(before: Option<&Snapshot>, after: &Snapshot) -> Diff {
-    let empty = BTreeSet::new();
-    let keys = |s: Option<&Snapshot>| {
-        s.map(|s| s.modules.keys().cloned().collect())
-            .unwrap_or_else(|| empty.clone())
+pub(crate) fn diff(previous: Option<&Snapshot>, after: &Snapshot) -> Diff {
+    let Some(before) = previous else {
+        return first_diff(after);
     };
-    let (old, new): (BTreeSet<String>, BTreeSet<String>) = (keys(before), keys(Some(after)));
-
-    let mut grown = Vec::new();
-    let mut shrunk = Vec::new();
-    if let Some(b) = before {
-        for (name, m) in &after.modules {
-            let Some(prev) = b.modules.get(name) else {
-                continue;
-            };
-            let delta = m.lines.abs_diff(prev.lines);
-            if delta < MIN_LINES || (delta as f64) < prev.lines.max(1) as f64 * MIN_RATIO {
-                continue;
-            }
-            let c = SizeChange {
-                module: name.clone(),
-                before: prev.lines,
-                after: m.lines,
-            };
-            if m.lines > prev.lines {
-                grown.push(c)
-            } else {
-                shrunk.push(c)
-            }
-        }
-    }
-
-    let edges = |s: Option<&Snapshot>| -> BTreeSet<(String, String)> {
-        s.map(|s| {
-            s.edges
-                .iter()
-                .map(|e| (e.from.clone(), e.to.clone()))
-                .collect()
-        })
-        .unwrap_or_default()
-    };
-    let (old_e, new_e) = (edges(before), edges(Some(after)));
-    let pkgs = |s: Option<&Snapshot>| -> BTreeSet<String> {
-        s.map(|s| s.externals.keys().cloned().collect())
-            .unwrap_or_default()
-    };
-    let (old_p, new_p) = (pkgs(before), pkgs(Some(after)));
-
-    let mut d = Diff {
-        added_modules: if before.is_none() {
-            Vec::new()
-        } else {
-            new.difference(&old).cloned().collect()
-        },
-        removed_modules: old.difference(&new).cloned().collect(),
+    let (old_modules, new_modules) = (module_names(before), module_names(after));
+    let (old_edges, new_edges) = (edge_pairs(before), edge_pairs(after));
+    let (old_packages, new_packages) = (package_names(before), package_names(after));
+    let (grown, shrunk) = size_changes(before, after);
+    let mut diff = Diff {
+        added_modules: new_modules.difference(&old_modules).cloned().collect(),
+        removed_modules: old_modules.difference(&new_modules).cloned().collect(),
         grown,
         shrunk,
-        added_edges: if before.is_none() {
-            Vec::new()
-        } else {
-            new_e.difference(&old_e).cloned().collect()
-        },
-        removed_edges: old_e.difference(&new_e).cloned().collect(),
-        added_packages: if before.is_none() {
-            Vec::new()
-        } else {
-            new_p.difference(&old_p).cloned().collect()
-        },
-        removed_packages: old_p.difference(&new_p).cloned().collect(),
+        added_edges: new_edges.difference(&old_edges).cloned().collect(),
+        removed_edges: old_edges.difference(&new_edges).cloned().collect(),
+        added_packages: new_packages.difference(&old_packages).cloned().collect(),
+        removed_packages: old_packages.difference(&new_packages).cloned().collect(),
         summary: Vec::new(),
     };
-    d.summary = summarize(&d, before.is_none(), after);
-    if let Some(b) = before {
-        let mut lines = crate::system::diff_lines(&b.system, &after.system);
-        if !lines.is_empty() {
-            d.summary
-                .retain(|l| l != "No structural changes this week.");
-            lines.append(&mut d.summary);
-            d.summary = lines;
-        }
+    let mut summary = crate::system::diff_lines(&before.system, &after.system);
+    summary.extend(change_lines(&diff));
+    if summary.is_empty() {
+        summary.push(NO_CHANGES.into());
     }
-    d
+    diff.summary = summary;
+    diff
 }
 
-fn summarize(d: &Diff, first: bool, after: &Snapshot) -> Vec<String> {
-    let mut s = Vec::new();
-    if first {
-        s.push(format!(
+fn first_diff(after: &Snapshot) -> Diff {
+    Diff {
+        added_modules: Vec::new(),
+        removed_modules: Vec::new(),
+        grown: Vec::new(),
+        shrunk: Vec::new(),
+        added_edges: Vec::new(),
+        removed_edges: Vec::new(),
+        added_packages: Vec::new(),
+        removed_packages: Vec::new(),
+        summary: vec![format!(
             "First snapshot: {} areas, {} files, {} lines of code.",
             after.modules.len(),
             after.stats.files,
             after.stats.lines
-        ));
-        return s;
+        )],
     }
+}
+
+fn module_names(snapshot: &Snapshot) -> BTreeSet<String> {
+    snapshot.modules.keys().cloned().collect()
+}
+
+fn edge_pairs(snapshot: &Snapshot) -> BTreeSet<(String, String)> {
+    snapshot
+        .edges
+        .iter()
+        .map(|edge| (edge.from.clone(), edge.to.clone()))
+        .collect()
+}
+
+fn package_names(snapshot: &Snapshot) -> BTreeSet<String> {
+    snapshot.externals.keys().cloned().collect()
+}
+
+fn size_changes(before: &Snapshot, after: &Snapshot) -> (Vec<SizeChange>, Vec<SizeChange>) {
+    after
+        .modules
+        .iter()
+        .filter_map(|(name, module)| {
+            let previous = before.modules.get(name)?;
+            Some(SizeChange {
+                module: name.clone(),
+                before: previous.lines,
+                after: module.lines,
+            })
+        })
+        .filter(SizeChange::is_notable)
+        .partition(SizeChange::grew)
+}
+
+fn change_lines(d: &Diff) -> Vec<String> {
+    let mut s = Vec::new();
     if !d.added_modules.is_empty() {
         s.push(format!(
             "{} new: {}.",
@@ -142,7 +147,7 @@ fn summarize(d: &Diff, first: bool, after: &Snapshot) -> Vec<String> {
             c.module,
             c.before,
             c.after,
-            pct(c)
+            c.percent()
         ));
     }
     for c in &d.shrunk {
@@ -151,7 +156,7 @@ fn summarize(d: &Diff, first: bool, after: &Snapshot) -> Vec<String> {
             c.module,
             c.before,
             c.after,
-            pct(c)
+            c.percent()
         ));
     }
     for (from, to) in &d.added_edges {
@@ -166,17 +171,9 @@ fn summarize(d: &Diff, first: bool, after: &Snapshot) -> Vec<String> {
     if !d.removed_packages.is_empty() {
         s.push(format!("Stopped using {}.", d.removed_packages.join(", ")));
     }
-    if s.is_empty() {
-        s.push("No structural changes this week.".into());
-    }
     s
 }
 
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
-}
-
-fn pct(c: &SizeChange) -> String {
-    let p = (c.after as f64 - c.before as f64) / c.before.max(1) as f64 * 100.0;
-    format!("{p:+.0}%")
 }

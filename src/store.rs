@@ -4,12 +4,12 @@ use std::path::{Path, PathBuf};
 use crate::diag::{Fatal, Warning};
 use crate::scan::{SCHEMA, Snapshot, TOOL_VERSION};
 
-pub struct Store {
-    pub out: PathBuf,
+pub(crate) struct Store {
+    pub(crate) out: PathBuf,
 }
 
 impl Store {
-    pub fn open(out: &Path) -> Result<Store, Fatal> {
+    pub(crate) fn open(out: &Path) -> Result<Store, Fatal> {
         let fail = |source| Fatal::OutputNotWritable {
             path: out.to_path_buf(),
             source,
@@ -17,7 +17,7 @@ impl Store {
         fs::create_dir_all(out.join("snapshots")).map_err(fail)?;
         let probe = out.join(".write-test");
         fs::write(&probe, b"ok").map_err(fail)?;
-        let _ = fs::remove_file(probe);
+        fs::remove_file(probe).map_err(fail)?;
         Ok(Store {
             out: out.to_path_buf(),
         })
@@ -27,7 +27,7 @@ impl Store {
         self.out.join("snapshots").join(format!("{week}.json"))
     }
 
-    pub fn load(
+    pub(crate) fn load(
         &self,
         week: &str,
         sha: &str,
@@ -55,13 +55,14 @@ impl Store {
         }
     }
 
-    pub fn save(&self, snap: &Snapshot) -> Result<(), Fatal> {
+    pub(crate) fn save(&self, snap: &Snapshot) -> Result<(), Fatal> {
         let p = self.path(&snap.week);
-        let json = serde_json::to_string_pretty(snap).expect("snapshot serializes");
+        let json = serde_json::to_string_pretty(snap)
+            .map_err(|error| Fatal::internal("encoding a snapshot", &error))?;
         fs::write(&p, json).map_err(|source| Fatal::OutputNotWritable { path: p, source })
     }
 
-    pub fn write_report(&self, html: &str) -> Result<PathBuf, Fatal> {
+    pub(crate) fn write_report(&self, html: &str) -> Result<PathBuf, Fatal> {
         let p = self.out.join("index.html");
         fs::write(&p, html).map_err(|source| Fatal::OutputNotWritable {
             path: p.clone(),
