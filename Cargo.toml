@@ -26,3 +26,31 @@ toml = "1.1.6"
 assert_cmd = "2.2.2"
 predicates = "3.1.4"
 tempfile = "3.27.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+dead_code = "deny"
+unreachable_pub = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+todo = "deny"
+unimplemented = "deny"
+arithmetic_side_effects = "deny"
+as_conversions = "deny"
+wildcard_enum_match_arm = "deny"
+map_err_ignore = "deny"
+let_underscore_must_use = "deny"
+shadow_unrelated = "deny"
+shadow_reuse = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+cognitive_complexity = "deny"
+needless_pass_by_ref_mut = "deny"

@@ -1,11 +1,17 @@
-use std::io::IsTerminal;
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 
-use oxc_diagnostics::{GraphicalReportHandler, GraphicalTheme, NamedSource, OxcDiagnostic};
+use oxc_diagnostics::{
+    GraphicalReportHandler, GraphicalTheme, LabeledSpan, NamedSource, OxcDiagnostic,
+};
 use serde::Serialize;
 
+pub(crate) const INTERNAL_ERROR_EXIT: u8 = 70;
+pub(crate) const BUG_REPORT_HELP: &str =
+    "this is a bug in earnest; please report it with the command you ran";
+
 #[derive(Debug, thiserror::Error)]
-pub enum Fatal {
+pub(crate) enum Fatal {
     #[error("{} is not inside a git repository", .0.display())]
     NotGitRepo(PathBuf),
     #[error("{} has no commits yet", .0.display())]
@@ -19,16 +25,33 @@ pub enum Fatal {
         path: PathBuf,
         source: std::io::Error,
     },
+    #[error("can't write to stderr: {0}")]
+    StderrNotWritable(std::io::Error),
+    #[error("internal error: {context}: {detail}")]
+    Internal {
+        context: &'static str,
+        detail: String,
+    },
     #[error("{0} warning(s) and --strict is set")]
     Strict(usize),
 }
 
 impl Fatal {
-    pub fn exit_code(&self) -> i32 {
+    pub(crate) fn exit_code(&self) -> u8 {
         match self {
             Fatal::Strict(_) => 1,
             Fatal::NotGitRepo(_) | Fatal::NoCommits(_) | Fatal::GitMissing => 2,
-            Fatal::GitFailed { .. } | Fatal::OutputNotWritable { .. } => 3,
+            Fatal::GitFailed { .. }
+            | Fatal::OutputNotWritable { .. }
+            | Fatal::StderrNotWritable(_) => 3,
+            Fatal::Internal { .. } => INTERNAL_ERROR_EXIT,
+        }
+    }
+
+    pub(crate) fn internal(context: &'static str, error: &impl std::fmt::Display) -> Fatal {
+        Fatal::Internal {
+            context,
+            detail: error.to_string(),
         }
     }
 
@@ -39,6 +62,8 @@ impl Fatal {
             Fatal::GitMissing => "git_missing",
             Fatal::GitFailed { .. } => "git_failed",
             Fatal::OutputNotWritable { .. } => "output_not_writable",
+            Fatal::StderrNotWritable(_) => "stderr_not_writable",
+            Fatal::Internal { .. } => "internal_error",
             Fatal::Strict(_) => "strict",
         }
     }
@@ -52,36 +77,50 @@ impl Fatal {
             Fatal::OutputNotWritable { .. } => {
                 "check the folder exists and is writable, or pass --out <dir>"
             }
+            Fatal::StderrNotWritable(_) => "keep stderr open until earnest exits",
+            Fatal::Internal { .. } => BUG_REPORT_HELP,
             Fatal::Strict(_) => "the report was still written; drop --strict to exit 0 on warnings",
         }
     }
 
-    pub fn print(&self) {
-        let d = OxcDiagnostic::error(self.to_string())
+    pub(crate) fn print(&self) -> Result<(), Fatal> {
+        let diagnostic = OxcDiagnostic::error(self.to_string())
             .with_error_code("earnest", self.code())
             .with_help(self.help());
-        eprint!("{}", render(d, None));
+        write_stderr(&render(diagnostic, None)?)
     }
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct Warning {
-    pub code: &'static str,
-    pub message: String,
-    pub file: Option<String>,
-    pub help: String,
+pub(crate) struct Warning {
+    pub(crate) code: &'static str,
+    pub(crate) message: String,
+    pub(crate) file: Option<String>,
+    pub(crate) help: String,
     #[serde(skip)]
-    pub source: Option<Source>,
+    pub(crate) source: Option<Source>,
 }
 
 #[derive(Debug, Clone)]
-pub struct Source {
-    pub text: String,
-    pub labels: Vec<(u32, u32, Option<String>)>,
+pub(crate) struct Source {
+    pub(crate) text: String,
+    pub(crate) labels: Vec<(u32, u32, Option<String>)>,
+}
+
+impl Source {
+    fn labeled_spans(&self) -> impl Iterator<Item = LabeledSpan> {
+        self.labels.iter().map(|(start, end, label)| {
+            LabeledSpan::new_with_span(label.clone(), oxc_span::Span::new(*start, *end))
+        })
+    }
 }
 
 impl Warning {
-    pub fn new(code: &'static str, message: impl Into<String>, help: impl Into<String>) -> Self {
+    pub(crate) fn new(
+        code: &'static str,
+        message: impl Into<String>,
+        help: impl Into<String>,
+    ) -> Self {
         Warning {
             code,
             message: message.into(),
@@ -91,35 +130,36 @@ impl Warning {
         }
     }
 
-    pub fn in_file(mut self, file: &str, source: Source) -> Self {
+    pub(crate) fn in_file(mut self, file: &str, source: Source) -> Self {
         self.file = Some(file.to_string());
         self.source = Some(source);
         self
     }
 
-    pub fn print(&self) {
-        let mut d = OxcDiagnostic::warn(self.message.clone())
+    pub(crate) fn print(&self) -> Result<(), Fatal> {
+        let diagnostic = OxcDiagnostic::warn(self.message.clone())
             .with_error_code("earnest", self.code)
             .with_help(self.help.clone());
-        let src = match (&self.file, &self.source) {
-            (Some(file), Some(src)) => {
-                for (start, end, label) in &src.labels {
-                    let span = oxc_span::Span::new(*start, *end);
-                    d = d.and_label(oxc_diagnostics::LabeledSpan::new_with_span(
-                        label.clone(),
-                        span,
-                    ));
-                }
-                Some((file.as_str(), src.text.clone()))
-            }
-            _ => None,
+        let rendered = match (&self.file, &self.source) {
+            (Some(file), Some(source)) => render(
+                diagnostic.and_labels(source.labeled_spans()),
+                Some((file.as_str(), source.text.clone())),
+            )?,
+            (None, _) | (_, None) => render(diagnostic, None)?,
         };
-        eprint!("{}", render(d, src));
+        write_stderr(&rendered)
     }
 }
 
-fn render(d: OxcDiagnostic, source: Option<(&str, String)>) -> String {
-    let color = std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+fn write_stderr(text: &str) -> Result<(), Fatal> {
+    io::stderr()
+        .lock()
+        .write_all(text.as_bytes())
+        .map_err(Fatal::StderrNotWritable)
+}
+
+fn render(diagnostic: OxcDiagnostic, source: Option<(&str, String)>) -> Result<String, Fatal> {
+    let color = io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
     let theme = if color {
         GraphicalTheme::unicode()
     } else {
@@ -127,12 +167,13 @@ fn render(d: OxcDiagnostic, source: Option<(&str, String)>) -> String {
     };
     let handler = GraphicalReportHandler::new_themed(theme).with_links(false);
     let mut out = String::new();
-    let _ = match source {
+    let rendered = match source {
         Some((name, text)) => {
-            let boxed = d.with_source_code(NamedSource::new(name, text));
-            handler.render_report(&mut out, boxed.as_ref())
+            let with_source = diagnostic.with_source_code(NamedSource::new(name, text));
+            handler.render_report(&mut out, with_source.as_ref())
         }
-        None => handler.render_report(&mut out, &d),
+        None => handler.render_report(&mut out, &diagnostic),
     };
-    out
+    rendered.map_err(|error| Fatal::internal("rendering a diagnostic", &error))?;
+    Ok(out)
 }
