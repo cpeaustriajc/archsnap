@@ -4,9 +4,9 @@
     "ask": [
       "Edit(/Cargo.toml)",
       "Bash(cargo add:*)",
-      "Bash(cargo remove:*)"
-    ],
-    "deny": [
+      "Bash(cargo remove:*)",
+      "Edit(/rule-tests/**)",
+      "Edit(/rules/**)",
       "Edit(clippy.toml)",
       "Edit(.clippy.toml)",
       "Edit(rustfmt.toml)",
@@ -23,8 +23,6 @@
       "Edit(/tests/behavior.rs)",
       "Edit(/AGENTS.md)",
       "Edit(/.claude/settings.json)",
-      "Edit(/rules/**)",
-      "Edit(/rule-tests/**)",
       "Edit(/sgconfig.yml)",
       "Edit(/.github/workflows/**)"
     ]
