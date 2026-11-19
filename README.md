@@ -60,7 +60,7 @@ fail        Turnstile  3 states  1 ms
 unfinished  Ledger  1000 states so far  3 ms  (state limit of 1000)
 unreadable  src/clock.model.ts
   src/clock.model.ts:12:17  `Date.now`  the system clock is outside the library
-4 models: 1 pass, 1 fail, 1 unfinished, 1 unreadable
+3 models: 1 pass, 1 fail, 1 unfinished; 1 unreadable file
 ```
 
 - The status word is `pass`, `fail`, `unfinished` or `unreadable`.
@@ -71,10 +71,13 @@ unreadable  src/clock.model.ts
   the action's id, its input as `name = value` when it has one, and each field that changed as
   `field: before -> after`.
 - `stuck`, `out of range` and `fault` findings have the same path form. A model is out of range
-  when an action gives a field a value outside what the field declares. A fault is a rule or an
+  when an action gives a field a value outside what the field declares. The state out of range
+  is counted, and nothing is searched from it. A fault is a rule or an
   action that can't be evaluated in a state, for example because it reads a field of `null`.
 - An `unreadable` file lists each problem as `file:line:column`, the feature in backticks and a
   sentence. No model in that file is checked.
+- The summary line counts models. Unreadable files are counted after a semicolon, and only when
+  there are some.
 - Values print as `"text"`, `12`, `true`, `null`, `{a, b}` for a set, `[a, b]` for a sequence or
   queue, `{k -> v}` for a map and `{name: value}` for a record.
 
@@ -238,7 +241,8 @@ export type State = m.Infer<typeof AddToCartFocus>;
   helper functions written as arrow functions.
 - `type` and `interface` declarations.
 - In a function: literals, `null`, field and input reads, `===`, `!==`, `<`, `<=`, `>`, `>=`,
-  `&&`, `||`, `!`, `+`, `-`, `*`, `%`, the `? :` choice, object literals with spread, calls to the
+  `&&`, `||`, `!`, `+`, `-` (also as a sign: `-1`), `*`, `%`, the `? :` choice, the `!` after a
+  value that TypeScript needs to read a field of an optional (`s.chosen!.qty`), object literals with spread, calls to the
   primitives below and to helper functions, and template strings in `view` labels. A function
   body is one expression, or a block of `const` declarations and `if (...) return ...;`
   statements that ends in a `return`.
