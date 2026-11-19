@@ -4,7 +4,7 @@ name: dossier
 description: >
   This skill should be used when the user says "note that down as a decision", "what did we decide
   about X", "supersede that decision", "record this research" or "set up this project". It keeps
-  archsnap's dossier: decision and research pages in a Claude Doc. Agent rules: the instruction
+  earnest's dossier: decision and research pages in a Claude Doc. Agent rules: the instruction
   file.
 ---
 
@@ -30,7 +30,7 @@ go in the project's instruction file. Paths are relative to this skill's folder.
 
 ## Backend
 
-The dossier is one private Claude Doc named "archsnap dossier", served by the Claude Docs tools
+The dossier is one private Claude Doc named "earnest dossier", served by the Claude Docs tools
 (`read`, `update`, `batch`, `create`, `guide`). This repository is public, so it holds no link to
 the doc: the link comes from the user map (`references/locate.md`, step 2), keyed by
 `git remote get-url origin`. Load the docs skill, or `guide( items = ["topic.index"] )`, before

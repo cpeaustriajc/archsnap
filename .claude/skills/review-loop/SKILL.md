@@ -12,7 +12,7 @@ an orchestrator does not run it for a thread. Paths are relative to this skill's
 
 ## Project commands
 
-archsnap is one Rust crate. Run these from the repository root.
+earnest is one Rust crate. Run these from the repository root.
 
 - **Verify**: `cargo fmt --check`, then `cargo clippy --all-targets -- -D warnings`, then
   `cargo test`. The change's issue may name a further check, such as a model compared with TLC;
