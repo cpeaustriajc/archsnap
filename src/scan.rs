@@ -1188,6 +1188,7 @@ fn skip_parenthesized(chars: &mut impl Iterator<Item = char>) {
     }
 }
 
+#[derive(Debug, PartialEq)]
 enum Target {
     File(String),
     Asset,
@@ -1315,3 +1316,6 @@ fn resolve(base: &str, files: &BTreeSet<&str>) -> Option<String> {
         .into_iter()
         .find(|candidate| files.contains(candidate.as_str()))
 }
+
+#[cfg(test)]
+mod properties;
