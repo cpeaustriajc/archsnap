@@ -19,6 +19,9 @@ env:
   AST_GREP_VERSION: 0.51.3
   CARGO_DENY_VERSION: 0.21.0
   CARGO_MACHETE_VERSION: 0.9.1
+  VERUS_VERSION: 0.2026.11.02.8bf68ee
+  VERUS_SHA256: f3a0119292df8855e4435da8130bee1873b0e6a60c306accf81a08ea687bba3c
+  VERUS_TOOLCHAIN: 1.99.1
 
 jobs:
   check:
@@ -33,9 +36,18 @@ jobs:
       - run: sudo npm install --global "rust-just@$JUST_VERSION" "@ast-grep/cli@$AST_GREP_VERSION"
       - uses: actions/cache@v4
         with:
-          path: ~/.cargo/bin
-          key: cargo-bin-${{ runner.os }}-${{ env.RUST_VERSION }}-deny-${{ env.CARGO_DENY_VERSION }}-machete-${{ env.CARGO_MACHETE_VERSION }}
-      - run: cargo install --locked "cargo-deny@$CARGO_DENY_VERSION" "cargo-machete@$CARGO_MACHETE_VERSION"
+          path: ~/cargo-tools
+          key: cargo-tools-${{ runner.os }}-${{ env.RUST_VERSION }}-deny-${{ env.CARGO_DENY_VERSION }}-machete-${{ env.CARGO_MACHETE_VERSION }}
+      - run: cargo install --locked --root "$HOME/cargo-tools" "cargo-deny@$CARGO_DENY_VERSION" "cargo-machete@$CARGO_MACHETE_VERSION"
+      - run: echo "$HOME/cargo-tools/bin" >> "$GITHUB_PATH"
+      - name: Install Verus
+        run: |
+          rustup toolchain install "$VERUS_TOOLCHAIN" --profile minimal --no-self-update
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/verus.zip" \
+            "https://github.com/verus-lang/verus/releases/download/release/$VERUS_VERSION/verus-$VERUS_VERSION-x86-linux.zip"
+          echo "$VERUS_SHA256  $RUNNER_TEMP/verus.zip" | sha256sum --check --quiet
+          unzip -q "$RUNNER_TEMP/verus.zip" -d "$HOME/verus"
+          echo "$HOME/verus/verus-x86-linux" >> "$GITHUB_PATH"
       - uses: actions/cache@v4
         with:
           path: |
