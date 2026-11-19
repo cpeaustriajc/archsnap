@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::diag::{Source, Warning};
+use crate::weekday::index_in_sunday_first_week;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub(crate) struct System {
@@ -1302,7 +1303,6 @@ const WEEKDAYS: [(&str, &str); 7] = [
     ("Fri", "Friday"),
     ("Sat", "Saturday"),
 ];
-const DAYS_IN_WEEK: u32 = 7;
 
 fn describe_cron(expression: &str) -> String {
     describe_schedule(expression).unwrap_or_else(|| format!("Schedule {expression}"))
@@ -1352,7 +1352,7 @@ fn clock_time(minute: &str, hour: &str) -> Option<String> {
 
 fn weekday_name(field: &str) -> Option<&'static str> {
     if let Some(number) = cron_number(field) {
-        let index = usize::try_from(number % DAYS_IN_WEEK).ok()?;
+        let index = usize::try_from(index_in_sunday_first_week(number)).ok()?;
         return WEEKDAYS.get(index).map(|(_, name)| *name);
     }
     WEEKDAYS
