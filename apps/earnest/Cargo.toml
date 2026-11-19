@@ -8,8 +8,5 @@ publish.workspace = true
 name = "earnest"
 path = "src/main.rs"
 
-[dependencies]
-earnest_check.workspace = true
-
 [lints]
 workspace = true

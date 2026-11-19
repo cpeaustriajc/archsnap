@@ -110,9 +110,6 @@ dependencies = [
 [[package]]
 name = "earnest-cli"
 version = "0.1.0"
-dependencies = [
- "earnest_check",
-]
 
 [[package]]
 name = "earnest_check"
