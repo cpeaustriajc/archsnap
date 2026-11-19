@@ -133,7 +133,8 @@ Printed warnings come from the newest week only; older weeks just record counts.
 
 ## Tests
 
-End-to-end tests drive the real binary against throwaway git repos:
+Behavior tests in `tests/behavior/` drive the real binary against throwaway git repos. Property
+tests beside the code (`src/scan/properties.rs`, `src/diff/properties.rs`) check it on random input:
 
 ```sh
 cargo test
@@ -147,9 +148,11 @@ One command runs every check:
 just check
 ```
 
-The `justfile` lists the checks: `cargo fmt --check`, clippy with warnings denied, `cargo deny check`,
-`cargo machete` and the tests. It needs `just`, `cargo-deny` and `cargo-machete` on your `PATH`. `just fix` formats the code and applies clippy's
-fixes.
+The `justfile` lists the checks: `cargo fmt --check`, clippy with warnings denied, the ast-grep rule
+that forbids comments, `cargo deny check`, `cargo machete`, the tests and the Verus proofs
+(`cargo verus focus`). It needs `just`, `ast-grep`, `cargo-deny`, `cargo-machete` and Verus on your
+`PATH`; `.github/workflows/check.yml` pins the version of each. `just fix` formats the code and
+applies clippy's fixes. `just mutants` runs cargo-mutants on demand and takes about 20 minutes.
 
 To run the checks before each commit, enable the hook once per clone:
 
