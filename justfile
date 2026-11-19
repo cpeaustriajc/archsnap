@@ -1,7 +1,7 @@
 default: check
 
 # One recipe per check. To add a check, write its recipe and name it here.
-check: format lint comments dependencies unused-dependencies test verify
+check: format comments unused-dependencies dependencies lint test verify
 
 format:
     cargo fmt --check

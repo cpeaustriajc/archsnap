@@ -25,7 +25,8 @@
       "Edit(/.claude/settings.json)",
       "Edit(/rules/**)",
       "Edit(/rule-tests/**)",
-      "Edit(/sgconfig.yml)"
+      "Edit(/sgconfig.yml)",
+      "Edit(/.github/workflows/**)"
     ]
   },
   "hooks": {
@@ -52,7 +53,7 @@
           },
           {
             "type": "command",
-            "command": "grep -Eq '\"file_path\" *: *\"[^\"]*\\.rs\"' || exit 0; cd \"$CLAUDE_PROJECT_DIR\" || exit 2; out=$(cargo check --all-targets --locked --message-format=short 2>&1) || { printf '%s\\n' \"$out\" | tail -n 40 >&2; exit 2; }",
+            "command": "edited=$(jq -r '.tool_input.file_path // empty'); case \"$edited\" in *.rs) ;; *) exit 0 ;; esac; cd \"$(dirname \"$edited\")\" 2>/dev/null && cargo locate-project >/dev/null 2>&1 || exit 0; out=$(cargo check --all-targets --message-format=short 2>&1) || { printf '%s\\n' \"$out\" | tail -n 40 >&2; exit 2; }",
             "timeout": 300
           }
         ]
@@ -79,7 +80,7 @@
           },
           {
             "type": "command",
-            "command": "cd \"$CLAUDE_PROJECT_DIR\" || exit 2; command -v just >/dev/null || { echo \"Stop hook: just is not on PATH. Install it, then run just check.\" >&2; exit 2; }; out=$(just check 2>&1) || { printf '%s\\n' \"$out\" | tail -n 80 >&2; exit 2; }",
+            "command": "command -v just >/dev/null || { echo \"Stop hook: just is not on PATH. Install it, then run just check.\" >&2; exit 2; }; cd \"$(jq -r '.cwd // empty')\" 2>/dev/null && just --summary >/dev/null 2>&1 || cd \"$CLAUDE_PROJECT_DIR\" || exit 2; out=$(just check 2>&1) || { printf '%s\\n' \"$out\" | tail -n 80 >&2; exit 2; }",
             "timeout": 900
           }
         ]
