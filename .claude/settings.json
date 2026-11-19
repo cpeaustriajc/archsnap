@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Edit(clippy.toml)",
+      "Edit(.clippy.toml)",
+      "Edit(rustfmt.toml)",
+      "Edit(.rustfmt.toml)",
+      "Edit(deny.toml)",
+      "Edit(.deny.toml)",
+      "Edit([Jj][Uu][Ss][Tt][Ff][Ii][Ll][Ee])",
+      "Edit(.[Jj][Uu][Ss][Tt][Ff][Ii][Ll][Ee])",
+      "Edit(sgconfig.yml)",
+      "Edit(sgconfig.yaml)",
+      "Edit(.ignore)",
+      "Edit(.gitignore)",
+      "Edit(rust-toolchain)",
+      "Edit(rust-toolchain.toml)",
+      "Edit(.cargo/**)",
+      "Edit(/.githooks/**)",
+      "Edit(/rules/**)",
+      "Edit(/rule-tests/**)",
+      "Edit(/tests/behavior/**)",
+      "Edit(/tests/behavior.rs)",
+      "Edit(/.claude/settings.json)"
+    ]
+  }
+}
