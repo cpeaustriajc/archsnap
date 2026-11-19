@@ -30,7 +30,10 @@ impl Git {
         }
         let root = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
         let git = Git { root, verbose };
-        if !raw(&git.root, &["rev-parse", "--verify", "-q", "HEAD"], verbose)?.status.success() {
+        if !raw(&git.root, &["rev-parse", "--verify", "-q", "HEAD"], verbose)?
+            .status
+            .success()
+        {
             return Err(Fatal::NoCommits(git.root));
         }
         Ok(git)
@@ -51,13 +54,18 @@ impl Git {
         let mut points: Vec<WeekPoint> = Vec::new();
         for line in log.lines() {
             let mut parts = line.split('\t');
-            let (Some(sha), Some(week), Some(date)) = (parts.next(), parts.next(), parts.next()) else {
+            let (Some(sha), Some(week), Some(date)) = (parts.next(), parts.next(), parts.next())
+            else {
                 continue;
             };
             if points.iter().any(|p| p.week == week) {
                 continue;
             }
-            points.push(WeekPoint { week: week.into(), sha: sha.into(), date: date.into() });
+            points.push(WeekPoint {
+                week: week.into(),
+                sha: sha.into(),
+                date: date.into(),
+            });
             if points.len() == max {
                 break;
             }
@@ -69,7 +77,9 @@ impl Git {
         let out = self.run(&["ls-tree", "-r", "-l", "-z", sha])?;
         let mut entries = Vec::new();
         for rec in out.split('\0').filter(|r| !r.is_empty()) {
-            let Some((meta, path)) = rec.split_once('\t') else { continue };
+            let Some((meta, path)) = rec.split_once('\t') else {
+                continue;
+            };
             let f: Vec<&str> = meta.split_whitespace().collect();
             // Mode 120000 blobs are symlinks: their content is the link target, not code.
             if f.len() == 4 && f[1] == "blob" && f[0] != "120000" {
@@ -77,7 +87,11 @@ impl Git {
                     args: format!("ls-tree -r -l {sha}"),
                     stderr: format!("object {} for {path} is missing or corrupt", f[2]),
                 })?;
-                entries.push(TreeEntry { path: path.into(), oid: f[2].into(), size });
+                entries.push(TreeEntry {
+                    path: path.into(),
+                    oid: f[2].into(),
+                    size,
+                });
             }
         }
         Ok(entries)
@@ -104,17 +118,24 @@ impl Git {
         let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
         let mut reader = BufReader::new(child.stdout.take().expect("piped stdout"));
         let mut blobs = Vec::with_capacity(oids.len());
-        let failed = |why: &str| Fatal::GitFailed { args: "cat-file --batch".into(), stderr: why.into() };
+        let failed = |why: &str| Fatal::GitFailed {
+            args: "cat-file --batch".into(),
+            stderr: why.into(),
+        };
         for _ in oids {
             let mut header = String::new();
-            reader.read_line(&mut header).map_err(|e| failed(&e.to_string()))?;
+            reader
+                .read_line(&mut header)
+                .map_err(|e| failed(&e.to_string()))?;
             let size: usize = header
                 .split_whitespace()
                 .nth(2)
                 .and_then(|s| s.parse().ok())
                 .ok_or_else(|| failed(header.trim()))?;
             let mut buf = vec![0; size + 1];
-            reader.read_exact(&mut buf).map_err(|e| failed(&e.to_string()))?;
+            reader
+                .read_exact(&mut buf)
+                .map_err(|e| failed(&e.to_string()))?;
             buf.pop();
             blobs.push(buf);
         }
@@ -139,13 +160,20 @@ fn raw(dir: &Path, args: &[&str], verbose: bool) -> Result<std::process::Output,
     if verbose {
         eprintln!("  $ git {}", args.join(" "));
     }
-    Command::new("git").args(args).current_dir(dir).output().map_err(spawn_err)
+    Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .map_err(spawn_err)
 }
 
 fn spawn_err(e: std::io::Error) -> Fatal {
     if e.kind() == std::io::ErrorKind::NotFound {
         Fatal::GitMissing
     } else {
-        Fatal::GitFailed { args: String::new(), stderr: e.to_string() }
+        Fatal::GitFailed {
+            args: String::new(),
+            stderr: e.to_string(),
+        }
     }
 }

@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
-    Argument, BindingPattern, CallExpression, Expression, JSXAttribute, NewExpression, ObjectProperty, PropertyKey,
-    StringLiteral, TemplateElement, VariableDeclarator,
+    Argument, BindingPattern, CallExpression, Expression, JSXAttribute, NewExpression,
+    ObjectProperty, PropertyKey, StringLiteral, TemplateElement, VariableDeclarator,
 };
 use oxc_ast_visit::{Visit, walk};
 use oxc_parser::Parser;
@@ -18,12 +18,20 @@ use crate::system::{self, Package, System};
 pub const SCHEMA: u32 = 3;
 pub const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
 const ASSET_EXTENSIONS: &[&str] = &[
-    "css", "scss", "sass", "less", "svg", "png", "jpg", "jpeg", "gif", "webp", "avif", "ico", "json",
-    "woff", "woff2", "ttf", "md", "mdx", "html", "txt", "wasm",
+    "css", "scss", "sass", "less", "svg", "png", "jpg", "jpeg", "gif", "webp", "avif", "ico",
+    "json", "woff", "woff2", "ttf", "md", "mdx", "html", "txt", "wasm",
 ];
 const EXTENSIONS: &[&str] = &["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"];
-const IGNORED_DIRS: &[&str] =
-    &["node_modules", "dist", "build", "out", "coverage", "vendor", ".next", ".archsnap"];
+const IGNORED_DIRS: &[&str] = &[
+    "node_modules",
+    "dist",
+    "build",
+    "out",
+    "coverage",
+    "vendor",
+    ".next",
+    ".archsnap",
+];
 const MAX_FILE_BYTES: u64 = 512 * 1024;
 const MAX_LINKS_PER_EDGE: usize = 200;
 
@@ -102,11 +110,18 @@ fn role(e: &TreeEntry) -> Option<Role> {
         return Some(Role::Swift);
     }
     let dts = name.ends_with(".d.ts") || name.ends_with(".d.mts") || name.ends_with(".d.cts");
-    let code = name.rsplit_once('.').is_some_and(|(_, ext)| EXTENSIONS.contains(&ext));
+    let code = name
+        .rsplit_once('.')
+        .is_some_and(|(_, ext)| EXTENSIONS.contains(&ext));
     (code && !dts).then_some(Role::Source)
 }
 
-pub fn scan(git: &Git, point: &WeekPoint, depth: usize, warnings: &mut Vec<Warning>) -> Result<Snapshot, Fatal> {
+pub fn scan(
+    git: &Git,
+    point: &WeekPoint,
+    depth: usize,
+    warnings: &mut Vec<Warning>,
+) -> Result<Snapshot, Fatal> {
     let mut stats = Stats::default();
     let tree = git.tree(&point.sha)?;
     let committed: BTreeSet<&str> = tree.iter().map(|e| e.path.as_str()).collect();
@@ -143,15 +158,32 @@ pub fn scan(git: &Git, point: &WeekPoint, depth: usize, warnings: &mut Vec<Warni
             Role::Package => packages.extend(system::parse_package(&entry.path, &text, warnings)),
             Role::Wrangler => wranglers.push((entry.path.clone(), text)),
             Role::Swift => {
-                urls.extend(swift_urls(&text).into_iter().map(|h| (entry.path.clone(), h)));
+                urls.extend(
+                    swift_urls(&text)
+                        .into_iter()
+                        .map(|h| (entry.path.clone(), h)),
+                );
                 let paths = swift_api_paths(&text);
                 if !paths.is_empty() {
-                    code.push((entry.path.clone(), system::CodeFacts { paths, ..Default::default() }));
+                    code.push((
+                        entry.path.clone(),
+                        system::CodeFacts {
+                            paths,
+                            ..Default::default()
+                        },
+                    ));
                 }
             }
             Role::XcodeGen => {
-                let name = text.lines().find_map(|l| l.strip_prefix("name:")).map(|n| n.trim().trim_matches('"').to_string());
-                let dir = entry.path.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
+                let name = text
+                    .lines()
+                    .find_map(|l| l.strip_prefix("name:"))
+                    .map(|n| n.trim().trim_matches('"').to_string());
+                let dir = entry
+                    .path
+                    .rsplit_once('/')
+                    .map(|(d, _)| d.to_string())
+                    .unwrap_or_default();
                 if let Some(name) = name.filter(|n| !n.is_empty()) {
                     xcodegen.push((dir, name));
                 }
@@ -187,15 +219,27 @@ pub fn scan(git: &Git, point: &WeekPoint, depth: usize, warnings: &mut Vec<Warni
         let m = modules.entry(from.clone()).or_default();
         m.files += 1;
         m.lines += text.lines().count() as u32;
-        m.package = system::package_of(&packages, path).map(|p| p.dir.clone()).unwrap_or_default();
+        m.package = system::package_of(&packages, path)
+            .map(|p| p.dir.clone())
+            .unwrap_or_default();
         stats.files += 1;
         urls.extend(parsed.hosts.into_iter().map(|h| (path.to_string(), h)));
         let mut http = parsed.http;
         // A literal inside fetch("/api/x", { method }) is also seen on its own, without the method.
-        let known: BTreeSet<String> = http.paths.iter().filter(|(_, m)| m.is_some()).map(|(p, _)| p.clone()).collect();
-        let defined: BTreeSet<String> =
-            http.routes.iter().map(|(_, p, _)| p.clone()).chain(http.mounts.iter().map(|(_, p, _)| p.clone())).collect();
-        http.paths.retain(|(p, m)| (m.is_some() || !known.contains(p)) && !defined.contains(p));
+        let known: BTreeSet<String> = http
+            .paths
+            .iter()
+            .filter(|(_, m)| m.is_some())
+            .map(|(p, _)| p.clone())
+            .collect();
+        let defined: BTreeSet<String> = http
+            .routes
+            .iter()
+            .map(|(_, p, _)| p.clone())
+            .chain(http.mounts.iter().map(|(_, p, _)| p.clone()))
+            .collect();
+        http.paths
+            .retain(|(p, m)| (m.is_some() || !known.contains(p)) && !defined.contains(p));
         code.push((path.to_string(), http));
 
         for imp in parsed.imports {
@@ -205,7 +249,10 @@ pub fn scan(git: &Git, point: &WeekPoint, depth: usize, warnings: &mut Vec<Warni
                     if to != from {
                         let (count, links) = edges.entry((from.clone(), to)).or_default();
                         *count += 1;
-                        links.entry((path.to_string(), target)).or_default().extend(imp.names);
+                        links
+                            .entry((path.to_string(), target))
+                            .or_default()
+                            .extend(imp.names);
                     }
                 }
                 Target::File(_) | Target::Asset => {}
@@ -240,7 +287,10 @@ pub fn scan(git: &Git, point: &WeekPoint, depth: usize, warnings: &mut Vec<Warni
         })
         .collect();
     xcode.extend(xcodegen);
-    let areas: Vec<(String, String)> = modules.iter().map(|(a, m)| (a.clone(), m.package.clone())).collect();
+    let areas: Vec<(String, String)> = modules
+        .iter()
+        .map(|(a, m)| (a.clone(), m.package.clone()))
+        .collect();
     let area_of_file = |file: &str| area_of(file, depth, &packages);
     let system = system::detect(
         system::Inputs {
@@ -265,7 +315,11 @@ pub fn scan(git: &Git, point: &WeekPoint, depth: usize, warnings: &mut Vec<Warni
             links: links
                 .into_iter()
                 .take(MAX_LINKS_PER_EDGE)
-                .map(|((from, to), names)| Link { from, to, names: names.into_iter().collect() })
+                .map(|((from, to), names)| Link {
+                    from,
+                    to,
+                    names: names.into_iter().collect(),
+                })
                 .collect(),
         })
         .collect();
@@ -287,8 +341,14 @@ pub fn scan(git: &Git, point: &WeekPoint, depth: usize, warnings: &mut Vec<Warni
 
 /// `depth` folder levels below the file's package (skipping a leading `src/`).
 pub fn area_of(path: &str, depth: usize, packages: &[Package]) -> String {
-    let root = system::package_of(packages, path).map(|p| p.dir.as_str()).unwrap_or("");
-    let rest = if root.is_empty() { path } else { &path[root.len() + 1..] };
+    let root = system::package_of(packages, path)
+        .map(|p| p.dir.as_str())
+        .unwrap_or("");
+    let rest = if root.is_empty() {
+        path
+    } else {
+        &path[root.len() + 1..]
+    };
     let mut dirs: Vec<&str> = rest.split('/').collect();
     dirs.pop();
     let had_src = dirs.first() == Some(&"src");
@@ -300,7 +360,11 @@ pub fn area_of(path: &str, depth: usize, packages: &[Package]) -> String {
         prefix.push("src");
     }
     prefix.extend(dirs.iter().take(depth));
-    if prefix.is_empty() { "(root)".into() } else { prefix.join("/") }
+    if prefix.is_empty() {
+        "(root)".into()
+    } else {
+        prefix.join("/")
+    }
 }
 
 struct Import {
@@ -344,25 +408,74 @@ impl NetworkUrls {
     }
 }
 
-const CALLERS: &[&str] = &["fetch", "$fetch", "ofetch", "ky", "got", "axios", "request", "superagent"];
-const CLIENT_OBJECTS: &[&str] = &["axios", "ky", "got", "http", "https", "superagent", "request"];
+const CALLERS: &[&str] = &[
+    "fetch",
+    "$fetch",
+    "ofetch",
+    "ky",
+    "got",
+    "axios",
+    "request",
+    "superagent",
+];
+const CLIENT_OBJECTS: &[&str] = &[
+    "axios",
+    "ky",
+    "got",
+    "http",
+    "https",
+    "superagent",
+    "request",
+];
 const URL_CONSTRUCTORS: &[&str] = &["URL", "Request", "WebSocket", "EventSource"];
-const URL_KEYS: &[&str] = &["baseURL", "baseUrl", "prefixUrl", "endpoint", "apiUrl", "apiURL", "apiBase"];
+const URL_KEYS: &[&str] = &[
+    "baseURL",
+    "baseUrl",
+    "prefixUrl",
+    "endpoint",
+    "apiUrl",
+    "apiURL",
+    "apiBase",
+];
 const LINK_KEYS: &[&str] = &[
-    "href", "link", "links", "website", "homepage", "image", "images", "src", "logo", "icon", "avatar", "docs",
-    "docsUrl", "learnMore", "learnMoreUrl", "imageUrl", "thumbnail", "og", "openGraph", "twitter", "canonical",
+    "href",
+    "link",
+    "links",
+    "website",
+    "homepage",
+    "image",
+    "images",
+    "src",
+    "logo",
+    "icon",
+    "avatar",
+    "docs",
+    "docsUrl",
+    "learnMore",
+    "learnMoreUrl",
+    "imageUrl",
+    "thumbnail",
+    "og",
+    "openGraph",
+    "twitter",
+    "canonical",
 ];
 
 fn url_in(e: &Expression) -> Option<String> {
     match e {
         Expression::StringLiteral(s) => system::host_of(s.value.as_str()),
-        Expression::TemplateLiteral(t) => t.quasis.first().and_then(|q| system::host_of(q.value.raw.as_str())),
+        Expression::TemplateLiteral(t) => t
+            .quasis
+            .first()
+            .and_then(|q| system::host_of(q.value.raw.as_str())),
         _ => None,
     }
 }
 
 fn first_arg_url(args: &[Argument]) -> Option<String> {
-    args.first().and_then(|a| a.as_expression()).and_then(url_in)
+    args.first()
+        .and_then(|a| a.as_expression())
+        .and_then(url_in)
 }
 
 fn is_network_call(callee: &Expression) -> bool {
@@ -373,7 +486,11 @@ fn is_network_call(callee: &Expression) -> bool {
         }
         Expression::StaticMemberExpression(m) => {
             matches!(&m.object, Expression::Identifier(o) if CLIENT_OBJECTS.contains(&o.name.as_str()))
-                || m.property.name.as_str().to_ascii_lowercase().contains("fetch")
+                || m.property
+                    .name
+                    .as_str()
+                    .to_ascii_lowercase()
+                    .contains("fetch")
         }
         _ => false,
     }
@@ -393,7 +510,8 @@ impl<'a> Visit<'a> for NetworkUrls {
         walk::walk_call_expression(self, it);
     }
     fn visit_new_expression(&mut self, it: &NewExpression<'a>) {
-        if matches!(&it.callee, Expression::Identifier(i) if URL_CONSTRUCTORS.contains(&i.name.as_str())) {
+        if matches!(&it.callee, Expression::Identifier(i) if URL_CONSTRUCTORS.contains(&i.name.as_str()))
+        {
             self.direct.extend(first_arg_url(&it.arguments));
         }
         walk::walk_new_expression(self, it);
@@ -449,7 +567,13 @@ struct HttpFacts {
 fn path_pattern(e: &Expression) -> Option<String> {
     match e {
         Expression::StringLiteral(s) => Some(s.value.as_str().to_string()),
-        Expression::TemplateLiteral(t) => Some(t.quasis.iter().map(|q| q.value.raw.as_str()).collect::<Vec<_>>().join("*")),
+        Expression::TemplateLiteral(t) => Some(
+            t.quasis
+                .iter()
+                .map(|q| q.value.raw.as_str())
+                .collect::<Vec<_>>()
+                .join("*"),
+        ),
         _ => None,
     }
 }
@@ -468,10 +592,14 @@ fn router_root(e: &Expression, current: &Option<String>) -> Option<String> {
 }
 
 fn method_option(args: &[Argument]) -> Option<String> {
-    let Some(Expression::ObjectExpression(o)) = args.get(1).and_then(|a| a.as_expression()) else { return None };
+    let Some(Expression::ObjectExpression(o)) = args.get(1).and_then(|a| a.as_expression()) else {
+        return None;
+    };
     o.properties.iter().find_map(|p| match p {
         oxc_ast::ast::ObjectPropertyKind::ObjectProperty(p) => match (&p.key, &p.value) {
-            (PropertyKey::StaticIdentifier(k), Expression::StringLiteral(v)) if k.name.as_str() == "method" => {
+            (PropertyKey::StaticIdentifier(k), Expression::StringLiteral(v))
+                if k.name.as_str() == "method" =>
+            {
                 Some(v.value.as_str().to_ascii_uppercase())
             }
             _ => None,
@@ -494,18 +622,27 @@ impl<'a> Visit<'a> for HttpFacts {
         self.current_var = saved;
     }
     fn visit_call_expression(&mut self, it: &CallExpression<'a>) {
-        let first = it.arguments.first().and_then(|a| a.as_expression()).and_then(path_pattern);
+        let first = it
+            .arguments
+            .first()
+            .and_then(|a| a.as_expression())
+            .and_then(path_pattern);
         if let Expression::StaticMemberExpression(m) = &it.callee {
             let prop = m.property.name.as_str();
             if let Some(p) = first.as_ref().filter(|p| p.starts_with('/')) {
                 if HTTP_METHODS.contains(&prop) {
                     let root = router_root(&m.object, &self.current_var);
-                    self.facts.routes.push((prop.to_ascii_uppercase(), p.clone(), root));
+                    self.facts
+                        .routes
+                        .push((prop.to_ascii_uppercase(), p.clone(), root));
                 } else if prop == "route"
-                    && let Some(Expression::Identifier(child)) = it.arguments.get(1).and_then(|a| a.as_expression())
+                    && let Some(Expression::Identifier(child)) =
+                        it.arguments.get(1).and_then(|a| a.as_expression())
                 {
                     let parent = router_root(&m.object, &self.current_var);
-                    self.facts.mounts.push((parent, p.clone(), child.name.as_str().to_string()));
+                    self.facts
+                        .mounts
+                        .push((parent, p.clone(), child.name.as_str().to_string()));
                 }
             }
         }
@@ -520,7 +657,11 @@ impl<'a> Visit<'a> for HttpFacts {
     fn visit_object_property(&mut self, it: &ObjectProperty<'a>) {
         if let PropertyKey::StaticIdentifier(k) = &it.key {
             let name = k.name.as_str();
-            let is_fn = it.method || matches!(it.value, Expression::FunctionExpression(_) | Expression::ArrowFunctionExpression(_));
+            let is_fn = it.method
+                || matches!(
+                    it.value,
+                    Expression::FunctionExpression(_) | Expression::ArrowFunctionExpression(_)
+                );
             if is_fn && (name == "scheduled" || name == "queue") {
                 self.facts.handlers.push(name.to_string());
             }
@@ -547,7 +688,11 @@ fn parse(path: &str, text: &str) -> Result<Parsed, SyntaxError> {
             .labels
             .iter()
             .map(|l| {
-                let label = l.label().filter(|t| !t.is_empty()).unwrap_or(&message).to_string();
+                let label = l
+                    .label()
+                    .filter(|t| !t.is_empty())
+                    .unwrap_or(&message)
+                    .to_string();
                 let last = text.trim_end().len() as u32;
                 if l.offset() >= last && last > 0 {
                     // Spans at EOF sit past the last line and render as an empty box.
@@ -569,13 +714,24 @@ fn parse(path: &str, text: &str) -> Result<Parsed, SyntaxError> {
         };
         // report.html hides "type "-prefixed names from the plain-language views.
         let n = if e.is_type { format!("type {n}") } else { n };
-        names.entry(e.module_request.name.as_str()).or_default().insert(n);
+        names
+            .entry(e.module_request.name.as_str())
+            .or_default()
+            .insert(n);
     }
-    for e in record.indirect_export_entries.iter().chain(record.star_export_entries.iter()) {
-        let Some(req) = &e.module_request else { continue };
+    for e in record
+        .indirect_export_entries
+        .iter()
+        .chain(record.star_export_entries.iter())
+    {
+        let Some(req) = &e.module_request else {
+            continue;
+        };
         let n = match &e.import_name {
             ExportImportName::Name(n) => n.name.as_str().to_string(),
-            ExportImportName::All | ExportImportName::AllButDefault => "* (re-exported)".to_string(),
+            ExportImportName::All | ExportImportName::AllButDefault => {
+                "* (re-exported)".to_string()
+            }
             _ => continue,
         };
         names.entry(req.name.as_str()).or_default().insert(n);
@@ -584,15 +740,25 @@ fn parse(path: &str, text: &str) -> Result<Parsed, SyntaxError> {
     let mut imports = Vec::new();
     for (spec, uses) in record.requested_modules.iter() {
         let spec = spec.as_str();
-        let found: Vec<String> = names.get(spec).map(|s| s.iter().cloned().collect()).unwrap_or_default();
+        let found: Vec<String> = names
+            .get(spec)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default();
         for u in uses.iter() {
-            imports.push(Import { spec: spec.to_string(), start: u.span.start, end: u.span.end, names: found.clone() });
+            imports.push(Import {
+                spec: spec.to_string(),
+                start: u.span.start,
+                end: u.span.end,
+                names: found.clone(),
+            });
         }
     }
     for d in record.dynamic_imports.iter() {
         let raw = &text[d.module_request.start as usize..d.module_request.end as usize];
         let quoted = raw.len() >= 2
-            && (raw.starts_with('\'') || raw.starts_with('"') || (raw.starts_with('`') && !raw.contains("${")))
+            && (raw.starts_with('\'')
+                || raw.starts_with('"')
+                || (raw.starts_with('`') && !raw.contains("${")))
             && raw.ends_with(&raw[..1]);
         if quoted {
             imports.push(Import {
@@ -614,7 +780,11 @@ fn parse(path: &str, text: &str) -> Result<Parsed, SyntaxError> {
             http.facts.exports.push(n.name.as_str().to_string());
         }
     }
-    Ok(Parsed { imports, hosts: urls.hosts(), http: http.facts })
+    Ok(Parsed {
+        imports,
+        hosts: urls.hosts(),
+        http: http.facts,
+    })
 }
 
 /// Same rule as TS: a URL counts in a file that makes requests, or when its constant names an endpoint.
@@ -622,7 +792,9 @@ fn swift_urls(text: &str) -> Vec<String> {
     let requests = text.contains("URLSession") || text.contains("URLRequest");
     let mut hosts = Vec::new();
     for line in text.lines() {
-        let Some(i) = line.find("\"http") else { continue };
+        let Some(i) = line.find("\"http") else {
+            continue;
+        };
         let named = line
             .split(['=', ':'])
             .next()
@@ -643,7 +815,9 @@ fn swift_api_paths(text: &str) -> Vec<(String, Option<String>)> {
         if !(rest.starts_with("api/") || rest.starts_with("/api/")) {
             continue;
         }
-        let Some(end) = rest.find(['"', '\n']) else { continue };
+        let Some(end) = rest.find(['"', '\n']) else {
+            continue;
+        };
         let mut pattern = String::new();
         let mut chars = rest[..end].chars().peekable();
         while let Some(c) = chars.next() {
@@ -676,7 +850,9 @@ enum Target {
 
 fn classify(from: &str, spec: &str, files: &BTreeSet<&str>, packages: &[Package]) -> Target {
     let spec = spec.split(['?', '#']).next().unwrap_or(spec);
-    let is_asset = spec.rsplit_once('.').is_some_and(|(_, ext)| ASSET_EXTENSIONS.contains(&ext));
+    let is_asset = spec
+        .rsplit_once('.')
+        .is_some_and(|(_, ext)| ASSET_EXTENSIONS.contains(&ext));
     // A bare name like `normalize.css` is a package, not a file path.
     if is_asset && spec.contains('/') {
         return Target::Asset;
@@ -692,8 +868,13 @@ fn classify(from: &str, spec: &str, files: &BTreeSet<&str>, packages: &[Package]
     if let Some(rest) = spec.strip_prefix("@/").or_else(|| spec.strip_prefix("~/")) {
         let mut dir = from.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
         loop {
-            let base = if dir.is_empty() { String::new() } else { format!("{dir}/") };
-            let hit = resolve(&format!("{base}src/{rest}"), files).or_else(|| resolve(&format!("{base}{rest}"), files));
+            let base = if dir.is_empty() {
+                String::new()
+            } else {
+                format!("{dir}/")
+            };
+            let hit = resolve(&format!("{base}src/{rest}"), files)
+                .or_else(|| resolve(&format!("{base}{rest}"), files));
             if let Some(f) = hit {
                 return Target::File(f);
             }
@@ -714,7 +895,13 @@ fn classify(from: &str, spec: &str, files: &BTreeSet<&str>, packages: &[Package]
     };
     if let Some(pkg) = packages.iter().find(|p| p.name == name) {
         let sub = spec[name.len()..].trim_start_matches('/');
-        let base = |p: &str| if pkg.dir.is_empty() { p.to_string() } else { format!("{}/{p}", pkg.dir) };
+        let base = |p: &str| {
+            if pkg.dir.is_empty() {
+                p.to_string()
+            } else {
+                format!("{}/{p}", pkg.dir)
+            }
+        };
         let mut tries: Vec<String> = Vec::new();
         if sub.is_empty() {
             if let Some(main) = &pkg.main {
@@ -725,7 +912,11 @@ fn classify(from: &str, spec: &str, files: &BTreeSet<&str>, packages: &[Package]
             tries.extend([base(sub), base(&format!("src/{sub}"))]);
         }
         // A workspace package that only ships built files has nothing to link; it is still not external.
-        return tries.iter().find_map(|t| resolve(t, files)).map(Target::File).unwrap_or(Target::Asset);
+        return tries
+            .iter()
+            .find_map(|t| resolve(t, files))
+            .map(Target::File)
+            .unwrap_or(Target::Asset);
     }
     Target::Package(name)
 }
