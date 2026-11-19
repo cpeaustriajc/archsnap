@@ -2,7 +2,9 @@
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "ask": [
-      "Edit(/Cargo.toml)"
+      "Edit(/Cargo.toml)",
+      "Bash(cargo add:*)",
+      "Bash(cargo remove:*)"
     ],
     "deny": [
       "Edit(clippy.toml)",
@@ -20,7 +22,10 @@
       "Edit(/tests/behavior/**)",
       "Edit(/tests/behavior.rs)",
       "Edit(/AGENTS.md)",
-      "Edit(/.claude/settings.json)"
+      "Edit(/.claude/settings.json)",
+      "Edit(/rules/**)",
+      "Edit(/rule-tests/**)",
+      "Edit(/sgconfig.yml)"
     ]
   },
   "hooks": {
@@ -44,6 +49,11 @@
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard_tests.py",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "grep -Eq '\"file_path\" *: *\"[^\"]*\\.rs\"' || exit 0; cd \"$CLAUDE_PROJECT_DIR\" || exit 2; out=$(cargo check --all-targets --locked --message-format=short 2>&1) || { printf '%s\\n' \"$out\" | tail -n 40 >&2; exit 2; }",
+            "timeout": 300
           }
         ]
       }
@@ -66,6 +76,11 @@
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard_tests.py",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "cd \"$CLAUDE_PROJECT_DIR\" || exit 2; command -v just >/dev/null || { echo \"Stop hook: just is not on PATH. Install it, then run just check.\" >&2; exit 2; }; out=$(just check 2>&1) || { printf '%s\\n' \"$out\" | tail -n 80 >&2; exit 2; }",
+            "timeout": 900
           }
         ]
       }
