@@ -147,9 +147,8 @@ One command runs every check:
 just check
 ```
 
-The `justfile` lists the checks: `cargo fmt --check`, clippy with warnings denied, the ast-grep rules
-in `rules/`, `cargo deny check`, `cargo machete` and the tests. It needs `just`, `ast-grep`,
-`cargo-deny` and `cargo-machete` on your `PATH`. `just fix` formats the code and applies clippy's
+The `justfile` lists the checks: `cargo fmt --check`, clippy with warnings denied, `cargo deny check`,
+`cargo machete` and the tests. It needs `just`, `cargo-deny` and `cargo-machete` on your `PATH`. `just fix` formats the code and applies clippy's
 fixes.
 
 To run the checks before each commit, enable the hook once per clone:
