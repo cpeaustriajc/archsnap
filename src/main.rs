@@ -5,6 +5,7 @@ mod report;
 mod scan;
 mod store;
 mod system;
+mod weekday;
 
 use std::io::{self, Write};
 use std::panic::PanicHookInfo;
