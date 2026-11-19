@@ -507,6 +507,10 @@ version of each. The lint table in `Cargo.toml` and the settings in `clippy.toml
 `lints/clippy.toml`, taken whole; update them from there, never by hand. The tests also need Node
 22.18 or newer and `tsc` on your `PATH`. `just fix` formats the code and applies clippy's fixes.
 
+The TypeScript library in `npm/model` has its own commands, run from that folder after
+`pnpm install --frozen-lockfile`: `pnpm run typecheck` (tsrs), `pnpm run format` (oxfmt, check
+only), `pnpm run format:fix` and `pnpm test` (vitest).
+
 To run the checks before each commit, enable the hook once per clone:
 
 ```sh

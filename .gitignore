@@ -2,3 +2,4 @@
 /.earnest
 /.claude/worktrees/
 /mutants.out
+/npm/model/node_modules

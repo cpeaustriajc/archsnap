@@ -14,29 +14,29 @@ its operations, and the JSON shapes used below.
 import { m } from "@earnest/model";
 
 export const Turnstile = m.model("Turnstile", {
-	gate: m.enum(["locked", "open"]).initial("locked"),
-	paid: m.boolean().initial(false),
-	visitors: m.int(0, 3).initial(0),
+  gate: m.enum(["locked", "open"]).initial("locked"),
+  paid: m.boolean().initial(false),
+  visitors: m.int(0, 3).initial(0),
 });
 
 export const pay = Turnstile.action("the visitor pays", {
-	when: (s) => !s.paid,
-	then: () => ({ paid: true }),
+  when: (s) => !s.paid,
+  then: () => ({ paid: true }),
 });
 
 export const push = Turnstile.action("the visitor pushes", {
-	when: (s) => s.paid && s.visitors < 3,
-	then: (s) => ({ gate: "open", visitors: s.visitors + 1 }),
+  when: (s) => s.paid && s.visitors < 3,
+  then: (s) => ({ gate: "open", visitors: s.visitors + 1 }),
 });
 
 export const staysLocked = Turnstile.rule({
-	says: "The gate stays locked until the visitor pays",
-	holds: (s) => s.gate === "locked" || s.paid,
+  says: "The gate stays locked until the visitor pays",
+  holds: (s) => s.gate === "locked" || s.paid,
 });
 
 export const full = Turnstile.end({
-	says: "Three visitors went through",
-	when: (s) => s.visitors === 3,
+  says: "Three visitors went through",
+  when: (s) => s.visitors === 3,
 });
 
 export type State = m.Infer<typeof Turnstile>;
@@ -142,23 +142,25 @@ by its `label`, the action's sentence.
 
 ## Development
 
-From the repository root:
+From this folder, after `pnpm install --frozen-lockfile`:
 
 ```sh
-tsc --noEmit -p npm/model
-prettier --check npm/model
-node --test npm/model/test/
+pnpm run typecheck   # tsrs --noEmit, over src/ and test/
+pnpm run format      # oxfmt --check
+pnpm run format:fix  # oxfmt, rewriting the files in place
+pnpm test            # vitest run
 ```
 
-- The package has no dependencies and no build step. Node 22.18 or newer runs the `.ts` files by
-  stripping types, so the source uses only erasable syntax.
-- `tsc` checks `src/` and `test/` together. `@types/node` is not installed; `test/node.d.ts`
-  declares the few functions of `node:test`, `node:assert/strict`, `node:fs` and
-  `node:child_process` that the tests call.
-- `node --test` given a folder runs the folder's `index.js`, which imports every `*.test.ts`
-  beside it.
+- The package has no runtime dependencies and no build step. Node 22.18 or newer runs the `.ts`
+  files by stripping types, so the source uses only erasable syntax.
+- The devDependencies are pinned to exact versions: `tsrs` (the Rust port of the TypeScript
+  checker), `oxfmt` (the formatter) and `vitest`, with `@types/node` for the tests. The lockfile
+  is `pnpm-lock.yaml`.
+- `typecheck` is one project: `tsconfig.json` covers `src/` and `test/` and excludes
+  `test/rejected/`. It sets `types` to `node` so the tests can import `node:` modules.
 - `test/types.ts` only has to compile: it holds the type-level proofs, such as what `m.Infer`
   gives and which values a `then` rejects.
 - `test/rejected/` holds one program for each mistake the compiler must catch, and `accepted.ts`,
-  which it must not complain about. `test/rejected.test.ts` runs `tsc` on the folder and checks
-  where each problem is reported. The folder is excluded from the package's own `tsconfig.json`.
+  which it must not complain about. `test/rejected.test.ts` runs `tsrs` on the folder and checks
+  that each bad program gets exactly one error, on the expected line. The folder is excluded from
+  the package's own `tsconfig.json`.

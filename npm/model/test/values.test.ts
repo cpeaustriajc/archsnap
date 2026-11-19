@@ -1,350 +1,297 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { expect, test } from "vitest";
 import {
-	type Json,
-	LockValue,
-	ModelValue,
-	OwnedLockValue,
-	QueueValue,
-	RequestValue,
-	RetryValue,
-	TimerValue,
-	m,
+  type Json,
+  LockValue,
+  ModelValue,
+  OwnedLockValue,
+  QueueValue,
+  RequestValue,
+  RetryValue,
+  TimerValue,
+  m,
 } from "@earnest/model";
 
 const json = (value: ModelValue): Json => value.toJSON();
 
 test("a set holds each member once and reads by content", () => {
-	const letters = m.setOf<string>("b", "a", "b");
-	assert.equal(letters.size, 2);
-	assert.equal(letters.isEmpty, false);
-	assert.equal(m.setOf().isEmpty, true);
-	assert.equal(m.setOf().size, 0);
-	assert.equal(letters.has("a"), true);
-	assert.equal(letters.has("c"), false);
-	assert.deepEqual([...letters], ["a", "b"]);
-	assert.deepEqual(json(letters), ["a", "b"]);
+  const letters = m.setOf<string>("b", "a", "b");
+  expect(letters.size).toBe(2);
+  expect(letters.isEmpty).toBe(false);
+  expect(m.setOf().isEmpty).toBe(true);
+  expect(m.setOf().size).toBe(0);
+  expect(letters.has("a")).toBe(true);
+  expect(letters.has("c")).toBe(false);
+  expect([...letters]).toStrictEqual(["a", "b"]);
+  expect(json(letters)).toStrictEqual(["a", "b"]);
 });
 
 test("set operations give new sets and leave the old one as it was", () => {
-	const letters = m.setOf<string>("a", "b");
-	assert.deepEqual(json(letters.add("c")), ["a", "b", "c"]);
-	assert.deepEqual(json(letters.delete("a")), ["b"]);
-	assert.deepEqual(json(letters.delete("z")), ["a", "b"]);
-	assert.deepEqual(json(letters.union(m.setOf("b", "c"))), ["a", "b", "c"]);
-	assert.deepEqual(json(letters.intersect(m.setOf("b", "c"))), ["b"]);
-	assert.deepEqual(json(letters.subtract(m.setOf("b", "c"))), ["a"]);
-	assert.deepEqual(json(letters.filter((letter) => letter !== "a")), ["b"]);
-	assert.deepEqual(json(letters), ["a", "b"]);
+  const letters = m.setOf<string>("a", "b");
+  expect(json(letters.add("c"))).toStrictEqual(["a", "b", "c"]);
+  expect(json(letters.delete("a"))).toStrictEqual(["b"]);
+  expect(json(letters.delete("z"))).toStrictEqual(["a", "b"]);
+  expect(json(letters.union(m.setOf("b", "c")))).toStrictEqual(["a", "b", "c"]);
+  expect(json(letters.intersect(m.setOf("b", "c")))).toStrictEqual(["b"]);
+  expect(json(letters.subtract(m.setOf("b", "c")))).toStrictEqual(["a"]);
+  expect(json(letters.filter((letter) => letter !== "a"))).toStrictEqual(["b"]);
+  expect(json(letters)).toStrictEqual(["a", "b"]);
 });
 
 test("set questions", () => {
-	const letters = m.setOf<string>("a", "b");
-	assert.equal(letters.isSubset(m.setOf("a", "b", "c")), true);
-	assert.equal(letters.isSubset(m.setOf("a")), false);
-	assert.equal(m.setOf<string>().isSubset(letters), true);
-	assert.equal(
-		letters.every((letter) => letter < "c"),
-		true,
-	);
-	assert.equal(
-		letters.every((letter) => letter < "b"),
-		false,
-	);
-	assert.equal(
-		letters.some((letter) => letter === "b"),
-		true,
-	);
-	assert.equal(
-		letters.some((letter) => letter === "z"),
-		false,
-	);
-	assert.equal(
-		m.setOf<string>().every(() => false),
-		true,
-	);
-	assert.equal(
-		m.setOf<string>().some(() => true),
-		false,
-	);
+  const letters = m.setOf<string>("a", "b");
+  expect(letters.isSubset(m.setOf("a", "b", "c"))).toBe(true);
+  expect(letters.isSubset(m.setOf("a"))).toBe(false);
+  expect(m.setOf<string>().isSubset(letters)).toBe(true);
+  expect(letters.every((letter) => letter < "c")).toBe(true);
+  expect(letters.every((letter) => letter < "b")).toBe(false);
+  expect(letters.some((letter) => letter === "b")).toBe(true);
+  expect(letters.some((letter) => letter === "z")).toBe(false);
+  expect(m.setOf<string>().every(() => false)).toBe(true);
+  expect(m.setOf<string>().some(() => true)).toBe(false);
 });
 
 test("two sets with the same members are the same value", () => {
-	assert.equal(m.setOf("a", "b"), m.setOf("b", "a"));
-	assert.equal(m.setOf<string>("a").add("b"), m.setOf("a", "b"));
-	assert.equal(m.setOf<string>("a", "b").delete("b"), m.setOf("a"));
-	assert.notEqual(m.setOf("a"), m.setOf("b"));
-	assert.notEqual(m.setOf("a"), m.seqOf("a"));
-	assert.equal(m.setOf(1, 2).key, m.setOf(2, 1).key);
+  expect(m.setOf("a", "b")).toBe(m.setOf("b", "a"));
+  expect(m.setOf<string>("a").add("b")).toBe(m.setOf("a", "b"));
+  expect(m.setOf<string>("a", "b").delete("b")).toBe(m.setOf("a"));
+  expect(m.setOf("a")).not.toBe(m.setOf("b"));
+  expect(m.setOf("a")).not.toBe(m.seqOf("a"));
+  expect(m.setOf(1, 2).key).toBe(m.setOf(2, 1).key);
 });
 
 test("set members are compared by content, records included", () => {
-	const points = m.setOf<{ x: number; y: number }>({ x: 1, y: 2 });
-	assert.equal(points.has({ y: 2, x: 1 }), true);
-	assert.equal(points.has({ x: 1, y: 3 }), false);
-	assert.equal(points.add({ y: 2, x: 1 }).size, 1);
-	assert.equal(m.setOf(m.setOf(1), m.setOf(1)).size, 1);
+  const points = m.setOf<{ x: number; y: number }>({ x: 1, y: 2 });
+  expect(points.has({ y: 2, x: 1 })).toBe(true);
+  expect(points.has({ x: 1, y: 3 })).toBe(false);
+  expect(points.add({ y: 2, x: 1 }).size).toBe(1);
+  expect(m.setOf(m.setOf(1), m.setOf(1)).size).toBe(1);
 });
 
 test("set members are kept in one order: null, booleans, numbers, then text", () => {
-	assert.deepEqual(
-		json(m.setOf<string | number | boolean | null>("b", 10, true, null, 2, false, "a")),
-		[null, false, true, 2, 10, "a", "b"],
-	);
+  expect(
+    json(m.setOf<string | number | boolean | null>("b", 10, true, null, 2, false, "a")),
+  ).toStrictEqual([null, false, true, 2, 10, "a", "b"]);
 });
 
 test("a map reads by key and gives null for a missing key", () => {
-	const ages = m.mapOf(["bob", 2], ["ann", 1]);
-	assert.equal(ages.size, 2);
-	assert.equal(ages.isEmpty, false);
-	assert.equal(m.mapOf().isEmpty, true);
-	assert.equal(ages.has("ann"), true);
-	assert.equal(ages.get("ann"), 1);
-	assert.equal(ages.keys, m.setOf("ann", "bob"));
-	assert.deepEqual(json(ages), [
-		["ann", 1],
-		["bob", 2],
-	]);
-	const wider = m.mapOf<string, number>(["ann", 1]);
-	assert.equal(wider.has("cy"), false);
-	assert.equal(wider.get("cy"), null);
+  const ages = m.mapOf(["bob", 2], ["ann", 1]);
+  expect(ages.size).toBe(2);
+  expect(ages.isEmpty).toBe(false);
+  expect(m.mapOf().isEmpty).toBe(true);
+  expect(ages.has("ann")).toBe(true);
+  expect(ages.get("ann")).toBe(1);
+  expect(ages.keys).toBe(m.setOf("ann", "bob"));
+  expect(json(ages)).toStrictEqual([
+    ["ann", 1],
+    ["bob", 2],
+  ]);
+  const wider = m.mapOf<string, number>(["ann", 1]);
+  expect(wider.has("cy")).toBe(false);
+  expect(wider.get("cy")).toBe(null);
 });
 
 test("map operations give new maps and leave the old one as it was", () => {
-	const ages = m.mapOf<string, number>(["ann", 1]);
-	assert.deepEqual(json(ages.set("bob", 2)), [
-		["ann", 1],
-		["bob", 2],
-	]);
-	assert.deepEqual(json(ages.set("ann", 5)), [["ann", 5]]);
-	assert.deepEqual(json(ages.delete("ann")), []);
-	assert.deepEqual(json(ages.delete("zed")), [["ann", 1]]);
-	assert.deepEqual(json(ages), [["ann", 1]]);
-	assert.equal(ages.set("bob", 2).delete("bob"), ages);
-	assert.equal(m.mapOf(["a", 1], ["b", 2]), m.mapOf(["b", 2], ["a", 1]));
-	assert.notEqual(m.mapOf(["a", 1]), m.mapOf(["a", 2]));
-	assert.equal(m.mapOf(["a", 1], ["a", 2]).get("a"), 2);
+  const ages = m.mapOf<string, number>(["ann", 1]);
+  expect(json(ages.set("bob", 2))).toStrictEqual([
+    ["ann", 1],
+    ["bob", 2],
+  ]);
+  expect(json(ages.set("ann", 5))).toStrictEqual([["ann", 5]]);
+  expect(json(ages.delete("ann"))).toStrictEqual([]);
+  expect(json(ages.delete("zed"))).toStrictEqual([["ann", 1]]);
+  expect(json(ages)).toStrictEqual([["ann", 1]]);
+  expect(ages.set("bob", 2).delete("bob")).toBe(ages);
+  expect(m.mapOf(["a", 1], ["b", 2])).toBe(m.mapOf(["b", 2], ["a", 1]));
+  expect(m.mapOf(["a", 1])).not.toBe(m.mapOf(["a", 2]));
+  expect(m.mapOf(["a", 1], ["a", 2]).get("a")).toBe(2);
 });
 
 test("a sequence keeps order and reads by position", () => {
-	const steps = m.seqOf("x", "y", "z");
-	assert.equal(steps.size, 3);
-	assert.equal(steps.isEmpty, false);
-	assert.equal(steps.get(0), "x");
-	assert.equal(steps.get(2), "z");
-	assert.equal(steps.get(3), null);
-	assert.equal(steps.get(-1), null);
-	assert.equal(steps.first, "x");
-	assert.equal(steps.last, "z");
-	assert.equal(steps.includes("y"), true);
-	assert.deepEqual(json(steps), ["x", "y", "z"]);
-	const none = m.seqOf<string>();
-	assert.equal(none.isEmpty, true);
-	assert.equal(none.first, null);
-	assert.equal(none.last, null);
-	assert.equal(none.includes("x"), false);
+  const steps = m.seqOf("x", "y", "z");
+  expect(steps.size).toBe(3);
+  expect(steps.isEmpty).toBe(false);
+  expect(steps.get(0)).toBe("x");
+  expect(steps.get(2)).toBe("z");
+  expect(steps.get(3)).toBe(null);
+  expect(steps.get(-1)).toBe(null);
+  expect(steps.first).toBe("x");
+  expect(steps.last).toBe("z");
+  expect(steps.includes("y")).toBe(true);
+  expect(json(steps)).toStrictEqual(["x", "y", "z"]);
+  const none = m.seqOf<string>();
+  expect(none.isEmpty).toBe(true);
+  expect(none.first).toBe(null);
+  expect(none.last).toBe(null);
+  expect(none.includes("x")).toBe(false);
 });
 
 test("sequence operations give new sequences and leave the old one as it was", () => {
-	const steps = m.seqOf<string>("x", "y");
-	assert.deepEqual(json(steps.push("x")), ["x", "y", "x"]);
-	assert.deepEqual(json(steps.shift()), ["y"]);
-	assert.deepEqual(json(steps.pop()), ["x"]);
-	assert.deepEqual(json(steps.filter((step) => step === "y")), ["y"]);
-	assert.deepEqual(json(m.seqOf<string>().shift()), []);
-	assert.deepEqual(json(m.seqOf<string>().pop()), []);
-	assert.deepEqual(json(steps), ["x", "y"]);
-	assert.equal(
-		steps.every((step) => step !== "z"),
-		true,
-	);
-	assert.equal(
-		steps.some((step) => step === "z"),
-		false,
-	);
-	assert.equal(steps.push("z").pop(), steps);
-	assert.equal(m.seqOf("x", "y"), m.seqOf("x", "y"));
-	assert.notEqual(m.seqOf("x", "y"), m.seqOf("y", "x"));
+  const steps = m.seqOf<string>("x", "y");
+  expect(json(steps.push("x"))).toStrictEqual(["x", "y", "x"]);
+  expect(json(steps.shift())).toStrictEqual(["y"]);
+  expect(json(steps.pop())).toStrictEqual(["x"]);
+  expect(json(steps.filter((step) => step === "y"))).toStrictEqual(["y"]);
+  expect(json(m.seqOf<string>().shift())).toStrictEqual([]);
+  expect(json(m.seqOf<string>().pop())).toStrictEqual([]);
+  expect(json(steps)).toStrictEqual(["x", "y"]);
+  expect(steps.every((step) => step !== "z")).toBe(true);
+  expect(steps.some((step) => step === "z")).toBe(false);
+  expect(steps.push("z").pop()).toBe(steps);
+  expect(m.seqOf("x", "y")).toBe(m.seqOf("x", "y"));
+  expect(m.seqOf("x", "y")).not.toBe(m.seqOf("y", "x"));
 });
 
 test("a queue is first in, first out and knows when it is full", () => {
-	const empty = QueueValue.of<string>(2, []);
-	assert.equal(empty.size, 0);
-	assert.equal(empty.isEmpty, true);
-	assert.equal(empty.isFull, false);
-	assert.equal(empty.head, null);
-	const one = empty.send("a");
-	const two = one.send("b");
-	assert.equal(one.isEmpty, false);
-	assert.equal(one.isFull, false);
-	assert.equal(two.isFull, true);
-	assert.equal(two.size, 2);
-	assert.equal(two.head, "a");
-	assert.equal(two.includes("b"), true);
-	assert.equal(two.includes("c"), false);
-	assert.deepEqual(json(two), ["a", "b"]);
-	assert.deepEqual(json(two.receive()), ["b"]);
-	assert.equal(two.receive().head, "b");
-	assert.equal(two.clear(), empty);
-	assert.equal(empty.receive(), empty);
-	assert.equal(
-		two.every((item) => item !== "c"),
-		true,
-	);
-	assert.equal(
-		two.some((item) => item === "c"),
-		false,
-	);
-	assert.deepEqual(json(one), ["a"]);
-	assert.deepEqual(json(empty), []);
-	assert.equal(empty.send("a").send("b"), two);
+  const empty = QueueValue.of<string>(2, []);
+  expect(empty.size).toBe(0);
+  expect(empty.isEmpty).toBe(true);
+  expect(empty.isFull).toBe(false);
+  expect(empty.head).toBe(null);
+  const one = empty.send("a");
+  const two = one.send("b");
+  expect(one.isEmpty).toBe(false);
+  expect(one.isFull).toBe(false);
+  expect(two.isFull).toBe(true);
+  expect(two.size).toBe(2);
+  expect(two.head).toBe("a");
+  expect(two.includes("b")).toBe(true);
+  expect(two.includes("c")).toBe(false);
+  expect(json(two)).toStrictEqual(["a", "b"]);
+  expect(json(two.receive())).toStrictEqual(["b"]);
+  expect(two.receive().head).toBe("b");
+  expect(two.clear()).toBe(empty);
+  expect(empty.receive()).toBe(empty);
+  expect(two.every((item) => item !== "c")).toBe(true);
+  expect(two.some((item) => item === "c")).toBe(false);
+  expect(json(one)).toStrictEqual(["a"]);
+  expect(json(empty)).toStrictEqual([]);
+  expect(empty.send("a").send("b")).toBe(two);
 });
 
 test("sending to a full queue is allowed and gives a queue over its capacity", () => {
-	const over = QueueValue.of<string>(1, ["a"]).send("b");
-	assert.equal(over.size, 2);
-	assert.equal(over.isFull, true);
+  const over = QueueValue.of<string>(1, ["a"]).send("b");
+  expect(over.size).toBe(2);
+  expect(over.isFull).toBe(true);
 });
 
 test("a lock without an owner is free or held", () => {
-	const free = LockValue.of(false);
-	assert.equal(free.isFree, true);
-	assert.equal(free.isHeld, false);
-	const held = free.acquire();
-	assert.equal(held.isFree, false);
-	assert.equal(held.isHeld, true);
-	assert.equal(held.release(), free);
-	assert.equal(free.isFree, true);
-	assert.equal(held, LockValue.of(true));
-	assert.equal(json(free), false);
-	assert.equal(json(held), true);
+  const free = LockValue.of(false);
+  expect(free.isFree).toBe(true);
+  expect(free.isHeld).toBe(false);
+  const held = free.acquire();
+  expect(held.isFree).toBe(false);
+  expect(held.isHeld).toBe(true);
+  expect(held.release()).toBe(free);
+  expect(free.isFree).toBe(true);
+  expect(held).toBe(LockValue.of(true));
+  expect(json(free)).toBe(false);
+  expect(json(held)).toBe(true);
 });
 
 test("a lock with an owner remembers who holds it", () => {
-	const free = OwnedLockValue.of<string>(null);
-	assert.equal(free.isFree, true);
-	assert.equal(free.isHeld, false);
-	assert.equal(free.holder, null);
-	assert.equal(free.isHeldBy("ann"), false);
-	const held = free.acquire("ann");
-	assert.equal(held.isFree, false);
-	assert.equal(held.isHeld, true);
-	assert.equal(held.holder, "ann");
-	assert.equal(held.isHeldBy("ann"), true);
-	assert.equal(held.isHeldBy("bob"), false);
-	assert.equal(held.release(), free);
-	assert.equal(free.holder, null);
-	assert.equal(held, OwnedLockValue.of("ann"));
-	assert.equal(json(free), null);
-	assert.equal(json(held), "ann");
+  const free = OwnedLockValue.of<string>(null);
+  expect(free.isFree).toBe(true);
+  expect(free.isHeld).toBe(false);
+  expect(free.holder).toBe(null);
+  expect(free.isHeldBy("ann")).toBe(false);
+  const held = free.acquire("ann");
+  expect(held.isFree).toBe(false);
+  expect(held.isHeld).toBe(true);
+  expect(held.holder).toBe("ann");
+  expect(held.isHeldBy("ann")).toBe(true);
+  expect(held.isHeldBy("bob")).toBe(false);
+  expect(held.release()).toBe(free);
+  expect(free.holder).toBe(null);
+  expect(held).toBe(OwnedLockValue.of("ann"));
+  expect(json(free)).toBe(null);
+  expect(json(held)).toBe("ann");
 });
 
 test("a timer is idle, running or fired", () => {
-	const idle = TimerValue.at("idle");
-	assert.deepEqual([idle.isIdle, idle.isRunning, idle.hasFired], [true, false, false]);
-	const running = idle.start();
-	assert.deepEqual([running.isIdle, running.isRunning, running.hasFired], [false, true, false]);
-	const fired = running.fire();
-	assert.deepEqual([fired.isIdle, fired.isRunning, fired.hasFired], [false, false, true]);
-	assert.equal(running.cancel(), idle);
-	assert.equal(fired.reset(), idle);
-	assert.equal(idle.isIdle, true);
-	assert.equal(fired, TimerValue.at("fired"));
-	assert.deepEqual([json(idle), json(running), json(fired)], ["idle", "running", "fired"]);
+  const idle = TimerValue.at("idle");
+  expect([idle.isIdle, idle.isRunning, idle.hasFired]).toStrictEqual([true, false, false]);
+  const running = idle.start();
+  expect([running.isIdle, running.isRunning, running.hasFired]).toStrictEqual([false, true, false]);
+  const fired = running.fire();
+  expect([fired.isIdle, fired.isRunning, fired.hasFired]).toStrictEqual([false, false, true]);
+  expect(running.cancel()).toBe(idle);
+  expect(fired.reset()).toBe(idle);
+  expect(idle.isIdle).toBe(true);
+  expect(fired).toBe(TimerValue.at("fired"));
+  expect([json(idle), json(running), json(fired)]).toStrictEqual(["idle", "running", "fired"]);
 });
 
 test("a request is idle, pending, succeeded or failed", () => {
-	const idle = RequestValue.at("idle");
-	const pending = idle.send();
-	const succeeded = pending.succeed();
-	const failed = pending.fail();
-	assert.deepEqual(
-		[idle.isIdle, idle.isPending, idle.hasSucceeded, idle.hasFailed, idle.isSettled],
-		[true, false, false, false, false],
-	);
-	assert.deepEqual(
-		[pending.isIdle, pending.isPending, pending.hasSucceeded, pending.hasFailed, pending.isSettled],
-		[false, true, false, false, false],
-	);
-	assert.deepEqual(
-		[succeeded.isPending, succeeded.hasSucceeded, succeeded.hasFailed, succeeded.isSettled],
-		[false, true, false, true],
-	);
-	assert.deepEqual(
-		[failed.isPending, failed.hasSucceeded, failed.hasFailed, failed.isSettled],
-		[false, false, true, true],
-	);
-	assert.equal(failed.reset(), idle);
-	assert.equal(pending.isPending, true);
-	assert.equal(succeeded, RequestValue.at("succeeded"));
-	assert.deepEqual(
-		[json(idle), json(pending), json(succeeded), json(failed)],
-		["idle", "pending", "succeeded", "failed"],
-	);
+  const idle = RequestValue.at("idle");
+  const pending = idle.send();
+  const succeeded = pending.succeed();
+  const failed = pending.fail();
+  expect([
+    idle.isIdle,
+    idle.isPending,
+    idle.hasSucceeded,
+    idle.hasFailed,
+    idle.isSettled,
+  ]).toStrictEqual([true, false, false, false, false]);
+  expect([
+    pending.isIdle,
+    pending.isPending,
+    pending.hasSucceeded,
+    pending.hasFailed,
+    pending.isSettled,
+  ]).toStrictEqual([false, true, false, false, false]);
+  expect([
+    succeeded.isPending,
+    succeeded.hasSucceeded,
+    succeeded.hasFailed,
+    succeeded.isSettled,
+  ]).toStrictEqual([false, true, false, true]);
+  expect([failed.isPending, failed.hasSucceeded, failed.hasFailed, failed.isSettled]).toStrictEqual(
+    [false, false, true, true],
+  );
+  expect(failed.reset()).toBe(idle);
+  expect(pending.isPending).toBe(true);
+  expect(succeeded).toBe(RequestValue.at("succeeded"));
+  expect([json(idle), json(pending), json(succeeded), json(failed)]).toStrictEqual([
+    "idle",
+    "pending",
+    "succeeded",
+    "failed",
+  ]);
 });
 
 test("a retry counts attempts up to its most", () => {
-	const fresh = RetryValue.of(2, 0);
-	assert.deepEqual([fresh.attempts, fresh.canRetry, fresh.isExhausted], [0, true, false]);
-	const once = fresh.again();
-	assert.deepEqual([once.attempts, once.canRetry, once.isExhausted], [1, true, false]);
-	const twice = once.again();
-	assert.deepEqual([twice.attempts, twice.canRetry, twice.isExhausted], [2, false, true]);
-	assert.equal(twice.again().attempts, 3);
-	assert.equal(twice.reset(), fresh);
-	assert.equal(fresh.attempts, 0);
-	assert.equal(once, RetryValue.of(2, 1));
-	assert.notEqual(RetryValue.of(3, 1), RetryValue.of(2, 1));
-	assert.equal(json(twice), 2);
+  const fresh = RetryValue.of(2, 0);
+  expect([fresh.attempts, fresh.canRetry, fresh.isExhausted]).toStrictEqual([0, true, false]);
+  const once = fresh.again();
+  expect([once.attempts, once.canRetry, once.isExhausted]).toStrictEqual([1, true, false]);
+  const twice = once.again();
+  expect([twice.attempts, twice.canRetry, twice.isExhausted]).toStrictEqual([2, false, true]);
+  expect(twice.again().attempts).toBe(3);
+  expect(twice.reset()).toBe(fresh);
+  expect(fresh.attempts).toBe(0);
+  expect(once).toBe(RetryValue.of(2, 1));
+  expect(RetryValue.of(3, 1)).not.toBe(RetryValue.of(2, 1));
+  expect(json(twice)).toBe(2);
 });
 
 test("forall and exists range over a declaration or a collection", () => {
-	const Digit = m.int(0, 3);
-	assert.equal(
-		m.forall(Digit, (digit) => digit < 4),
-		true,
-	);
-	assert.equal(
-		m.forall(Digit, (digit) => digit < 3),
-		false,
-	);
-	assert.equal(
-		m.exists(Digit, (digit) => digit === 3),
-		true,
-	);
-	assert.equal(
-		m.exists(Digit, (digit) => digit === 4),
-		false,
-	);
-	assert.equal(
-		m.forall(m.setOf(1, 2), (digit) => digit > 0),
-		true,
-	);
-	assert.equal(
-		m.exists(m.seqOf(1, 2), (digit) => digit > 1),
-		true,
-	);
-	assert.equal(
-		m.exists(QueueValue.of(2, [1, 2]), (digit) => digit > 2),
-		false,
-	);
-	assert.equal(
-		m.forall(m.setOf<number>(), () => false),
-		true,
-	);
-	assert.equal(
-		m.exists(m.setOf<number>(), () => true),
-		false,
-	);
-	assert.equal(
-		m.exists(m.mapOf(["a", 1]), ([key, value]) => key === "a" && value === 1),
-		true,
-	);
+  const Digit = m.int(0, 3);
+  expect(m.forall(Digit, (digit) => digit < 4)).toBe(true);
+  expect(m.forall(Digit, (digit) => digit < 3)).toBe(false);
+  expect(m.exists(Digit, (digit) => digit === 3)).toBe(true);
+  expect(m.exists(Digit, (digit) => digit === 4)).toBe(false);
+  expect(m.forall(m.setOf(1, 2), (digit) => digit > 0)).toBe(true);
+  expect(m.exists(m.seqOf(1, 2), (digit) => digit > 1)).toBe(true);
+  expect(m.exists(QueueValue.of(2, [1, 2]), (digit) => digit > 2)).toBe(false);
+  expect(m.forall(m.setOf<number>(), () => false)).toBe(true);
+  expect(m.exists(m.setOf<number>(), () => true)).toBe(false);
+  expect(m.exists(m.mapOf(["a", 1]), ([key, value]) => key === "a" && value === 1)).toBe(true);
 });
 
 test("a record put in a collection can no longer be changed", () => {
-	const point = { x: 1 };
-	const points = m.seqOf(point);
-	assert.equal(Object.isFrozen(point), true);
-	assert.deepEqual(json(points), [{ x: 1 }]);
+  const point = { x: 1 };
+  const points = m.seqOf(point);
+  expect(Object.isFrozen(point)).toBe(true);
+  expect(json(points)).toStrictEqual([{ x: 1 }]);
 });

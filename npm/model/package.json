@@ -1,23 +1,28 @@
 {
-	"name": "@earnest/model",
-	"version": "0.1.0",
-	"description": "The TypeScript library that earnest models are written with",
-	"type": "module",
-	"exports": {
-		".": "./src/index.ts"
-	},
-	"files": [
-		"src",
-		"README.md"
-	],
-	"engines": {
-		"node": ">=22.18"
-	},
-	"scripts": {
-		"check": "tsc --noEmit -p . && prettier --check . && node --test test/"
-	},
-	"devDependencies": {
-		"prettier": "^3.8.0",
-		"typescript": "^6.0.0"
-	}
+  "name": "@earnest/model",
+  "version": "0.1.0",
+  "description": "The TypeScript library that earnest models are written with",
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsrs --noEmit",
+    "format": "oxfmt --check",
+    "format:fix": "oxfmt",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "oxfmt": "0.79.0",
+    "tsrs": "7.1.0-beta.tsrs3",
+    "vitest": "5.1.1"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
 }
