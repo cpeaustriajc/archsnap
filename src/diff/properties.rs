@@ -1,12 +1,10 @@
 use proptest::collection::{btree_map, vec};
 use proptest::prelude::*;
-use proptest::test_runner::{Config, TestRunner};
+use proptest::test_runner::TestRunner;
 
 use super::{NO_CHANGES, diff};
 use crate::scan::{Edge, Link, Module, Snapshot, Stats};
 use crate::system::System;
-
-const CASES: u32 = 256;
 
 fn name() -> impl Strategy<Value = String> {
     "[a-z]{1,4}(/[a-z]{1,4}){0,2}"
@@ -72,22 +70,19 @@ fn snapshot() -> impl Strategy<Value = Snapshot> {
 
 #[test]
 fn snapshot_compared_with_itself_has_no_changes() {
-    TestRunner::new(Config {
-        cases: CASES,
-        ..Config::default()
-    })
-    .run(&snapshot(), |current| {
-        let result = diff(Some(&current), &current);
-        prop_assert!(result.added_modules.is_empty());
-        prop_assert!(result.removed_modules.is_empty());
-        prop_assert!(result.grown.is_empty());
-        prop_assert!(result.shrunk.is_empty());
-        prop_assert!(result.added_edges.is_empty());
-        prop_assert!(result.removed_edges.is_empty());
-        prop_assert!(result.added_packages.is_empty());
-        prop_assert!(result.removed_packages.is_empty());
-        prop_assert_eq!(result.summary, vec![NO_CHANGES.to_string()]);
-        Ok(())
-    })
-    .unwrap();
+    TestRunner::default()
+        .run(&snapshot(), |current| {
+            let result = diff(Some(&current), &current);
+            prop_assert!(result.added_modules.is_empty());
+            prop_assert!(result.removed_modules.is_empty());
+            prop_assert!(result.grown.is_empty());
+            prop_assert!(result.shrunk.is_empty());
+            prop_assert!(result.added_edges.is_empty());
+            prop_assert!(result.removed_edges.is_empty());
+            prop_assert!(result.added_packages.is_empty());
+            prop_assert!(result.removed_packages.is_empty());
+            prop_assert_eq!(result.summary, vec![NO_CHANGES.to_string()]);
+            Ok(())
+        })
+        .unwrap();
 }
