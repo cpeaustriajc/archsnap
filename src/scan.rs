@@ -23,7 +23,7 @@ const ASSET_EXTENSIONS: &[&str] = &[
 ];
 const EXTENSIONS: &[&str] = &["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"];
 const IGNORED_DIRS: &[&str] =
-    &["node_modules", "dist", "build", "out", "coverage", "vendor", ".next", ".archsnap"];
+    &["node_modules", "dist", "build", "out", "coverage", "vendor", ".next", ".earnest"];
 const MAX_FILE_BYTES: u64 = 512 * 1024;
 const MAX_LINKS_PER_EDGE: usize = 200;
 

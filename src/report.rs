@@ -32,9 +32,9 @@ pub fn render(report: &Report) -> String {
     let json = json.replace('<', "\\u003c");
     // Title first: substituting data first would let repo contents inject a title marker.
     TEMPLATE
-        .replace("__ARCHSNAP_TITLE__", &html_escape(&report.repo))
-        .replace("__ARCHSNAP_BRANDS__", &brands(report).replace('<', "\\u003c"))
-        .replace("__ARCHSNAP_DATA__", &json)
+        .replace("__EARNEST_TITLE__", &html_escape(&report.repo))
+        .replace("__EARNEST_BRANDS__", &brands(report).replace('<', "\\u003c"))
+        .replace("__EARNEST_DATA__", &json)
 }
 
 /// The hand-picked logos, plus a logo for each outside service whose domain names a simple-icons slug

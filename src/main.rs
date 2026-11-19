@@ -35,7 +35,7 @@ struct RunArgs {
     /// Repository to scan (defaults to the current directory).
     #[arg(long)]
     repo: Option<PathBuf>,
-    /// Output folder (defaults to <repo>/.archsnap).
+    /// Output folder (defaults to <repo>/.earnest).
     #[arg(long)]
     out: Option<PathBuf>,
     /// How many weeks that had commits to snapshot, newest first.
@@ -54,8 +54,8 @@ struct RunArgs {
 
 fn main() -> ExitCode {
     std::panic::set_hook(Box::new(|info| {
-        eprintln!("archsnap: internal error: {info}");
-        eprintln!("  help: this is a bug in archsnap; please report it with the command you ran");
+        eprintln!("earnest: internal error: {info}");
+        eprintln!("  help: this is a bug in earnest; please report it with the command you ran");
         std::process::exit(70);
     }));
     let Cmd::Run(args) = Cli::parse().command;
@@ -77,7 +77,7 @@ fn run(args: RunArgs) -> Result<(), Fatal> {
         return Err(Fatal::NotGitRepo(dir));
     }
     let git = Git::open(&dir, args.verbose)?;
-    let out = args.out.unwrap_or_else(|| git.root.join(".archsnap"));
+    let out = args.out.unwrap_or_else(|| git.root.join(".earnest"));
     let store = Store::open(&out)?;
 
     let mut warnings: Vec<Warning> = Vec::new();

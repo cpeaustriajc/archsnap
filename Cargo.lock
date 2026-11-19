@@ -68,27 +68,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "archsnap"
-version = "0.1.0"
-dependencies = [
- "assert_cmd",
- "clap",
- "oxc_allocator",
- "oxc_ast",
- "oxc_ast_visit",
- "oxc_diagnostics",
- "oxc_parser",
- "oxc_span",
- "oxc_syntax",
- "predicates",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "toml",
-]
-
-[[package]]
 name = "assert_cmd"
 version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -234,6 +213,27 @@ name = "dragonbox_ecma"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd8e701084c37e7ef62d3f9e453b618130cbc0ef3573847785952a3ac3f746bf"
+
+[[package]]
+name = "earnest-cli"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "clap",
+ "oxc_allocator",
+ "oxc_ast",
+ "oxc_ast_visit",
+ "oxc_diagnostics",
+ "oxc_parser",
+ "oxc_span",
+ "oxc_syntax",
+ "predicates",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "toml",
+]
 
 [[package]]
 name = "equivalent"

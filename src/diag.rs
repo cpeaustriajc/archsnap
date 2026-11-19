@@ -42,7 +42,7 @@ impl Fatal {
 
     fn help(&self) -> &'static str {
         match self {
-            Fatal::NotGitRepo(_) => "run archsnap inside a git repo, or pass --repo <path>",
+            Fatal::NotGitRepo(_) => "run earnest inside a git repo, or pass --repo <path>",
             Fatal::NoCommits(_) => "commit at least once, then re-run",
             Fatal::GitMissing => "install git and make sure `git --version` works",
             Fatal::GitFailed { .. } => "re-run with --verbose to see every git call",
@@ -55,7 +55,7 @@ impl Fatal {
 
     pub fn print(&self) {
         let d = OxcDiagnostic::error(self.to_string())
-            .with_error_code("archsnap", self.code())
+            .with_error_code("earnest", self.code())
             .with_help(self.help());
         eprint!("{}", render(d, None));
     }
@@ -90,7 +90,7 @@ impl Warning {
 
     pub fn print(&self) {
         let mut d = OxcDiagnostic::warn(self.message.clone())
-            .with_error_code("archsnap", self.code)
+            .with_error_code("earnest", self.code)
             .with_help(self.help.clone());
         let src = match (&self.file, &self.source) {
             (Some(file), Some(src)) => {
