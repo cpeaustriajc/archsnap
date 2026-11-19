@@ -2,7 +2,7 @@ use vstd::prelude::*;
 
 verus! {
 
-pub(crate) const DAYS_IN_WEEK: u32 = 7;
+const DAYS_IN_WEEK: u32 = 7;
 
 pub(crate) fn index_in_sunday_first_week(cron_day: u32) -> (index: u32)
     ensures
