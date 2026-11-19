@@ -34,29 +34,26 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Snapshot each week of git history and write the HTML report.
+    #[command(about = "Snapshot each week of git history and write the HTML report")]
     Run(RunArgs),
 }
 
 #[derive(clap::Args)]
 struct RunArgs {
-    /// Repository to scan (defaults to the current directory).
-    #[arg(long)]
+    #[arg(long, help = "Repository to scan (defaults to the current directory)")]
     repo: Option<PathBuf>,
-    /// Output folder (defaults to <repo>/.earnest).
-    #[arg(long)]
+    #[arg(long, help = "Output folder (defaults to <repo>/.earnest)")]
     out: Option<PathBuf>,
-    /// How many weeks that had commits to snapshot, newest first.
-    #[arg(long, default_value_t = 12, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
+    #[arg(long, help = "How many weeks that had commits to snapshot, newest first", default_value_t = 12, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
     weeks: usize,
-    /// Folder levels per area below each package (after src/), e.g. 1 turns apps/web/src/billing/api/x.ts into apps/web/src/billing.
-    #[arg(long, default_value_t = 1, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
+    #[arg(long, help = "Folder levels per area below each package (after src/), e.g. 1 turns apps/web/src/billing/api/x.ts into apps/web/src/billing", default_value_t = 1, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..))]
     depth: usize,
-    /// Exit 1 when there are warnings (the report is still written).
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Exit 1 when there are warnings (the report is still written)"
+    )]
     strict: bool,
-    /// Print every git call.
-    #[arg(long)]
+    #[arg(long, help = "Print every git call")]
     verbose: bool,
 }
 
@@ -121,7 +118,7 @@ fn run(args: RunArgs) -> Result<(), Fatal> {
     for (position, point) in (1..).zip(&points) {
         snapshots.push(weekly.snapshot(position, point, &mut warnings)?);
     }
-    let weeks = week_views(snapshots);
+    let weeks = week_views_newest_first(snapshots);
     print_warnings(&warnings)?;
 
     let repo_name = git
@@ -172,8 +169,8 @@ impl WeeklyScan<'_> {
             point.week,
             short_sha(&point.sha)
         );
-        // The newest week is always rescanned so its warnings are reported on every run.
-        if let Some(snapshot) = cached.filter(|_| !newest) {
+        let rescan_to_report_warnings = newest;
+        if let Some(snapshot) = cached.filter(|_| !rescan_to_report_warnings) {
             writeln!(io::stderr().lock(), "{progress} cached").map_err(Fatal::StderrNotWritable)?;
             return Ok(snapshot);
         }
@@ -199,7 +196,7 @@ fn short_sha(sha: &str) -> &str {
     sha.get(..SHORT_SHA_LEN).unwrap_or(sha)
 }
 
-fn week_views(snapshots: Vec<Snapshot>) -> Vec<WeekView> {
+fn week_views_newest_first(snapshots: Vec<Snapshot>) -> Vec<WeekView> {
     let previous = std::iter::once(None).chain(snapshots.iter().map(Some));
     let diffs: Vec<diff::Diff> = previous
         .zip(&snapshots)
@@ -211,15 +208,18 @@ fn week_views(snapshots: Vec<Snapshot>) -> Vec<WeekView> {
         .map(|(snapshot, diff)| WeekView { snapshot, diff })
         .collect();
     weeks.reverse();
-    // File-level links only for the newest week: on big repos every week's links would bloat the page.
-    for older in weeks.iter_mut().skip(1) {
+    keep_page_small_by_dropping_file_links(weeks.iter_mut().skip(1));
+    weeks
+}
+
+fn keep_page_small_by_dropping_file_links<'a>(older_weeks: impl Iterator<Item = &'a mut WeekView>) {
+    for older in older_weeks {
         older
             .snapshot
             .edges
             .iter_mut()
             .for_each(|edge| edge.links.clear());
     }
-    weeks
 }
 
 fn print_warnings(warnings: &[Warning]) -> Result<(), Fatal> {

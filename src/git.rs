@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{ChildStdin, Command, Stdio};
+use std::thread::JoinHandle;
 
 use crate::diag::Fatal;
 
@@ -91,7 +92,7 @@ impl Git {
             .stderr(Stdio::inherit())
             .spawn()
             .map_err(|error| spawn_err(&error))?;
-        let mut stdin = child
+        let stdin = child
             .stdin
             .take()
             .ok_or_else(|| cat_file_failed("its stdin was not piped"))?;
@@ -101,8 +102,7 @@ impl Git {
             .ok_or_else(|| cat_file_failed("its stdout was not piped"))?;
         let mut input = oids.join("\n");
         input.push('\n');
-        // Writing on another thread: a full stdout pipe would otherwise deadlock the write.
-        let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+        let writer = write_without_blocking_reads(stdin, input);
         let mut reader = BufReader::new(stdout);
         let mut blobs = Vec::with_capacity(oids.len());
         for _ in oids {
@@ -159,7 +159,6 @@ fn parse_tree_record(record: &str, sha: &str) -> Result<Option<TreeEntry>, Fatal
     ) else {
         return Ok(None);
     };
-    // Mode 120000 blobs are symlinks: their content is the link target, not code.
     if kind != "blob" || mode == SYMLINK_MODE {
         return Ok(None);
     }
@@ -191,6 +190,13 @@ fn read_blob(reader: &mut impl BufRead) -> Result<Vec<u8>, Fatal> {
         .and_then(|()| reader.read_exact(&mut trailing_newline))
         .map_err(|error| cat_file_failed(&error.to_string()))?;
     Ok(blob)
+}
+
+fn write_without_blocking_reads(
+    mut stdin: ChildStdin,
+    input: String,
+) -> JoinHandle<io::Result<()>> {
+    std::thread::spawn(move || stdin.write_all(input.as_bytes()))
 }
 
 fn cat_file_failed(why: &str) -> Fatal {

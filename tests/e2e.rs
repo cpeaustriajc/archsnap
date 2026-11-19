@@ -77,7 +77,6 @@ fn earnest(dir: &Path) -> Bin {
     cmd
 }
 
-/// Two weeks of history: week 37 has src/a -> src/b, week 38 adds src/c.
 fn two_week_repo() -> TestResult<Repo> {
     let repo = Repo::new()?;
     repo.write(
@@ -379,7 +378,6 @@ fn first_week_does_not_mark_everything_new() -> TestResult {
     Ok(())
 }
 
-/// A Cloudflare monorepo: api Worker (Hono) serving the web app, D1, a queue, a cron, Stripe and a URL.
 fn monorepo() -> TestResult<Repo> {
     let repo = Repo::new()?;
     repo.write("package.json", r#"{ "name": "shop-root", "private": true }"#)?
@@ -559,7 +557,6 @@ crons = ["0 6 * * *"]
     Ok(())
 }
 
-/// An API with mounted Hono routes, a web client calling one, and a cron handler in the Worker entry.
 fn routed_repo() -> TestResult<Repo> {
     let repo = monorepo()?;
     repo.write(
@@ -645,7 +642,6 @@ fn worker_scheduled_handler_is_found() -> TestResult {
     Ok(())
 }
 
-/// A web app calling real services, reserved example domains and private or metadata IPs.
 fn outside_calls_repo() -> TestResult<Repo> {
     let repo = Repo::new()?;
     repo.write(
