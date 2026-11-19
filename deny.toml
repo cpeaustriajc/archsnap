@@ -1,0 +1,41 @@
+# cargo-deny configuration (schema of cargo-deny 0.21). Run: cargo deny check
+
+[graph]
+all-features = true
+
+[advisories]
+# Advisory database: RustSec. Known vulnerabilities, unmaintained and unsound
+# crates are errors; so are yanked versions.
+yanked = "deny"
+
+[licenses]
+# Narrow list derived from the real dependency tree (`cargo deny list`).
+# Every dependency offers at least one of these.
+allow = [
+    # Most crates (oxc_*, serde, clap, ...), alone or as one side of an OR.
+    "MIT",
+    # normalize-line-endings (Apache-2.0 only); the other side of most dual-licensed crates.
+    "Apache-2.0",
+    # dragonbox_ecma ("Apache-2.0 WITH LLVM-exception OR BSL-1.0"); plain
+    # Apache-2.0 does not satisfy the exception clause, so list it explicitly.
+    "Apache-2.0 WITH LLVM-exception",
+    # icu_*, yoke, zerovec, litemap, ... (Unicode-3.0 only);
+    # unicode-ident and unicode-id-start ("(MIT OR Apache-2.0) AND Unicode-3.0").
+    "Unicode-3.0",
+]
+confidence-threshold = 0.93
+
+[licenses.private]
+# This crate declares no license yet and is never published to a registry.
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
