@@ -1,7 +1,7 @@
 default: check
 
 # One recipe per check. To add a check, write its recipe and name it here.
-check: format unused-dependencies dependencies lint test verify
+check: format unused-dependencies dependencies lint typescript test verify
 
 format:
     cargo fmt --check
@@ -15,8 +15,17 @@ dependencies:
 unused-dependencies:
     cargo machete
 
+typescript:
+    pnpm --dir npm/model install --frozen-lockfile
+    pnpm --dir npm/model run typecheck
+    pnpm --dir npm/model run format
+    pnpm --dir npm/model test
+
 test:
     cargo test --locked
+
+tlc:
+    cargo run --release --locked -p earnest-cli -- confirm --tlc target/tools/tla2tools.jar tasks/conformance/models/*.model.ts tasks/conformance/models/*.rs
 
 verify:
     cargo verus focus
