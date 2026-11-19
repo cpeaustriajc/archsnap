@@ -165,6 +165,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd8e701084c37e7ef62d3f9e453b618130cbc0ef3573847785952a3ac3f746bf"
 
 [[package]]
+name = "earnest"
+version = "0.1.0"
+dependencies = [
+ "earnest_macros",
+]
+
+[[package]]
 name = "earnest-cli"
 version = "0.1.0"
 
@@ -213,6 +220,28 @@ name = "earnest_ir"
 version = "0.1.0"
 dependencies = [
  "earnest_value",
+]
+
+[[package]]
+name = "earnest_macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "earnest_rs"
+version = "0.1.0"
+dependencies = [
+ "earnest",
+ "earnest_ast",
+ "earnest_check",
+ "earnest_diagnostics",
+ "earnest_semantic",
+ "proc-macro2",
+ "syn 2.0.119",
 ]
 
 [[package]]

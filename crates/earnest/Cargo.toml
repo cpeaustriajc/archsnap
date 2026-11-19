@@ -1,0 +1,11 @@
+[package]
+name = "earnest"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+earnest_macros.workspace = true
+
+[lints]
+workspace = true

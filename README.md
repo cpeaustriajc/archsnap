@@ -310,7 +310,8 @@ impl Turnstile {
 - A rule or an end is a method that returns `bool`. Ids are the method names. An enum value is
   known to the checker by its variant name, so `Gate::Locked` prints as `"Locked"`.
 - A model is ordinary Rust: a test calls `state.pay()` to take one step, which is how a path from
-  the report is replayed with `cargo test`.
+  the report is replayed with `cargo test`. `Turnstile::starts()` lists every start state, and
+  a rule or an end is called the same way: `state.stays_locked()`.
 
 ## The primitives
 
