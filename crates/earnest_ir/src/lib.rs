@@ -8,7 +8,7 @@ mod eval;
 
 pub use eval::{Fault, Frame, eval, truth};
 
-use earnest_value::{Domain, Sym, Symbols, Value};
+use earnest_value::{Domain, IntType, Sym, Symbols, Value};
 
 /// A comparison of two numbers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,6 +115,9 @@ pub enum Op {
     SomeOf,
     /// The value of an optional that must be present. `null` is [`Fault::NullRead`].
     Unwrap,
+    /// A number that must be a value of this integer type. It gives its argument back
+    /// unchanged, and a number outside the type is [`Fault::Outside`].
+    Fit(IntType),
     /// Whether two values are the same.
     Equal,
     /// Whether two values are not the same.

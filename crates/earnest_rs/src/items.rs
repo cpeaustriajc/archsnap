@@ -1,8 +1,8 @@
 use crate::bodies::Body;
 use crate::reader::{Reader, attribute, path_text, place_of, why_outside};
 use earnest_ast::{
-    ActionBody, ActionDraft, Draft, EndDraft, FieldDraft, HelperDraft, Reading, RuleDraft, Shape,
-    Term, ViewDraft, condition_text,
+    ActionBody, ActionDraft, Draft, EndDraft, FieldDraft, HelperDraft, HelperKind, Language,
+    Reading, RuleDraft, Shape, Term, TermKind, ViewDraft, condition_text,
 };
 use proc_macro2::Span;
 use syn::punctuated::Punctuated;
@@ -14,6 +14,7 @@ use syn::{
 };
 
 const ROLES: [&str; 3] = ["action", "rule", "end"];
+const LIBRARY_CALLS: [&str; 3] = ["forall", "exists", "Some"];
 const STATE: &str = "self";
 const ONLY_MODELS: &str =
     "a model file holds only models, the types they use, constants and helper functions";
@@ -22,7 +23,7 @@ const ONLY_MODELS: &str =
 struct Found<'a> {
     models: Vec<&'a ItemStruct>,
     blocks: Vec<&'a ItemImpl>,
-    constants: Vec<(String, &'a Expr)>,
+    constants: Vec<(String, &'a Type, &'a Expr)>,
     functions: Vec<&'a ItemFn>,
 }
 
@@ -117,7 +118,10 @@ fn owner_of(block: &ItemImpl) -> Option<String> {
     }
 }
 
+const BYTE_ORDER_MARK: char = '\u{feff}';
+
 pub(crate) fn read_file(file: &str, source: &str) -> Reading {
+    let source = source.strip_prefix(BYTE_ORDER_MARK).unwrap_or(source);
     let mut reader = Reader::new(file, source);
     let drafts = match syn::parse_file(source) {
         Ok(parsed) => reader.drafts(&parsed.items),
@@ -155,7 +159,10 @@ impl Reader<'_> {
         let constants: Vec<(String, Term)> = found
             .constants
             .iter()
-            .map(|(name, value)| (name.clone(), self.term(value)))
+            .map(|(name, ty, value)| {
+                let read = self.term(value);
+                (name.clone(), self.of_type(ty, read))
+            })
             .collect();
         let helpers: Vec<HelperDraft> = found
             .functions
@@ -197,6 +204,7 @@ impl Reader<'_> {
                 Item::Enum(choices) => self.declare_enum(choices),
                 Item::Struct(state) if derives(&state.attrs, "Model") => {
                     self.plain(state);
+                    self.models.insert(state.ident.to_string());
                     found.models.push(state);
                 }
                 Item::Struct(record) => self.declare_record(record),
@@ -207,10 +215,23 @@ impl Reader<'_> {
                     if let Some(number) = self.whole_number(&constant.expr) {
                         self.numbers.insert(name.clone(), number);
                     }
-                    found.constants.push((name, constant.expr.as_ref()));
+                    found
+                        .constants
+                        .push((name, constant.ty.as_ref(), constant.expr.as_ref()));
                 }
                 Item::Fn(function) => {
-                    self.functions.insert(function.sig.ident.to_string());
+                    let name = function.sig.ident.to_string();
+                    if LIBRARY_CALLS.contains(&name.as_str()) {
+                        self.refuse(
+                            function.sig.ident.span(),
+                            &format!("fn {name}"),
+                            &format!(
+                                "the checker reads a call of `{name}` as the library's, so a \
+                                 function of the file can't have this name"
+                            ),
+                        );
+                    }
+                    self.functions.insert(name);
                     found.functions.push(function);
                 }
                 other => {
@@ -333,6 +354,7 @@ impl Reader<'_> {
         let mut draft = Draft {
             name,
             file: self.file.to_owned(),
+            language: Language::Rust,
             place: place_of(state.struct_token.span),
             fields,
             actions: Vec::new(),
@@ -400,18 +422,13 @@ impl Reader<'_> {
                  write `#[action(\"...\")]`, `#[rule(\"...\")]` or `#[end(\"...\")]`",
             );
         }
-        let inputs = self.inputs(signature);
         let Some((role, sentence)) = role_of(&method.attrs) else {
-            let mut parameters = vec![STATE.to_owned()];
-            parameters.extend(inputs.iter().map(|(name, _)| name.clone()));
-            let body = self.value_of(&method.block);
-            draft.helpers.push(HelperDraft {
-                name: id,
-                parameters,
-                body,
-            });
+            self.reads_state(signature);
+            let helper = self.helper(HelperKind::Method, signature, &method.block);
+            draft.helpers.push(helper);
             return;
         };
+        let inputs = self.inputs(signature);
         let says = self.sentence(role, sentence);
         if role == "action" {
             self.returns(signature, "Option<Self>", "an action");
@@ -498,8 +515,7 @@ impl Reader<'_> {
         }
     }
 
-    fn inputs(&mut self, signature: &Signature) -> Vec<(String, Shape)> {
-        self.plain_function(signature);
+    fn reads_state(&mut self, signature: &Signature) {
         let reads_state = match signature.inputs.first() {
             Some(FnArg::Receiver(receiver)) => {
                 receiver.reference.is_some()
@@ -525,6 +541,11 @@ impl Reader<'_> {
                 "a method of a model takes `&self` first: it reads the state and never changes it",
             );
         }
+    }
+
+    fn inputs(&mut self, signature: &Signature) -> Vec<(String, Shape)> {
+        self.plain_function(signature);
+        self.reads_state(signature);
         signature
             .inputs
             .iter()
@@ -579,35 +600,79 @@ impl Reader<'_> {
     }
 
     fn function(&mut self, function: &ItemFn) -> HelperDraft {
-        self.plain_function(&function.sig);
         for input in &function.sig.inputs {
-            if let FnArg::Typed(typed) = input {
-                self.refuse_conditional(&typed.attrs);
-            }
-        }
-        let mut parameters = Vec::with_capacity(function.sig.inputs.len());
-        for input in &function.sig.inputs {
-            match input {
-                FnArg::Typed(typed) => match typed.pat.as_ref() {
-                    Pat::Ident(named) if named.subpat.is_none() && named.by_ref.is_none() => {
-                        parameters.push(named.ident.to_string());
-                    }
-                    other => {
-                        let feature = self.short_text(other.span());
-                        self.refuse(other.span(), &feature, "a parameter is one plain name");
-                    }
-                },
-                FnArg::Receiver(receiver) => self.refuse(
+            if let FnArg::Receiver(receiver) = input {
+                self.refuse(
                     receiver.span(),
                     STATE,
                     "a function outside the model's block has no state to read",
-                ),
+                );
             }
         }
+        self.helper(HelperKind::Function, &function.sig, &function.block)
+    }
+
+    fn is_the_state(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Reference(borrowed) => self.is_the_state(&borrowed.elem),
+            Type::Paren(inner) => self.is_the_state(&inner.elem),
+            Type::Group(inner) => self.is_the_state(&inner.elem),
+            Type::Path(named) => named
+                .path
+                .get_ident()
+                .is_some_and(|name| name == "Self" || self.models.contains(&name.to_string())),
+            _ => false,
+        }
+    }
+
+    fn helper(&mut self, kind: HelperKind, signature: &Signature, block: &Block) -> HelperDraft {
+        self.plain_function(signature);
+        let mut parameters = Vec::with_capacity(signature.inputs.len());
+        let mut typed_parameters = Vec::new();
+        for input in &signature.inputs {
+            let typed = match input {
+                FnArg::Typed(typed) => typed,
+                FnArg::Receiver(_) => {
+                    parameters.push(STATE.to_owned());
+                    continue;
+                }
+            };
+            self.refuse_conditional(&typed.attrs);
+            match typed.pat.as_ref() {
+                Pat::Ident(named) if named.subpat.is_none() && named.by_ref.is_none() => {
+                    let name = named.ident.to_string();
+                    if !self.is_the_state(&typed.ty) {
+                        typed_parameters.push((name.clone(), named.ident.span(), &typed.ty));
+                    }
+                    parameters.push(name);
+                }
+                other => {
+                    let feature = self.short_text(other.span());
+                    self.refuse(other.span(), &feature, "a parameter is one plain name");
+                }
+            }
+        }
+        let mut body = self.value_of(block);
+        if let ReturnType::Type(_, ty) = &signature.output {
+            body = self.of_type(ty, body);
+        }
+        for (name, span, ty) in typed_parameters.into_iter().rev() {
+            let given = Term::new(place_of(span), TermKind::Name(name.clone()));
+            let value = self.of_type(ty, given);
+            body = Term::new(
+                body.place,
+                TermKind::Bind {
+                    name,
+                    value: Box::new(value),
+                    body: Box::new(body),
+                },
+            );
+        }
         HelperDraft {
-            name: function.sig.ident.to_string(),
+            kind,
+            name: signature.ident.to_string(),
             parameters,
-            body: self.value_of(&function.block),
+            body,
         }
     }
 }

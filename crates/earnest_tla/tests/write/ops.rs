@@ -165,7 +165,7 @@ fn a_remainder_goes_through_the_helper_that_faults_where_the_engine_does() {
         .rule("odd", two(Op::Math(Math::Remainder), &stage.n, int(2)));
     let module = stage.sketch.written().module;
     assert!(
-        module.contains("    InRange => Remainder(n, 2)\n"),
+        module.contains("    InRange => ((~((n >= 0) /\\ (2 >= 1))) \\/ Remainder(n, 2))\n"),
         "{module}"
     );
     assert_eq!(

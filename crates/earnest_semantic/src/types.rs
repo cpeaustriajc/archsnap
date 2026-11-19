@@ -1,11 +1,12 @@
-use earnest_ir::Expr;
+use earnest_ir::{Expr, Op};
+use earnest_value::{IntType, Value};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Type {
     Unknown,
     Null,
     Bool,
-    Int,
+    Int(Option<IntType>),
     Text,
     Optional(Box<Type>),
     Record(Vec<(String, Type)>),
@@ -25,7 +26,7 @@ impl Type {
             Self::Unknown => "a value",
             Self::Null => "null",
             Self::Bool => "a boolean",
-            Self::Int => "a number",
+            Self::Int(_) => "a number",
             Self::Text => "a text value",
             Self::Optional(_) => "an optional value",
             Self::Record(_) => "a record",
@@ -47,7 +48,7 @@ impl Type {
             | (Self::Null | Self::Optional(_), Self::Null)
             | (Self::Null, Self::Optional(_))
             | (Self::Bool, Self::Bool)
-            | (Self::Int, Self::Int)
+            | (Self::Int(_), Self::Int(_))
             | (Self::Text, Self::Text)
             | (Self::Timer, Self::Timer)
             | (Self::Request, Self::Request)
@@ -72,6 +73,7 @@ impl Type {
     pub(crate) fn merged(&self, other: &Self) -> Self {
         match (self, other) {
             (Self::Unknown | Self::Null, found) => found.clone(),
+            (Self::Int(None), Self::Int(typed)) => Self::Int(*typed),
             (Self::Optional(left), Self::Optional(right)) => {
                 Self::Optional(Box::new(left.merged(right)))
             }
@@ -105,6 +107,124 @@ impl Type {
 
     pub(crate) fn optional(inner: Self) -> Self {
         Self::Optional(Box::new(inner))
+    }
+
+    pub(crate) fn once_optional(self) -> Self {
+        match self {
+            Self::Optional(_) | Self::Null => self,
+            other => Self::optional(other),
+        }
+    }
+
+    pub(crate) fn can_be_null(&self) -> bool {
+        matches!(self, Self::Optional(_) | Self::Null | Self::Lock(Some(_)))
+    }
+
+    pub(crate) fn int_type(&self) -> Option<IntType> {
+        match self {
+            Self::Int(ty) => *ty,
+            Self::Optional(inner) => inner.int_type(),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn mixes_integer_types(&self, other: &Self) -> Option<(IntType, IntType)> {
+        let (left, right) = (self.int_type()?, other.int_type()?);
+        (left != right).then_some((left, right))
+    }
+
+    pub(crate) fn has_a_number_without_a_type(&self) -> bool {
+        match self {
+            Self::Int(ty) => ty.is_none(),
+            Self::Optional(inner)
+            | Self::Set(inner)
+            | Self::Seq(inner)
+            | Self::Queue(inner, _)
+            | Self::Lock(Some(inner)) => inner.has_a_number_without_a_type(),
+            Self::Map(key, value) => {
+                key.has_a_number_without_a_type() || value.has_a_number_without_a_type()
+            }
+            Self::Record(fields) => fields
+                .iter()
+                .any(|(_, field)| field.has_a_number_without_a_type()),
+            Self::Unknown
+            | Self::Null
+            | Self::Bool
+            | Self::Text
+            | Self::Lock(None)
+            | Self::Timer
+            | Self::Request
+            | Self::Retry(_) => false,
+        }
+    }
+
+    pub(crate) fn union(&self, other: &Self) -> Option<Self> {
+        match (self, other) {
+            (Self::Null, Self::Null) => Some(Self::Null),
+            (Self::Unknown, found) | (found, Self::Unknown) => Some(found.clone()),
+            (Self::Null, found) | (found, Self::Null) => Some(found.clone().once_optional()),
+            (Self::Int(left), Self::Int(right)) => match (left, right) {
+                (Some(first), Some(second)) if first != second => None,
+                _ => Some(Self::Int(left.or(*right))),
+            },
+            (Self::Optional(left), Self::Optional(right)) => {
+                Some(Self::optional(left.union(right)?))
+            }
+            (Self::Optional(inner), found) | (found, Self::Optional(inner)) => {
+                Some(Self::optional(inner.union(found)?))
+            }
+            (Self::Record(left), Self::Record(right)) if left.len() == right.len() => left
+                .iter()
+                .zip(right)
+                .map(|((name, first), (other_name, second))| {
+                    (name == other_name).then_some(())?;
+                    Some((name.clone(), first.union(second)?))
+                })
+                .collect::<Option<Vec<_>>>()
+                .map(Self::Record),
+            (first, second) if first.fits(second) => Some(first.merged(second).merged(first)),
+            _ => None,
+        }
+    }
+}
+
+pub(crate) fn fitted(expr: Expr, ty: IntType) -> Expr {
+    match expr {
+        Expr::Const(Value::Int(number)) if ty.holds(number) => Expr::Const(Value::Int(number)),
+        Expr::Apply(Op::Fit(known), inner) => Expr::Apply(Op::Fit(known), inner),
+        Expr::Apply(op @ (Op::Math(_) | Op::Negate), operands) => {
+            let within = operands.into_iter().map(|each| fitted(each, ty)).collect();
+            Expr::Apply(Op::Fit(ty), vec![Expr::Apply(op, within)])
+        }
+        Expr::Choose(test, yes, no) => {
+            Expr::Choose(test, Box::new(fitted(*yes, ty)), Box::new(fitted(*no, ty)))
+        }
+        Expr::Bind { slot, value, body } => Expr::Bind {
+            slot,
+            value,
+            body: Box::new(fitted(*body, ty)),
+        },
+        other => Expr::Apply(Op::Fit(ty), vec![other]),
+    }
+}
+
+pub(crate) fn fitted_when_present(expr: Expr, ty: IntType) -> Expr {
+    match expr {
+        Expr::Apply(Op::SomeOf, inner) => Expr::Apply(
+            Op::SomeOf,
+            inner.into_iter().map(|each| fitted(each, ty)).collect(),
+        ),
+        Expr::Choose(test, yes, no) => Expr::Choose(
+            test,
+            Box::new(fitted_when_present(*yes, ty)),
+            Box::new(fitted_when_present(*no, ty)),
+        ),
+        Expr::Bind { slot, value, body } => Expr::Bind {
+            slot,
+            value,
+            body: Box::new(fitted_when_present(*body, ty)),
+        },
+        other => other,
     }
 }
 
@@ -190,45 +310,45 @@ mod tests {
     #[test]
     fn a_plain_kind_fits_only_itself() {
         assert!(Type::Bool.fits(&Type::Bool));
-        assert!(Type::Int.fits(&Type::Int));
-        assert!(!Type::Int.fits(&Type::Bool));
-        assert!(!Type::Text.fits(&Type::Int));
+        assert!(Type::Int(None).fits(&Type::Int(None)));
+        assert!(!Type::Int(None).fits(&Type::Bool));
+        assert!(!Type::Text.fits(&Type::Int(None)));
         assert!(!Type::Timer.fits(&Type::Request));
     }
 
     #[test]
     fn a_kind_not_yet_known_fits_anything() {
         assert!(Type::Unknown.fits(&Type::Timer));
-        assert!(set(Type::Unknown).fits(&set(Type::Int)));
-        assert!(set(Type::Int).fits(&set(Type::Unknown)));
+        assert!(set(Type::Unknown).fits(&set(Type::Int(None))));
+        assert!(set(Type::Int(None)).fits(&set(Type::Unknown)));
     }
 
     #[test]
     fn null_fits_an_optional_kind_but_no_plain_one() {
-        assert!(Type::Null.fits(&Type::optional(Type::Int)));
-        assert!(Type::optional(Type::Int).fits(&Type::Null));
+        assert!(Type::Null.fits(&Type::optional(Type::Int(None))));
+        assert!(Type::optional(Type::Int(None)).fits(&Type::Null));
         assert!(Type::Null.fits(&Type::Null));
-        assert!(!Type::Null.fits(&Type::Int));
-        assert!(!Type::Int.fits(&Type::Null));
+        assert!(!Type::Null.fits(&Type::Int(None)));
+        assert!(!Type::Int(None).fits(&Type::Null));
     }
 
     #[test]
     fn a_plain_kind_does_not_fit_its_optional_kind_without_wrapping() {
-        assert!(!Type::Int.fits(&Type::optional(Type::Int)));
-        assert!(!Type::optional(Type::Int).fits(&Type::Int));
+        assert!(!Type::Int(None).fits(&Type::optional(Type::Int(None))));
+        assert!(!Type::optional(Type::Int(None)).fits(&Type::Int(None)));
     }
 
     #[test]
     fn collections_fit_when_their_items_do() {
-        assert!(set(Type::Int).fits(&set(Type::Int)));
-        assert!(!set(Type::Int).fits(&set(Type::Text)));
-        assert!(!set(Type::Int).fits(&Type::Seq(Box::new(Type::Int))));
+        assert!(set(Type::Int(None)).fits(&set(Type::Int(None))));
+        assert!(!set(Type::Int(None)).fits(&set(Type::Text)));
+        assert!(!set(Type::Int(None)).fits(&Type::Seq(Box::new(Type::Int(None)))));
     }
 
     #[test]
     fn a_sequence_and_a_queue_of_the_same_items_fit_each_other() {
-        let sequence = Type::Seq(Box::new(Type::Int));
-        let queue = Type::Queue(Box::new(Type::Int), 3);
+        let sequence = Type::Seq(Box::new(Type::Int(None)));
+        let queue = Type::Queue(Box::new(Type::Int(None)), 3);
         assert!(sequence.fits(&queue));
         assert!(queue.fits(&sequence));
         assert!(!queue.fits(&Type::Queue(Box::new(Type::Bool), 3)));
@@ -236,12 +356,12 @@ mod tests {
 
     #[test]
     fn records_fit_by_field_name_whatever_the_order_they_were_written_in() {
-        let written = record(&[("y", Type::Int), ("x", Type::Bool)]);
-        let declared = record(&[("x", Type::Bool), ("y", Type::Int)]);
+        let written = record(&[("y", Type::Int(None)), ("x", Type::Bool)]);
+        let declared = record(&[("x", Type::Bool), ("y", Type::Int(None))]);
         assert!(written.fits(&declared));
         assert!(!written.fits(&record(&[("x", Type::Bool)])));
-        assert!(!written.fits(&record(&[("x", Type::Bool), ("z", Type::Int)])));
-        assert!(!written.fits(&record(&[("x", Type::Int), ("y", Type::Int)])));
+        assert!(!written.fits(&record(&[("x", Type::Bool), ("z", Type::Int(None))])));
+        assert!(!written.fits(&record(&[("x", Type::Int(None)), ("y", Type::Int(None))])));
     }
 
     #[test]
@@ -254,18 +374,24 @@ mod tests {
 
     #[test]
     fn merging_fills_in_what_one_side_does_not_know() {
-        assert_eq!(Type::Unknown.merged(&Type::Int), Type::Int);
-        assert_eq!(Type::Int.merged(&Type::Unknown), Type::Int);
-        assert_eq!(set(Type::Unknown).merged(&set(Type::Int)), set(Type::Int));
+        assert_eq!(Type::Unknown.merged(&Type::Int(None)), Type::Int(None));
+        assert_eq!(Type::Int(None).merged(&Type::Unknown), Type::Int(None));
+        assert_eq!(
+            set(Type::Unknown).merged(&set(Type::Int(None))),
+            set(Type::Int(None))
+        );
         let queue = Type::Queue(Box::new(Type::Unknown), 3);
-        let sequence = Type::Seq(Box::new(Type::Int));
-        assert_eq!(queue.merged(&sequence), Type::Queue(Box::new(Type::Int), 3));
+        let sequence = Type::Seq(Box::new(Type::Int(None)));
+        assert_eq!(
+            queue.merged(&sequence),
+            Type::Queue(Box::new(Type::Int(None)), 3)
+        );
     }
 
     #[test]
     fn each_kind_reads_as_a_noun_with_its_article() {
-        assert_eq!(Type::Int.kind(), "a number");
-        assert_eq!(Type::optional(Type::Int).kind(), "an optional value");
+        assert_eq!(Type::Int(None).kind(), "a number");
+        assert_eq!(Type::optional(Type::Int(None)).kind(), "an optional value");
         assert_eq!(Type::Retry(2).kind(), "a retry counter");
     }
 
@@ -283,10 +409,10 @@ mod tests {
         scope.names.push(("x".to_owned(), Binding::State));
         scope
             .names
-            .push(("x".to_owned(), Binding::Local(2, Type::Int)));
+            .push(("x".to_owned(), Binding::Local(2, Type::Int(None))));
         assert!(matches!(
             scope.find("x"),
-            Some(Binding::Local(2, Type::Int))
+            Some(Binding::Local(2, Type::Int(None)))
         ));
         assert!(scope.find("y").is_none());
     }

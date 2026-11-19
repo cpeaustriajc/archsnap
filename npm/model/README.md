@@ -73,6 +73,11 @@ export type State = m.Infer<typeof Turnstile>;
 | `m.request()`               | `RequestValue`: idle, pending, succeeded, failed | idle                          |
 | `m.retry({ max })`          | `RetryValue` from zero to `max` attempts         | zero                          |
 
+A declaration that makes no sense throws when it is written: bounds the wrong way round, a
+value listed twice in `m.enum` or `m.oneOf`, an optional of an optional, and a lock with an
+owner as a map value or a sequence or queue item, whose free state `null` could not be told from
+a missing entry. `earnest verify` refuses the same.
+
 `m.setOf(a, b)`, `m.seqOf(a, b)` and `m.mapOf([k, v])` write collection values; a queue's
 `.initial` takes `m.seqOf(...)`. `m.forall(T, f)` and `m.exists(T, f)` range over a declaration
 or a collection. Every declaration has `values()`, which lists what it declares in the order the
@@ -99,10 +104,16 @@ one of each kind. `reason` is `null`, or why the search is unfinished.
   can't see that name, so pass the model file's exports as `exports`. A part that is not among
   them has its sentence as its id.
 - `maxStates` stops the search before it holds more distinct states than that; the default is
-  5,000,000.
+  5,000,000. Every state that is counted has its rules judged, also the states the limit kept
+  the search from going on from, so a rule one of them breaks is `broken` with its path. No
+  action is tried from those states.
 - The search follows the checker's order, so the two results can be compared: start states in
   field order with the first field varying slowest, actions in declaration order, inputs with
-  the first input varying fastest, and rules checked when the search goes on from a state.
+  the first input varying fastest, and states judged in the order they were found.
+- Anything the model asks that can't be evaluated in a state is a `fault` there: a rule, the
+  `when` or the `then` of an action, or the `when` of an end. A state is `stuck` only when the
+  `when` of every action is false and every end is false, so a state where a `when` or an end
+  faults is not stuck. An end is asked only in a state where no action can happen.
 - A state that is out of range is counted, is not checked against the rules and is not searched
   from.
 

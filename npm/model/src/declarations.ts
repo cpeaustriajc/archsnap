@@ -316,12 +316,25 @@ export const set = <T>(item: Declaration<T, never>): Declaration<SetValue<T>> =>
 		decode: (json) => SetValue.of(listOf("set", json).map((each) => item.fromJson(each))),
 	});
 
-/** Declares a map from values of `key` to values of `value`. Without `.initial` it starts empty. */
+const holdable = <T>(builder: string, inside: Declaration<T, never>): Declaration<T, never> => {
+	if (inside.kind === "owned lock") {
+		throw new Error(
+			`${builder} can't hold a lock with an owner: a free lock is already null, so reading it could not be told from reading nothing`,
+		);
+	}
+	return inside;
+};
+
+/**
+ * Declares a map from values of `key` to values of `value`. Without `.initial` it starts empty.
+ * Throws when `value` is a lock with an owner.
+ */
 export const map = <K, V>(
 	key: Declaration<K, never>,
-	value: Declaration<V, never>,
-): Declaration<MapValue<K, V>> =>
-	new Declaration({
+	valueDeclared: Declaration<V, never>,
+): Declaration<MapValue<K, V>> => {
+	const value = holdable("m.map", valueDeclared);
+	return new Declaration({
 		kind: "map",
 		count: (value.count + 1) ** key.count,
 		rest: { value: MapValue.of<K, V>([]) },
@@ -341,6 +354,7 @@ export const map = <K, V>(
 				}),
 			),
 	});
+};
 
 const lists = <T>(items: readonly T[], longest: number): T[][] => {
 	const all: T[][] = [[]];
@@ -368,12 +382,13 @@ const wholeLimit = (builder: string, limit: number): number => {
 /**
  * Declares a sequence of at most `max` values of `item`. Without `.initial` it starts empty.
  * Pushing past `max` is not an error in the action: the checker reports the state as out of
- * range.
+ * range. Throws when `item` is a lock with an owner.
  */
 export const seq = <T>(
-	item: Declaration<T, never>,
+	itemDeclared: Declaration<T, never>,
 	limit: { readonly max: number },
 ): Declaration<SeqValue<T>> => {
+	const item = holdable("m.seq", itemDeclared);
 	const max = wholeLimit("m.seq's max", limit.max);
 	return new Declaration({
 		kind: "sequence",
@@ -391,11 +406,13 @@ export const seq = <T>(
  * Declares a first-in, first-out queue of at most `capacity` values of `item`. Without
  * `.initial` it starts empty; `.initial(m.seqOf(a, b))` starts it with `a` at the head. Sending
  * to a full queue is not an error in the action: the checker reports the state as out of range.
+ * Throws when `item` is a lock with an owner.
  */
 export const queue = <T>(
-	item: Declaration<T, never>,
+	itemDeclared: Declaration<T, never>,
 	limit: { readonly capacity: number },
 ): Declaration<QueueValue<T>, QueueValue<T> | SeqValue<T>> => {
+	const item = holdable("m.queue", itemDeclared);
 	const capacity = wholeLimit("m.queue's capacity", limit.capacity);
 	return new Declaration({
 		kind: "queue",

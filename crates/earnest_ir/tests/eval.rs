@@ -4,7 +4,7 @@
 use earnest_ir::{
     Expr, Fault, Frame, MapOp, Math, Op, Order, SeqOp, SetOp, Shelf, Sweep, eval, truth,
 };
-use earnest_value::{Symbols, Value};
+use earnest_value::{IntType, Symbols, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 const SLOTS: usize = 4;
@@ -721,4 +721,54 @@ fn each_fault_finishes_a_sentence_about_what_was_evaluated() {
         Fault::WrongKind.describe(),
         "uses a value of the wrong kind"
     );
+    assert_eq!(
+        Fault::Outside(IntType::U8).describe(),
+        "computes a number outside `u8`"
+    );
+    assert_eq!(
+        Fault::Outside(IntType::Usize).describe(),
+        "computes a number outside `usize`"
+    );
+}
+
+fn fit(ty: IntType, number: i64) -> Result<Value, Fault> {
+    value_of(&apply(Op::Fit(ty), &[int(number)]))
+}
+
+#[test]
+fn a_number_inside_its_integer_type_is_given_back_unchanged() {
+    assert_eq!(fit(IntType::U8, 0), Ok(Value::Int(0)));
+    assert_eq!(fit(IntType::U8, 255), Ok(Value::Int(255)));
+    assert_eq!(fit(IntType::I8, -128), Ok(Value::Int(-128)));
+    assert_eq!(fit(IntType::Usize, i64::MAX), Ok(Value::Int(i64::MAX)));
+}
+
+#[test]
+fn a_number_outside_its_integer_type_is_a_fault_that_names_the_type() {
+    assert_eq!(fit(IntType::U8, -1), Err(Fault::Outside(IntType::U8)));
+    assert_eq!(fit(IntType::U8, 256), Err(Fault::Outside(IntType::U8)));
+    assert_eq!(fit(IntType::I8, 128), Err(Fault::Outside(IntType::I8)));
+    assert_eq!(fit(IntType::Usize, -1), Err(Fault::Outside(IntType::Usize)));
+    assert_eq!(
+        fit(IntType::I32, 2_147_483_648),
+        Err(Fault::Outside(IntType::I32))
+    );
+}
+
+#[test]
+fn a_difference_is_computed_first_and_then_must_fit() {
+    let below = |start: i64| {
+        let difference = apply(Op::Math(Math::Subtract), &[int(start), int(1)]);
+        value_of(&apply(Op::Fit(IntType::U8), &[difference]))
+    };
+    assert_eq!(below(1), Ok(Value::Int(0)), "1 - 1 is a `u8`");
+    assert_eq!(below(0), Err(Fault::Outside(IntType::U8)), "0 - 1 is not");
+}
+
+#[test]
+fn only_a_number_can_fit_an_integer_type() {
+    let fitted = |inner: Expr| value_of(&apply(Op::Fit(IntType::U8), &[inner]));
+    assert_eq!(fitted(null()), Err(Fault::NullRead));
+    assert_eq!(fitted(yes()), Err(Fault::WrongKind));
+    assert_eq!(fitted(faulting()), Err(Fault::NullRead), "the fault inside");
 }

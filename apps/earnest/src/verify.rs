@@ -1,6 +1,6 @@
 use crate::arguments::Verify;
 use crate::cache::{Cache, Key};
-use crate::changes::{check_base, rule_changes};
+use crate::changes::{Compare, check_base, rule_changes};
 use crate::commands::{Exit, gather, limits_of};
 use crate::print::{Since, Verified, to_stderr, to_stdout};
 use crate::run::{Bounds, Checked, Graphs, Search, checked, explore_each};
@@ -158,10 +158,17 @@ pub(crate) fn verify(arguments: &Verify) -> Result<Exit, String> {
             return Ok(Exit::Failed);
         }
     };
-    let compared = arguments
-        .base
-        .as_deref()
-        .map(|base| (base, rule_changes(base, &targets, bounds)));
+    let compared = arguments.base.as_deref().map(|base| {
+        let compare = Compare {
+            base,
+            roots: &arguments.selection.models.paths,
+            files: &files,
+            model: arguments.selection.models.model.as_deref(),
+            rule: arguments.selection.rule.as_deref(),
+            bounds,
+        };
+        (base, rule_changes(&compare, &targets))
+    });
     if let Some((base, compared)) = &compared {
         to_stderr(&compared.warnings(base).join("\n"));
     }

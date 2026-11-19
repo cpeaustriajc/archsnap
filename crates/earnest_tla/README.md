@@ -76,21 +76,40 @@ INVARIANT Rule_bounded
   give `<<>>` where there is no item, `SeqShift` and `SeqPop` keep an empty sequence, and `MapGet`
   gives `<<>>` for a missing key. Only the helpers a model uses are written.
 - **Faults.** The search takes no step with an action whose guard or update has no value. The
-  action's `IF` therefore first asks that every optional it unwraps is present and every
-  remainder has a non-negative left side and a right side of at least 1. A rule that has no
-  value stops TLC with an error.
+  action's `IF` therefore first asks that every optional it unwraps is present, every remainder
+  has a non-negative left side and a right side of at least 1, and every number that must fit
+  an integer type is inside it. A rule is guarded the same way: `Rule_id` is
+  `InRange => ((~HasAValue) \/ rule)`, true where the rule has no value, so TLC does not stop
+  and counts every state. `Judged_id` is `InRange => HasAValue`: a state where the rule has no
+  value breaks it. Only a rule that can fault has one. The configuration names `Rule_id` alone,
+  one invariant per rule; `Files::config_judging` gives the configuration that checks both.
 - **Names.** A name keeps its spelling when TLA+ can spell it and nothing else has it. A letter
   TLA+ lacks becomes `_`, a name that does not start with a letter gets a `v` in front, and a
   taken name gets `_2`, `_3` and so on. Text values are TLA+ strings and are never renamed.
 
 ## Running TLC on the files
 
-Run TLC with `-continue`: without it TLC stops at the first broken rule and has counted fewer
-states than the search. In one state TLC reports only the first invariant it finds broken, so a
-rule that breaks only where an earlier rule breaks needs a run of its own. `Files::invariants`
-lists the invariants of the configuration, and `Files::config_checking` gives the configuration
-that checks only the ones it is given: one for a run on a single rule, none for a run that only
-counts the states.
+What can make TLC and the search differ, and what to do about each:
+
+- **TLC stops at the first broken rule.** Run TLC with `-continue`: without it TLC has counted
+  fewer states than the search.
+- **TLC reports one invariant per state.** In one state TLC reports only the first invariant it
+  finds broken, so a rule that breaks only where an earlier rule breaks needs a run of its own.
+  `Files::config_checking` gives the configuration that checks only the invariants it is given:
+  none for a run that only counts the states.
+- **A rule that has no value in a state.** With the written configuration TLC calls it true
+  there, where the search says `unknown` and reports a fault. Check `Judged_id` to see such a
+  state: `Files::rules` lists both invariants of each rule and `Files::config_judging` gives the
+  configuration for one rule. The rule's verdict is broken when a state breaks `Rule_id`,
+  else unknown when a state breaks `Judged_id`, else it holds. A state breaks at most one of
+  the two, so one run with `-continue` is enough.
+- **Numbers beyond 32 bits.** TLC holds a number in 32 bits and stops with an error past them,
+  where the search goes on to 64. A bound of an integer type that TLC can't reach, such as the
+  top of a `u32` or either end of an `i64`, is left out of the check that a number fits its
+  type.
+- **A construct the writer does not know.** It is written as a call of `Fault`, which stops TLC
+  with an error that says what it was.
+- **A view label.** Labels are not exported, so nothing in the module depends on them.
 
 ## Tests
 

@@ -1,11 +1,11 @@
 use earnest_ast::{
-    ActionBody, ActionDraft, Binary, Draft, FieldDraft, HelperDraft, RuleDraft, Shape, ShapeKind,
-    Term, TermKind, Unary, ViewDraft,
+    ActionBody, ActionDraft, Binary, Draft, FieldDraft, HelperDraft, HelperKind, Language,
+    RuleDraft, Shape, ShapeKind, Term, TermKind, Unary, ViewDraft,
 };
 use earnest_diagnostics::{Place, Problem};
 use earnest_ir::{Fault, Frame, Model, eval, truth};
 use earnest_semantic::lower;
-use earnest_value::Value;
+use earnest_value::{IntType, Value};
 
 pub(crate) const FILE: &str = "src/cart.model.ts";
 
@@ -66,8 +66,24 @@ pub(crate) fn call(target: Term, method: &str, arguments: Vec<Term>) -> Term {
 
 pub(crate) fn helper_call(known: &str, arguments: Vec<Term>) -> Term {
     term(TermKind::Helper {
+        kind: HelperKind::Function,
         name: known.to_owned(),
         arguments,
+    })
+}
+
+pub(crate) fn method_call(known: &str, arguments: Vec<Term>) -> Term {
+    term(TermKind::Helper {
+        kind: HelperKind::Method,
+        name: known.to_owned(),
+        arguments,
+    })
+}
+
+pub(crate) fn declared(shape: Shape, value: Term) -> Term {
+    term(TermKind::Declared {
+        shape: Box::new(shape),
+        value: Box::new(value),
     })
 }
 
@@ -166,7 +182,19 @@ pub(crate) fn boolean() -> Shape {
 }
 
 pub(crate) fn range(lo: i64, hi: i64) -> Shape {
-    shape(ShapeKind::Int { lo, hi })
+    shape(ShapeKind::Int { lo, hi, ty: None })
+}
+
+pub(crate) fn typed_range(ty: IntType, lo: i64, hi: i64) -> Shape {
+    shape(ShapeKind::Int {
+        lo,
+        hi,
+        ty: Some(ty),
+    })
+}
+
+pub(crate) fn whole(ty: IntType) -> Shape {
+    typed_range(ty, ty.lowest(), ty.highest())
 }
 
 pub(crate) fn one_of(choices: &[&str]) -> Shape {
@@ -279,6 +307,7 @@ pub(crate) fn draft(fields: Vec<(&str, Shape)>) -> Draft {
     Draft {
         name: "Cart".to_owned(),
         file: FILE.to_owned(),
+        language: Language::TypeScript,
         place: Place {
             line: 5,
             column: 14,
@@ -301,6 +330,7 @@ pub(crate) fn draft(fields: Vec<(&str, Shape)>) -> Draft {
 
 pub(crate) fn helper(known: &str, parameters: &[&str], body: Term) -> HelperDraft {
     HelperDraft {
+        kind: HelperKind::Function,
         name: known.to_owned(),
         parameters: parameters
             .iter()
@@ -308,6 +338,18 @@ pub(crate) fn helper(known: &str, parameters: &[&str], body: Term) -> HelperDraf
             .collect(),
         body,
     }
+}
+
+pub(crate) fn method(known: &str, parameters: &[&str], body: Term) -> HelperDraft {
+    HelperDraft {
+        kind: HelperKind::Method,
+        ..helper(known, parameters, body)
+    }
+}
+
+pub(crate) fn rust(mut source: Draft) -> Draft {
+    source.language = Language::Rust;
+    source
 }
 
 pub(crate) fn lowered(source: &Draft) -> Model {

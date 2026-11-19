@@ -38,6 +38,12 @@ impl Expanded {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Asked {
+    Everything,
+    RulesOnly,
+}
+
 #[derive(Clone, Copy, Default)]
 struct Stopping {
     enabled: bool,
@@ -131,6 +137,7 @@ pub(crate) fn expand_state(
     only_rule: Option<&str>,
     slots: usize,
     state: &[Value],
+    asked: Asked,
 ) -> Expanded {
     let mut found = Expanded {
         outside: model
@@ -156,6 +163,9 @@ pub(crate) fn expand_state(
                 found.unjudged.push(position);
             }
         }
+    }
+    if asked == Asked::RulesOnly {
+        return found;
     }
     let mut moving = Stopping::default();
     for (position, action) in model.actions.iter().enumerate() {

@@ -156,8 +156,25 @@ fn each_declaration_has_as_many_values_as_it_declares() {
 }
 
 #[test]
-fn an_enum_that_lists_a_choice_twice_declares_it_once() {
-    assert_eq!(starts_of(one_of(&["a", "b", "a"])), ["\"a\"", "\"b\""]);
+fn an_enum_that_lists_a_choice_twice_is_refused_at_the_second() {
+    let mut twice = one_of(&["a", "b", "a"]);
+    if let ShapeKind::OneOf(choices) = &mut twice.kind {
+        choices[2].place = HERE;
+    }
+    let problem = the_problem(&draft(vec![("only", twice)]));
+    assert_eq!(problem.place(), HERE, "the second `a`");
+    assert_eq!(problem.feature, "the choice \"a\" listed twice");
+    assert_eq!(problem.message, "list each value once");
+    let numbers = shape(ShapeKind::OneOf(ints(&[1, 2, 1])));
+    assert_eq!(
+        the_problem(&draft(vec![("only", numbers)])).feature,
+        "the choice 1 listed twice"
+    );
+    assert_eq!(
+        starts_of(one_of(&["a", "b"])),
+        ["\"a\"", "\"b\""],
+        "each value once is fine"
+    );
 }
 
 #[test]

@@ -27,7 +27,7 @@ earnest confirm --tlc tla2tools.jar
 | `--model <name>` | all | Check only the model with this name |
 | `--rule <id>` | all | Check only this rule (needs `--model` when two models share the id) |
 | `--json` | off | Print the results as JSON instead of text |
-| `--max-states <n>` | 5000000 | Stop a model after this many distinct states |
+| `--max-states <n>` | 5000000 | Stop a model after this many distinct states. Every state that is counted has its rules judged |
 | `--time-limit <seconds>` | none | Stop a model after this long |
 | `--jobs <n>` | all cores | Worker threads |
 | `--no-cache` | off | Check every model again, even when unchanged |
@@ -39,9 +39,17 @@ earnest confirm --tlc tla2tools.jar
 ### Which files are models
 
 A file is a model file when it is a `.ts`, `.mts` or `.tsx` file that imports `@earnest/model`, or
-a `.rs` file that contains `earnest::model`. Folders named `node_modules`, `target`, `dist`,
+a `.rs` file that contains `earnest::model`, however the path is spaced or grouped: `use
+earnest::{model::Model}`, `use earnest as kit` and `extern crate earnest` count too. Folders named `node_modules`, `target`, `dist`,
 `build` and any folder whose name starts with a dot are skipped. Models are checked and printed in
 order of file path, then of position in the file.
+
+A file is never left out without a word. A file with one of those extensions is `unreadable`,
+with a problem that names it, when it imports the library and is not UTF-8 text (the problem is
+at the first byte that is not, or at the top of a file saved as UTF-16), and when it can't be
+opened at all, as a file without read permission or a link to nothing: the checker can't tell
+that it holds no model. So is a folder that can't be listed. A folder whose name ends like a
+model file is searched as a folder, and a link to a folder is not followed.
 
 ### Text output
 
@@ -74,8 +82,18 @@ unreadable  src/clock.model.ts
   `field: before -> after`.
 - `stuck`, `out of range` and `fault` findings have the same path form. A model is out of range
   when an action gives a field a value outside what the field declares. The state out of range
-  is counted, and nothing is searched from it. A fault is a rule or an
-  action that can't be evaluated in a state, for example because it reads a field of `null`.
+  is counted, and nothing is searched from it.
+- Anything the model asks that can't be evaluated in a state is a `fault` in that state: a rule,
+  the `when` or the `then` of an action, or the `when` of an end, for example because it reads a
+  field of `null`. A state is `stuck` only when the `when` of every action is false and every
+  end is false. A state where a `when` or an end can't be evaluated is a fault and is not stuck.
+  An end is asked only in a state where no action can happen. `explore` in the TypeScript
+  library follows the same rule.
+- A model that stops at `--max-states` or `--time-limit` is `unfinished` with `<n> states so
+  far`. Each of those states has had its rules judged, also the states the search found last
+  and did not go on from, so a rule a counted state breaks is `broken` with its path. No action
+  is tried from the states it did not go on from, so they add no stuck state and no fault of an
+  action.
 - An `unreadable` file lists each problem as `file:line:column`, the feature in backticks and a
   sentence. No model in that file is checked.
 - The summary line counts each model and each unreadable file once in its total, then lists
@@ -165,6 +183,13 @@ rule changes since origin/main
 ```
 
 `change` is `added`, `removed`, `loosened`, `tightened`, `changed` or `reworded`. A rule is
+`removed` when the base has it and the run does not: deleted from a model that stays, gone with
+its whole model, or gone with its file. The models of a file that was deleted, renamed or no
+longer imports the library are found in the base commit under the paths the run searches, and
+their rules are listed as `removed` after the changes of the files that are still there. A
+renamed file or a renamed model therefore shows each rule twice, as `removed` under the old name
+and `added` under the new one. With `--model`, only removed models of that name are listed. A
+rule is
 `loosened` when some reachable state of the new model passes the new rule and breaks the old one,
 `tightened` when the reverse happens and no state loosens it, `changed` when its condition differs
 but no reachable state tells the two apart or the old condition can't be read against the new
@@ -183,7 +208,10 @@ in Rust, so moving white space is not a change.
 `earnest chart` prints one fenced `mermaid` block holding a `stateDiagram-v2` chart. States and
 arrows carry the labels from the model's view. A state that breaks a rule has the class `broken`.
 A chart never has more than 20 arrows: when the model has more, the chart keeps the paths to the
-broken states first and says how many states and arrows it left out.
+broken states first and says how many states and arrows it left out. When the shortest path to a
+broken state is longer than what is left of the 20 arrows, the chart keeps the first arrows of
+that path, does not draw the broken state, and the note says so: `Not shown: 5 of 26 states and
+5 of 25 arrows. A broken state lies beyond what is shown.`
 
 `earnest report` prints Markdown for a PR body: one section per model with its result line, its
 chart, the path to each broken rule, and the rule changes when `--base` is given.
@@ -193,6 +221,14 @@ chart, the path to each broken rule, and the rule changes when `--base` is given
 `earnest tla` writes `<Model>.tla` and `<Model>.cfg` for each model. TLC finds the same number of
 distinct states and the same verdict for each rule. `earnest confirm --tlc <jar>` exports every
 model, runs TLC on each with Java, and exits 1 when a state count or a verdict differs.
+
+A rule `id` is the invariant `Rule_id`, and the configuration names one invariant for each rule.
+A rule that can't be evaluated in a state is true there in `Rule_id`, as an action that can't be
+evaluated takes no step, so TLC counts every state and never stops on such a rule. The module
+also defines `Judged_id` for a rule that can fault: a state where the rule has no value breaks
+it. `earnest confirm` checks both for each rule and compares TLC's verdict, `broken` when a state
+breaks `Rule_id`, else `unknown` when a state breaks `Judged_id`, else `holds`, with the
+checker's.
 
 ## Writing a model in TypeScript
 
@@ -270,9 +306,16 @@ export type State = m.Infer<typeof AddToCartFocus>;
   input.by`; `when` and `then` may take different ones. Where a function does not take it, the
   same name is the top-level constant.
 
+- A record literal is a value of a declared record when each field is: a field declared
+  optional takes a value or `null`. So `g === "ann" ? { qty: 0, who: g } : { qty: 1, who: null }`
+  is one kind of record, and so is a record bound to a `const` and spread into the field that
+  declares it, or given back by a helper function. It prints, compares and exports to TLA+ as
+  the declared record does.
+
 Anything else makes the file unreadable: `await`, loops, `let`, assignment, `new`, classes,
-`fetch`, `Date`, `Math.random`, other imports, a name written twice in one object, and any name
-the file does not define, also in a constant that nothing reads. `%` on a negative number is a
+`fetch`, `Date`, `Math.random`, other imports, a name written twice in one object, a value
+listed twice in `m.enum` or `m.oneOf` (the library throws on it too), and any name the file does
+not define, also in a constant that nothing reads. `%` on a negative number is a
 fault, because languages disagree on its result.
 
 ## Writing a model in Rust
@@ -333,14 +376,41 @@ impl Turnstile {
   `if condition { return Some(Self { .. }); }` are allowed.
 - A rule or an end is a method that returns `bool`. Ids are the method names. An enum value is
   known to the checker by its variant name, so `Gate::Locked` prints as `"Locked"`.
-- A method without `#[action]`, `#[rule]` or `#[end]` is a helper function. The three
-  attributes are written plainly, never with a path. No part of a model is under `#[cfg]` or
+- A method without `#[action]`, `#[rule]` or `#[end]` is a helper function, called as
+  `self.name(..)`. A function outside the block is one too, called as `name(..)`. The two are
+  kept apart, so a method and a function may share a name, and so may methods of two models.
+  A helper's parameters need no `#[range]`, which Rust would refuse there: a helper is only
+  called with values. A function of the file can't be named `forall`, `exists` or `Some`. The
+  three attributes are written plainly, never with a path. No part of a model is under `#[cfg]` or
   `#[cfg_attr]`: the checker reads one text for every build. Only an item that is not part of
   a model (a test module, a function, a plain `impl` block) may be `#[cfg(test)]`, and it is
   skipped.
 - A model is ordinary Rust: a test calls `state.pay()` to take one step, which is how a path from
   the report is replayed with `cargo test`. `Turnstile::starts()` lists every start state, and
   a rule or an end is called the same way: `state.stays_locked()`.
+
+Where the checker's reading of a Rust file could differ from what Rust does when the file runs,
+the checker agrees with Rust or refuses the file. It never reads the file as something else.
+
+- **A number has its integer type.** A result outside the type is a fault in that state, printed
+  as "the rule `below` computes a number outside `u8` in this state": `self.n - 1` on a `u8` of
+  0, `self.items.size() - 1` on an empty list (a size and a position are `usize`), and a sum or
+  a product above the largest number of any type, signed ones included. Rust stops a test build
+  there and wraps around in a release build, so neither is a value the rule can be judged by.
+  The type comes from the field, the input, the constant, the helper's parameter or result, a
+  `let` that states it, or a suffix as in `1_u8`; a number written out takes the type of the
+  number it meets, and `i32` when it meets none. A `let` must state the type of a number that
+  nothing else types: `let most: u8 = 3;`. Two integer types don't mix, as in Rust. A
+  `#[range(lo, hi)]` must lie inside its type. A `u64`, a `usize` and the 128-bit types
+  reach as far as an `i64` does, and beyond that the fault is "computes a number too large to
+  hold". TypeScript has one kind of number, held in 64 bits, so there `s.n - 1` at 0 is -1.
+- **`Some(None)` is not `None`.** `get`, `first`, `last` and `head` give an `Option`, so a `Map`
+  value and a `Seq` or `Queue` item can't be an `Option`: the file is unreadable. Hold a struct
+  with an `Option` field, or leave the entry out. `Option<Option<T>>`, `Some(None)`,
+  `Lock<Option<T>>` and `first()` of a list written with `None` in it are refused the same way.
+  A `Set` of options and a `Map` keyed by one are read. In TypeScript `null` is one value, so
+  `m.map(K, V.optional())` is read and `get` gives `null` for a missing key and for a key that
+  maps to `null`.
 
 ## The primitives
 
@@ -352,7 +422,7 @@ operation gives back a new value and changes nothing in place.
 | Group | Declared with | Operations |
 |---|---|---|
 | Boolean | `m.boolean()` / `bool` | `&&`, `\|\|`, `!`, `===` |
-| Number | `m.int(lo, hi)` / `#[range(lo, hi)]` | `+`, `-`, `*`, `%`, `<`, `<=`, `>`, `>=`, `===` |
+| Number | `m.int(lo, hi)` / an integer type with `#[range(lo, hi)]` | `+`, `-`, `*`, `%`, `<`, `<=`, `>`, `>=`, `===` |
 | Enum | `m.enum([...])`, `m.oneOf([...])` / `enum` | `===`, `!==` |
 | Optional | `.optional()` / `Option<T>` | `=== null`, `!== null` / `is_some()`, `is_none()`, `is_some_and(f)`, `== Some(x)` |
 | Record | `m.record({...})` / `struct` | field read, `{ ...r, field: v }` / `R { field: v, ..r.clone() }` |
@@ -370,6 +440,11 @@ Collection values are written with `m.setOf(a, b)`, `m.seqOf(a, b)` and `m.mapOf
 TypeScript, and `Set::of([a, b])`, `Seq::of([a, b])` and `Map::of([(k, v)])` in Rust. Sending to
 a full queue, pushing past a sequence's `max`, or counting past a range is not an error in the
 primitive: the checker reports the state as out of range, with the path to it.
+
+A lock with an owner can't be a map value or a sequence or queue item, in either language: a
+free lock is already `null`, so reading it could not be told from reading nothing. The checker
+refuses the file and the TypeScript library throws. A lock without an owner can be held, and a
+lock with an owner can be a field, a record field or a set item.
 
 An optional value has no order. `<`, `<=`, `>` and `>=` between two optional values make the
 file unreadable, in Rust too, where `None < Some(5)` compiles: write

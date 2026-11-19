@@ -134,12 +134,23 @@ impl Sketch {
     pub(crate) fn shown(mut self, expr: Expr) -> String {
         self.rule("shown", expr);
         let module = self.written().module;
-        let lines = body_of(&module, "Rule_shown");
-        let [only] = lines.as_slice() else {
-            panic!("a rule is one line, not {lines:?}");
+        let judged_in_range = |name: &str| -> Option<String> {
+            let lines = body_of(&module, name);
+            let [only] = lines.as_slice() else {
+                return None;
+            };
+            only.strip_prefix("InRange => ").map(str::to_owned)
         };
-        only.strip_prefix("InRange => ")
-            .unwrap_or_else(|| panic!("a rule is judged only in range, not `{only}`"))
+        let rule = judged_in_range("Rule_shown")
+            .unwrap_or_else(|| panic!("a rule is one line judged only in range: {module}"));
+        let Some(has_a_value) = judged_in_range("Judged_shown") else {
+            return rule;
+        };
+        rule.strip_prefix(&format!("((~{has_a_value}) \\/ "))
+            .and_then(|rest| rest.strip_suffix(')'))
+            .unwrap_or_else(|| {
+                panic!("a rule that can fault is judged where it has a value: {rule}")
+            })
             .to_owned()
     }
 }

@@ -208,6 +208,7 @@ impl Reader<'_> {
             "int" => ShapeKind::Int {
                 lo: self.number_argument(call, 0),
                 hi: self.number_argument(call, 1),
+                ty: None,
             },
             "enum" | "oneOf" => ShapeKind::OneOf(self.choices(call)),
             "record" => ShapeKind::Record(self.record_fields(call)),

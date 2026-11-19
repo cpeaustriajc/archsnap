@@ -1,4 +1,5 @@
-use crate::reading::read;
+use crate::discovery::{IN_EVERY_MODEL_FILE, Language, is_model_source, is_searched, language_of};
+use crate::reading::{ModelFile, read};
 use crate::run::Bounds;
 use crate::select::Target;
 use earnest_ast::{Draft, RuleDraft};
@@ -7,7 +8,8 @@ use earnest_check::{Limits, Verdict, explore};
 use earnest_ir::{Expr, Model, Op, Rule};
 use earnest_semantic::lower_with_earlier;
 use serde::Serialize;
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -106,22 +108,98 @@ pub(crate) fn check_base(base: &str) -> Result<(), String> {
     }
 }
 
-fn source_at(base: &str, file: &str) -> Option<String> {
-    let path = Path::new(file);
-    let folder = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let name = path.file_name()?.to_str()?;
+fn nearest_folder(path: &Path) -> (&Path, PathBuf) {
+    let mut folder = path.parent().unwrap_or_else(|| Path::new(""));
+    while !folder.as_os_str().is_empty() && !folder.is_dir() {
+        folder = folder.parent().unwrap_or_else(|| Path::new(""));
+    }
+    let below = path.strip_prefix(folder).unwrap_or(path).to_path_buf();
+    if folder.as_os_str().is_empty() {
+        (Path::new("."), below)
+    } else {
+        (folder, below)
+    }
+}
+
+fn bytes_at(base: &str, file: &str) -> Option<Vec<u8>> {
+    let (folder, below) = nearest_folder(Path::new(file));
+    let name = below.to_str()?;
     let shown = git(folder)
         .arg("show")
         .arg(format!("{base}:./{name}"))
         .output()
         .ok()?;
-    if !shown.status.success() {
-        return None;
+    shown.status.success().then_some(shown.stdout)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum AtBase {
+    Absent,
+    Unreadable,
+    Models(Vec<Draft>),
+}
+
+fn understood(language: Language, file: &str, bytes: Vec<u8>) -> AtBase {
+    let source = match String::from_utf8(bytes) {
+        Ok(source) => source,
+        Err(refused) => {
+            let lossy = String::from_utf8_lossy(refused.as_bytes());
+            return if is_model_source(language, &lossy) {
+                AtBase::Unreadable
+            } else {
+                AtBase::Absent
+            };
+        }
+    };
+    if !is_model_source(language, &source) {
+        return AtBase::Absent;
     }
-    String::from_utf8(shown.stdout).ok()
+    let reading = read(language, file, &source);
+    if reading.problems.is_empty() {
+        AtBase::Models(reading.drafts)
+    } else {
+        AtBase::Unreadable
+    }
+}
+
+fn at_base(base: &str, language: Language, file: &str) -> AtBase {
+    bytes_at(base, file).map_or(AtBase::Absent, |bytes| understood(language, file, bytes))
+}
+
+fn models_listed_at(base: &str, folder: &Path) -> Vec<PathBuf> {
+    let mut search = git(folder);
+    search.args(["grep", "--files-with-matches", "--null", "--text"]);
+    search.args(["--fixed-strings", "-e", IN_EVERY_MODEL_FILE]);
+    let Ok(output) = search.arg(base).output() else {
+        return Vec::new();
+    };
+    output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter_map(|name| std::str::from_utf8(name).ok())
+        .filter_map(|name| name.strip_prefix(base)?.strip_prefix(':'))
+        .map(PathBuf::from)
+        .collect()
+}
+
+fn models_only_at_base(base: &str, roots: &[PathBuf], present: &BTreeSet<PathBuf>) -> Vec<PathBuf> {
+    let here = [PathBuf::from(".")];
+    let roots = if roots.is_empty() { &here } else { roots };
+    let mut only_at_base = BTreeSet::new();
+    for root in roots.iter().filter(|root| root.is_dir()) {
+        let shown = if root == Path::new(".") {
+            Path::new("")
+        } else {
+            root.as_path()
+        };
+        for below in models_listed_at(base, root) {
+            let path = shown.join(&below);
+            if is_searched(&below) && !present.contains(&path) {
+                only_at_base.insert(path);
+            }
+        }
+    }
+    only_at_base.into_iter().collect()
 }
 
 fn implies(first: &Rule, second: &Rule, id: String) -> Rule {
@@ -301,46 +379,111 @@ impl Compared {
     }
 }
 
-pub(crate) fn rule_changes(base: &str, targets: &[Target<'_>], bounds: Bounds) -> Compared {
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Compare<'a> {
+    pub(crate) base: &'a str,
+    pub(crate) roots: &'a [PathBuf],
+    pub(crate) files: &'a [ModelFile],
+    pub(crate) model: Option<&'a str>,
+    pub(crate) rule: Option<&'a str>,
+    pub(crate) bounds: Bounds,
+}
+
+impl Compare<'_> {
+    fn selects(&self, draft: &Draft) -> bool {
+        self.model.is_none_or(|name| draft.name == name)
+            && self
+                .rule
+                .is_none_or(|id| draft.rules.iter().any(|rule| rule.id == id))
+    }
+}
+
+pub(crate) fn removed_with_their_model(
+    compare: &Compare<'_>,
+    old: &[Draft],
+    now: &[&str],
+) -> Vec<Difference> {
+    old.iter()
+        .filter(|draft| !now.contains(&draft.name.as_str()) && compare.selects(draft))
+        .flat_map(|draft| {
+            draft
+                .rules
+                .iter()
+                .map(|rule| one_sided(&draft.name, rule, Kind::Removed))
+        })
+        .collect()
+}
+
+pub(crate) fn rule_changes(compare: &Compare<'_>, targets: &[Target<'_>]) -> Compared {
     let mut compared = Compared::default();
-    let mut file_at_base: Option<(&str, Vec<Draft>)> = None;
-    for target in targets {
-        let file = target.file;
-        if file_at_base
-            .as_ref()
-            .is_none_or(|(path, _)| *path != file.path)
-        {
-            let reading = source_at(base, &file.path)
-                .map(|source| read(file.language, &file.path, &source))
-                .unwrap_or_default();
-            if !reading.problems.is_empty() {
-                compared.unreadable_at_base.push(file.path.clone());
-            }
-            let drafts = if reading.problems.is_empty() {
-                reading.drafts
-            } else {
-                Vec::new()
-            };
-            file_at_base = Some((&file.path, drafts));
-        }
-        if compared.unreadable_at_base.last() == Some(&file.path) {
+    for file in compare.files {
+        let Some(language) = language_of(Path::new(&file.path)) else {
+            continue;
+        };
+        if !file.problems().is_empty() {
             continue;
         }
-        let new = &target.readable.draft;
-        let old = file_at_base
-            .as_ref()
-            .and_then(|(_, drafts)| drafts.iter().find(|draft| draft.name == new.name));
-        compared.changes.extend(model_changes(old, new, bounds));
+        let old = match at_base(compare.base, language, &file.path) {
+            AtBase::Unreadable => {
+                compared.unreadable_at_base.push(file.path.clone());
+                continue;
+            }
+            AtBase::Absent => Vec::new(),
+            AtBase::Models(drafts) => drafts,
+        };
+        for target in targets
+            .iter()
+            .filter(|target| target.file.path == file.path)
+        {
+            let new = &target.readable.draft;
+            let was = old.iter().find(|draft| draft.name == new.name);
+            compared
+                .changes
+                .extend(model_changes(was, new, compare.bounds));
+        }
+        let now: Vec<&str> = file
+            .models()
+            .iter()
+            .map(|readable| readable.draft.name.as_str())
+            .collect();
+        compared
+            .changes
+            .extend(removed_with_their_model(compare, &old, &now));
+    }
+    let present: BTreeSet<PathBuf> = compare
+        .files
+        .iter()
+        .map(|file| PathBuf::from(&file.path))
+        .collect();
+    for path in models_only_at_base(compare.base, compare.roots, &present) {
+        let Some(language) = language_of(&path) else {
+            continue;
+        };
+        let shown = path.to_string_lossy();
+        match at_base(compare.base, language, &shown) {
+            AtBase::Unreadable => compared.unreadable_at_base.push(shown.into_owned()),
+            AtBase::Absent => {}
+            AtBase::Models(drafts) => {
+                compared
+                    .changes
+                    .extend(removed_with_their_model(compare, &drafts, &[]));
+            }
+        }
     }
     compared
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Difference, Kind, Wording, model_changes};
+    use super::{Compare, Difference, Kind, Wording, git, model_changes, rule_changes};
+    use crate::discovery::discover;
+    use crate::reading::{ModelFile, load};
     use crate::run::Bounds;
+    use crate::select::select;
     use earnest_ast::Draft;
     use std::fmt::Write;
+    use std::fs;
+    use std::path::{Path, PathBuf};
 
     const FILE: &str = "tank.model.ts";
     const REST_OF_THE_TANK: &str = "const TOP = 3;\n\
@@ -693,5 +836,146 @@ mod tests {
                 ("third".to_owned(), Kind::Reworded)
             ]
         );
+    }
+
+    fn one_rule_model(name: &str, rule: &str) -> String {
+        format!(
+            "export const {name} = m.model(\"{name}\", {{ on: m.boolean().initial(false) }});\n\
+             export const {rule} = {name}.rule({{ says: \"{rule} of {name}\", holds: (s) => !s.on }});\n"
+        )
+    }
+
+    fn model_file(models: &[(&str, &str)]) -> String {
+        let mut source = String::from("import { m } from \"@earnest/model\";\n");
+        for (name, rule) in models {
+            source.push_str(&one_rule_model(name, rule));
+        }
+        source
+    }
+
+    fn put(root: &Path, relative: &str, text: &str) {
+        let target = root.join(relative);
+        fs::create_dir_all(target.parent().expect("a file has a folder"))
+            .expect("a folder can be made");
+        fs::write(target, text).expect("a file can be written");
+    }
+
+    fn run_git(root: &Path, arguments: &[&str]) {
+        let done = git(root)
+            .args(["-c", "user.name=test", "-c", "user.email=test@example.com"])
+            .args(arguments)
+            .output()
+            .expect("`git` is on the `PATH`");
+        assert!(done.status.success(), "git {arguments:?} worked");
+    }
+
+    fn repository_with_a_base_commit() -> tempfile::TempDir {
+        let folder = tempfile::tempdir().expect("a temporary folder can be made");
+        let root = folder.path();
+        put(
+            root,
+            "kept.model.ts",
+            &model_file(&[("Tank", "capped"), ("Lamp", "dim")]),
+        );
+        put(root, "gone.model.ts", &model_file(&[("Bell", "rings")]));
+        put(root, "old/name.model.ts", &model_file(&[("Door", "shut")]));
+        put(root, "plain.model.ts", &model_file(&[("Vase", "whole")]));
+        put(
+            root,
+            "node_modules/pkg/a.model.ts",
+            &model_file(&[("Dep", "inside")]),
+        );
+        put(root, "notes.ts", "export const one = 1;\n");
+        run_git(root, &["init", "--quiet", "."]);
+        run_git(root, &["add", "--all", "--force"]);
+        run_git(root, &["commit", "--quiet", "--message", "base"]);
+        folder
+    }
+
+    fn changes_since_the_base(root: &Path, model: Option<&str>) -> Vec<(String, String, Kind)> {
+        let roots = [root.to_path_buf()];
+        let files: Vec<ModelFile> = discover(&roots)
+            .expect("the root exists")
+            .into_iter()
+            .map(load)
+            .collect();
+        let targets = select(&files, model, None).expect("the selection names a model");
+        let compare = Compare {
+            base: "HEAD",
+            roots: &roots,
+            files: &files,
+            model,
+            rule: None,
+            bounds: bounds(),
+        };
+        let compared = rule_changes(&compare, &targets);
+        assert!(
+            compared.warnings("HEAD").is_empty(),
+            "every file is readable at the base: {:?}",
+            compared.warnings("HEAD")
+        );
+        compared
+            .changes
+            .into_iter()
+            .map(|change| (change.model, change.id, change.change))
+            .collect()
+    }
+
+    fn change(model: &str, id: &str, kind: Kind) -> (String, String, Kind) {
+        (model.to_owned(), id.to_owned(), kind)
+    }
+
+    #[test]
+    fn rules_that_went_with_their_model_or_their_file_are_removed() {
+        let folder = repository_with_a_base_commit();
+        let root = folder.path();
+        put(root, "kept.model.ts", &model_file(&[("Tank", "capped")]));
+        fs::remove_file(root.join("gone.model.ts")).expect("a file can be deleted");
+        fs::remove_dir_all(root.join("old")).expect("a folder can be deleted");
+        put(root, "new/name.model.ts", &model_file(&[("Door", "shut")]));
+        put(root, "plain.model.ts", "export const one = 1;\n");
+        fs::remove_dir_all(root.join("node_modules")).expect("a folder can be deleted");
+        assert_eq!(
+            changes_since_the_base(root, None),
+            [
+                change("Lamp", "dim", Kind::Removed),
+                change("Door", "shut", Kind::Added),
+                change("Bell", "rings", Kind::Removed),
+                change("Door", "shut", Kind::Removed),
+                change("Vase", "whole", Kind::Removed),
+            ],
+            "the files of the run in path order (a model gone from a file that stays, the \
+             renamed file's model as added), then the files only the base has in path order: \
+             the deleted file, the old name of the renamed one, and the file that is no longer \
+             a model file; a folder the search skips is not listed"
+        );
+        assert_eq!(
+            changes_since_the_base(root, Some("Door")),
+            [
+                change("Door", "shut", Kind::Added),
+                change("Door", "shut", Kind::Removed),
+            ],
+            "`--model` narrows the removed models as it narrows the checked ones"
+        );
+    }
+
+    #[test]
+    fn a_file_that_lost_every_model_lists_their_rules_as_removed() {
+        let folder = repository_with_a_base_commit();
+        let root = folder.path();
+        put(root, "gone.model.ts", &model_file(&[]));
+        let listed = changes_since_the_base(root, None);
+        assert_eq!(
+            listed,
+            [change("Bell", "rings", Kind::Removed)],
+            "the file still imports the library and has no model left"
+        );
+    }
+
+    #[test]
+    fn nothing_is_removed_when_nothing_changed() {
+        let folder = repository_with_a_base_commit();
+        let listed = changes_since_the_base(&PathBuf::from(folder.path()), None);
+        assert_eq!(listed, [], "the files are as the base has them");
     }
 }

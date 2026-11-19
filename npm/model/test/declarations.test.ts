@@ -205,6 +205,14 @@ test("a declaration that makes no sense is refused when it is written", () => {
 	assert.throws(() => Letter.optional().optional(), /can't be made optional/);
 	assert.throws(() => m.lock(Letter).optional(), /can't be made optional/);
 	assert.throws(() => m.lock(Letter.optional()), /owner can't be optional/);
+	assert.throws(() => m.map(Letter, m.lock(Letter)), /m\.map can't hold a lock with an owner/);
+	assert.throws(() => m.seq(m.lock(Letter), { max: 1 }), /m\.seq can't hold a lock with an owner/);
+	assert.throws(
+		() => m.queue(m.lock(Letter), { capacity: 1 }),
+		/m\.queue can't hold a lock with an owner/,
+	);
+	assert.equal(m.map(Letter, m.lock()).kind, "map");
+	assert.equal(m.set(m.lock(Letter)).kind, "set");
 	assert.throws(() => m.seq(Letter, { max: -1 }), /not negative/);
 	assert.throws(() => m.queue(Letter, { capacity: 0.5 }), /whole number/);
 	assert.throws(() => m.retry({ max: -2 }), /not negative/);

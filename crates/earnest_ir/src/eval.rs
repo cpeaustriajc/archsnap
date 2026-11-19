@@ -1,11 +1,11 @@
 use crate::{Expr, MapOp, Math, Op, Order, SeqOp, SetOp, Shelf, Sweep};
-use earnest_value::{Sym, Value};
+use earnest_value::{IntType, Sym, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 /// Why an expression has no value in a state.
 ///
-/// The search reports a fault as a finding with the path to the state. The first three can
+/// The search reports a fault as a finding with the path to the state. All but the last can
 /// happen in a well-typed model. [`Fault::WrongKind`] means the expression itself is malformed,
 /// which a model lowered by `earnest_semantic` never is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,6 +17,9 @@ pub enum Fault {
     Overflow,
     /// A remainder with a negative number or a divisor below 1, where languages disagree.
     Remainder,
+    /// A number is outside the integer type the model file gives it, where Rust stops a test
+    /// build and wraps around in a release build.
+    Outside(IntType),
     /// An operation got a value of a kind it has no meaning for, too few arguments, or a field
     /// or slot that does not exist.
     WrongKind,
@@ -26,12 +29,15 @@ impl Fault {
     /// The fault as the end of a sentence that starts with what was evaluated, such as "the
     /// rule `total` reads a value that is null".
     #[must_use]
-    pub fn describe(self) -> &'static str {
+    pub fn describe(self) -> String {
         match self {
-            Self::NullRead => "reads a value that is null",
-            Self::Overflow => "computes a number too large to hold",
-            Self::Remainder => "takes a remainder with a negative number or a divisor below 1",
-            Self::WrongKind => "uses a value of the wrong kind",
+            Self::NullRead => "reads a value that is null".to_owned(),
+            Self::Overflow => "computes a number too large to hold".to_owned(),
+            Self::Remainder => {
+                "takes a remainder with a negative number or a divisor below 1".to_owned()
+            }
+            Self::Outside(ty) => format!("computes a number outside `{}`", ty.name()),
+            Self::WrongKind => "uses a value of the wrong kind".to_owned(),
         }
     }
 }
@@ -215,6 +221,8 @@ fn apply(op: Op, arguments: &[Expr], frame: &mut Frame<'_>) -> Evaluated {
             .ok_or(Fault::Overflow),
         Op::Unwrap if first == Value::Null => Err(Fault::NullRead),
         Op::SomeOf | Op::Unwrap => Ok(first),
+        Op::Fit(ty) if ty.holds(as_int(&first)?) => Ok(first),
+        Op::Fit(ty) => Err(Fault::Outside(ty)),
         Op::Equal => Ok(Value::Bool(first == second.ok_or(Fault::WrongKind)?)),
         Op::Differ => Ok(Value::Bool(first != second.ok_or(Fault::WrongKind)?)),
         Op::Order(order) => compare(order, &first, second.as_ref()),

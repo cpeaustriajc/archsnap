@@ -1,6 +1,6 @@
 use crate::build::{Sketch, both, boxed, either, input, int, null, one, two, yes};
 use earnest_ir::{Expr, Math, Op, Order, SeqOp, Shelf, Sweep};
-use earnest_tla::Files;
+use earnest_tla::{Files, Invariants};
 use earnest_value::{Domain, Value};
 
 fn counter() -> Sketch {
@@ -67,6 +67,11 @@ CHECK_DEADLOCK FALSE
 INVARIANT Rule_bounded
 "
         .to_owned(),
+        rules: vec![Invariants {
+            rule: "bounded".to_owned(),
+            holds: "Rule_bounded".to_owned(),
+            judged: None,
+        }],
     };
     assert_eq!(counter().written(), expected);
 }
@@ -425,6 +430,7 @@ Next ==
 "
         .to_owned(),
         config: "INIT Init\nNEXT Next\nCHECK_DEADLOCK FALSE\n".to_owned(),
+        rules: Vec::new(),
     };
     assert_eq!(sketch.written(), expected);
 }

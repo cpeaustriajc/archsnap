@@ -1,7 +1,7 @@
 use crate::build::{steps, texts};
 use earnest_ast::{
-    ActionBody, ActionDraft, Binary, Draft, EndDraft, FieldDraft, RuleDraft, Shape, ShapeKind,
-    Term, TermKind, Unary, ViewDraft,
+    ActionBody, ActionDraft, Binary, Draft, EndDraft, FieldDraft, Language, RuleDraft, Shape,
+    ShapeKind, Term, TermKind, Unary, ViewDraft,
 };
 use earnest_check::{FindingKind, Limits, Outcome, Status, Verdict, explore};
 use earnest_diagnostics::Place;
@@ -71,6 +71,7 @@ fn turnstile() -> Draft {
     Draft {
         name: "Turnstile".to_owned(),
         file: "src/turnstile.model.ts".to_owned(),
+        language: Language::TypeScript,
         place: Place {
             line: 5,
             column: 14,

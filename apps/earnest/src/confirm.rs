@@ -74,13 +74,16 @@ pub(crate) fn read_tlc(output: &str) -> TlcRun {
 pub(crate) struct RuleRun {
     pub(crate) id: String,
     pub(crate) invariant: String,
+    pub(crate) judged: Option<String>,
     pub(crate) run: TlcRun,
 }
 
 fn tlc_verdict(rule: &RuleRun) -> &'static str {
-    if rule.run.violated.contains(&rule.invariant) {
+    let violated = |invariant: &String| rule.run.violated.contains(invariant);
+    let finished = rule.run.errors.is_empty() && rule.run.distinct_states.is_some();
+    if violated(&rule.invariant) {
         BROKEN
-    } else if rule.run.errors.is_empty() && rule.run.distinct_states.is_some() {
+    } else if finished && !rule.judged.as_ref().is_some_and(violated) {
         HOLDS
     } else {
         UNKNOWN
@@ -190,11 +193,7 @@ impl Tlc<'_> {
         Ok(run)
     }
 
-    pub(crate) fn check(
-        &self,
-        files: &Files,
-        rule_ids: &[&str],
-    ) -> Result<(TlcRun, Vec<RuleRun>), String> {
+    pub(crate) fn check(&self, files: &Files) -> Result<(TlcRun, Vec<RuleRun>), String> {
         fs::create_dir_all(&self.folder).map_err(|error| {
             format!(
                 "the folder {} can't be made: {error}",
@@ -213,15 +212,16 @@ impl Tlc<'_> {
         })?;
         let counting = self.run(files, "count.cfg", &files.config_checking(&[]))?;
         let mut rules = Vec::new();
-        for (number, (id, invariant)) in rule_ids.iter().zip(files.invariants()).enumerate() {
+        for (number, exported) in files.rules.iter().enumerate() {
             let run = self.run(
                 files,
                 &format!("rule{number}.cfg"),
-                &files.config_checking(&[invariant]),
+                &files.config_judging(exported),
             )?;
             rules.push(RuleRun {
-                id: (*id).to_owned(),
-                invariant: invariant.to_owned(),
+                id: exported.rule.clone(),
+                invariant: exported.holds.clone(),
+                judged: exported.judged.clone(),
                 run,
             });
         }
@@ -400,6 +400,7 @@ State 1: <Initial predicate>
         RuleRun {
             id: id.to_owned(),
             invariant: format!("Rule_{id}"),
+            judged: None,
             run: read_tlc(output),
         }
     }
@@ -460,6 +461,40 @@ State 1: <Initial predicate>
             differences(&holds, &read_tlc(PASSING), &runs),
             ["rule capped: the checker says holds, TLC says unknown \
                  (Evaluating invariant Rule_capped failed.)"]
+        );
+    }
+
+    fn unjudged_somewhere(id: &str) -> String {
+        VIOLATING.replace("Rule_safe", &format!("Judged_{id}"))
+    }
+
+    #[test]
+    fn a_rule_tlc_could_not_judge_in_a_state_is_unknown_as_the_checker_says() {
+        let judged = |id: &str, output: &str| RuleRun {
+            judged: Some(format!("Judged_{id}")),
+            ..rule_run(id, output)
+        };
+        let runs = [judged("capped", &unjudged_somewhere("capped"))];
+        let unknown = checked(4, &[("capped", "unknown")]);
+        assert!(
+            differences(&unknown, &read_tlc(PASSING), &runs).is_empty(),
+            "TLC finished and saw a state where the rule has no value"
+        );
+        let holds = checked(4, &[("capped", "holds")]);
+        assert_eq!(
+            differences(&holds, &read_tlc(PASSING), &runs),
+            ["rule capped: the checker says holds, TLC says unknown"]
+        );
+        let everywhere = [judged("capped", PASSING)];
+        assert!(
+            differences(&holds, &read_tlc(PASSING), &everywhere).is_empty(),
+            "no state breaks the second invariant, so the rule holds"
+        );
+        let both = format!("{}{}", unjudged_somewhere("safe"), VIOLATING);
+        let broken = checked(4, &[("safe", "broken")]);
+        assert!(
+            differences(&broken, &read_tlc(PASSING), &[judged("safe", &both)]).is_empty(),
+            "a rule broken in one state and without a value in another is broken"
         );
     }
 

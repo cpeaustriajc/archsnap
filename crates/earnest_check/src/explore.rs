@@ -1,5 +1,5 @@
 use crate::cut::cut_points;
-use crate::expand::{Expanded, State, Whence, expand_state};
+use crate::expand::{Asked, Expanded, State, Whence, expand_state};
 use crate::outcome::Outcome;
 use earnest_ir::{Fault, Field, Model};
 use earnest_value::Value;
@@ -13,8 +13,9 @@ use std::time::{Duration, Instant};
 /// graph and every rule.
 #[derive(Clone, Debug)]
 pub struct Limits {
-    /// The most distinct states to visit. The search stops as unfinished when it finds one
-    /// more.
+    /// The most distinct states to count. The search stops as unfinished when it finds one
+    /// more. The rules of every counted state are judged, also of the states it found last
+    /// and tried no action from.
     pub max_states: usize,
     /// How long the search may run before it stops as unfinished. `None` is no limit.
     pub time_limit: Option<Duration>,
@@ -81,6 +82,7 @@ pub(crate) struct Search<'a> {
     pub(crate) outside: Option<(usize, usize)>,
     pub(crate) trouble: Option<(usize, Whence, Fault)>,
     pub(crate) reason: Option<String>,
+    judged: usize,
 }
 
 /// Visits every state `model` can reach from its start states, breadth first, and says what
@@ -88,8 +90,10 @@ pub(crate) struct Search<'a> {
 ///
 /// A rule is checked in every state, so the path given for a broken rule is a shortest one.
 /// A state out of range is counted and reported but not searched further. The search stops
-/// early only at a limit, and then the outcome is unfinished unless something was already
-/// found broken.
+/// early only at a limit, and then the outcome is unfinished unless something was found
+/// broken. Every state that is counted has its rules judged, also at a limit: the states the
+/// search found and had no time or room to go on from are judged before it gives its outcome,
+/// and no action is tried from them.
 #[must_use]
 pub fn explore(model: &Model, limits: &Limits) -> Outcome {
     let slots = model
@@ -115,6 +119,7 @@ pub fn explore(model: &Model, limits: &Limits) -> Outcome {
         outside: None,
         trouble: None,
         reason: None,
+        judged: 0,
     };
     search.run();
     search.outcome()
@@ -186,12 +191,23 @@ impl Search<'_> {
             }
         }
         while !frontier.is_empty() && self.reason.is_none() {
-            let Some(level) = self.expand_level(&frontier, deadline) else {
+            let Some(level) = self.expand_level(&frontier, deadline, Asked::Everything) else {
                 let seconds = self.limits.time_limit.map_or(0, |limit| limit.as_secs());
                 self.reason = Some(format!("time limit of {seconds} s"));
                 break;
             };
             frontier = self.merge(&frontier, level);
+        }
+        self.judge_the_rest();
+    }
+
+    fn judge_the_rest(&mut self) {
+        let unjudged: Vec<usize> = (self.judged..self.states.len()).collect();
+        let Some(level) = self.expand_level(&unjudged, None, Asked::RulesOnly) else {
+            return;
+        };
+        for (id, expanded) in unjudged.into_iter().zip(level) {
+            self.record(id, &expanded);
         }
     }
 
@@ -210,7 +226,12 @@ impl Search<'_> {
         Some(id)
     }
 
-    fn expand_ids(&self, ids: &[usize], deadline: Option<Instant>) -> Option<Vec<Expanded>> {
+    fn expand_ids(
+        &self,
+        ids: &[usize],
+        deadline: Option<Instant>,
+        asked: Asked,
+    ) -> Option<Vec<Expanded>> {
         let only_rule = self.limits.only_rule.as_deref();
         let mut level = Vec::with_capacity(ids.len());
         for (position, id) in ids.iter().enumerate() {
@@ -219,15 +240,22 @@ impl Search<'_> {
                 return None;
             }
             let state = self.states.get(*id)?;
-            level.push(expand_state(self.model, only_rule, self.slots, state));
+            level.push(expand_state(
+                self.model, only_rule, self.slots, state, asked,
+            ));
         }
         Some(level)
     }
 
-    fn expand_level(&self, frontier: &[usize], deadline: Option<Instant>) -> Option<Vec<Expanded>> {
+    fn expand_level(
+        &self,
+        frontier: &[usize],
+        deadline: Option<Instant>,
+        asked: Asked,
+    ) -> Option<Vec<Expanded>> {
         let jobs = self.limits.jobs.max(1);
         if jobs == 1 || frontier.len() < SMALLEST_SHARED_LEVEL {
-            return self.expand_ids(frontier, deadline);
+            return self.expand_ids(frontier, deadline, asked);
         }
         let share = frontier.len().div_ceil(jobs);
         let cuts = cut_points(frontier.len(), share);
@@ -238,7 +266,7 @@ impl Search<'_> {
                     [from, to] => frontier.get(*from..*to),
                     _ => None,
                 })
-                .map(|ids| scope.spawn(move || self.expand_ids(ids, deadline)))
+                .map(|ids| scope.spawn(move || self.expand_ids(ids, deadline, asked)))
                 .collect();
             let mut level = Some(Vec::with_capacity(frontier.len()));
             for worker in workers {
@@ -287,6 +315,7 @@ impl Search<'_> {
     }
 
     fn record(&mut self, id: usize, expanded: &Expanded) {
+        self.judged = self.judged.max(id.saturating_add(1));
         if let Some(field) = expanded.outside {
             self.outside.get_or_insert((id, field));
         }

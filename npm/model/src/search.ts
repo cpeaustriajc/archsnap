@@ -48,8 +48,10 @@ export interface RuleResult {
 }
 
 /**
- * `stuck`: no action can happen and no end covers the state. `out-of-range`: an action gave a
- * field a value outside its declaration. `fault`: a rule or an action can't be evaluated.
+ * `stuck`: the `when` of every action is false and so is every end. `out-of-range`: an action
+ * gave a field a value outside its declaration. `fault`: a rule, the `when` or the `then` of an
+ * action, or an end can't be evaluated in the state. A state where a `when` or an end can't be
+ * evaluated is not stuck: nothing says that it should stop there or go on.
  */
 export type FindingKind = "stuck" | "out-of-range" | "fault";
 
@@ -60,7 +62,11 @@ export interface Finding {
 	readonly path: Path;
 }
 
-/** `unfinished` means the state limit stopped the search before anything was found wrong. */
+/**
+ * `unfinished` means the state limit stopped the search before anything was found wrong. Every
+ * state that is counted has its rules judged, also the ones the limit kept the search from
+ * going on from.
+ */
 export type Status = "pass" | "fail" | "unfinished";
 
 /**
@@ -199,7 +205,7 @@ interface Expanded {
 	readonly successors: Successor[];
 	trouble: string | null;
 	isEnabled: boolean;
-	hasEnded: boolean;
+	isStuck: boolean;
 }
 
 type FieldList = readonly (readonly [string, Declaration<unknown, never>])[];
@@ -231,10 +237,12 @@ class Search {
 		for (const start of starts) {
 			this.#visit(start, null, waiting);
 		}
+		let searched = 0;
 		for (const visited of waiting) {
 			if (this.#reason !== null) {
 				break;
 			}
+			searched += 1;
 			const expanded = this.#expand(visited.row);
 			this.#record(visited, expanded);
 			for (const successor of expanded.successors) {
@@ -243,6 +251,9 @@ class Search {
 					break;
 				}
 			}
+		}
+		for (const counted of waiting.slice(searched)) {
+			this.#record(counted, this.#judge(counted.row));
 		}
 		return this.#outcome();
 	}
@@ -265,7 +276,7 @@ class Search {
 		return true;
 	}
 
-	#expand(state: Row): Expanded {
+	#judge(state: Row): Expanded {
 		const outside = this.#fields.find(([name, declared]) => !declared.has(state[name]));
 		const found: Expanded = {
 			outside: outside === undefined ? null : outside[0],
@@ -274,7 +285,7 @@ class Search {
 			successors: [],
 			trouble: null,
 			isEnabled: false,
-			hasEnded: false,
+			isStuck: false,
 		};
 		if (found.outside !== null) {
 			return found;
@@ -288,23 +299,43 @@ class Search {
 				found.broken.push(rule);
 			}
 		}
-		for (const action of this.#parts.actions) {
-			this.#expandAction(action, state, found);
-		}
-		if (!found.isEnabled) {
-			found.hasEnded = this.#parts.ends.some(
-				(end) => attempt(() => end.when(state)).value === true,
-			);
-		}
 		return found;
 	}
 
-	#expandAction(action: ActionRunner, state: Row, found: Expanded): void {
+	#expand(state: Row): Expanded {
+		const found = this.#judge(state);
+		if (found.outside !== null) {
+			return found;
+		}
+		let canTell = true;
+		for (const action of this.#parts.actions) {
+			canTell = this.#expandAction(action, state, found) && canTell;
+		}
+		if (found.isEnabled) {
+			return found;
+		}
+		let hasEnded = false;
+		for (const end of this.#parts.ends) {
+			const ended = attempt(() => end.when(state));
+			if (ended.fault === null) {
+				hasEnded ||= ended.value;
+			} else {
+				found.trouble ??= `the end \`${this.#name(end.part, end.says)}\` ${ended.fault}`;
+				canTell = false;
+			}
+		}
+		found.isStuck = canTell && !hasEnded;
+		return found;
+	}
+
+	#expandAction(action: ActionRunner, state: Row, found: Expanded): boolean {
 		const id = this.#name(action.part, action.sentence);
+		let canTell = true;
 		for (const input of this.#inputs.get(action) ?? []) {
 			const can = attempt(() => action.when(state, input));
 			if (can.fault !== null) {
 				found.trouble ??= `the \`when\` of the action \`${id}\` ${can.fault}`;
+				canTell = false;
 				continue;
 			}
 			if (!can.value) {
@@ -318,6 +349,7 @@ class Search {
 				found.trouble ??= `the \`then\` of the action \`${id}\` ${next.fault}`;
 			}
 		}
+		return canTell;
 	}
 
 	#record(at: Visited, expanded: Expanded): void {
@@ -335,7 +367,7 @@ class Search {
 		if (expanded.trouble !== null) {
 			this.#trouble ??= { at, message: `${expanded.trouble} in this state` };
 		}
-		if (!expanded.isEnabled && !expanded.hasEnded && expanded.outside === null) {
+		if (expanded.isStuck) {
 			this.#stuck ??= at;
 		}
 	}
@@ -425,7 +457,8 @@ class Search {
 /**
  * Searches every state a model can reach, breadth first, and gives the count of distinct
  * states, each rule's verdict with the shortest path to a state that breaks it, and the first
- * stuck, out-of-range and fault findings. It visits states in the same order as
+ * stuck, out-of-range and fault findings. An end is asked only in a state where no action can
+ * happen. It visits states in the same order as
  * `earnest verify`, so the two results can be compared. Pass the model file's exports as
  * `exports` to get the same ids.
  */

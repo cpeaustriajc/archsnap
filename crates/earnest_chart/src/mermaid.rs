@@ -267,9 +267,14 @@ impl<'a> Drawing<'a> {
         let arrows = self.graph.edges.len();
         let hidden_states = states.saturating_sub(self.selection.states.len());
         let hidden_arrows = arrows.saturating_sub(self.selection.arrows.len());
+        let beyond = match self.selection.beyond {
+            0 => String::new(),
+            1 => " A broken state lies beyond what is shown.".to_owned(),
+            many => format!(" {many} broken states lie beyond what is shown."),
+        };
         (hidden_states > 0 || hidden_arrows > 0).then(|| {
             format!(
-                "Not shown: {hidden_states} of {states} states and {hidden_arrows} of {arrows} arrows."
+                "Not shown: {hidden_states} of {states} states and {hidden_arrows} of {arrows} arrows.{beyond}"
             )
         })
     }
@@ -288,7 +293,10 @@ impl<'a> Drawing<'a> {
 ///
 /// At most [`ARROW_LIMIT`](crate::ARROW_LIMIT) arrows are drawn. When the graph has more, or
 /// has a state no start state leads to, the block is followed by a blank line and one line of
-/// the form `Not shown: 16 of 36 states and 40 of 60 arrows.`
+/// the form `Not shown: 16 of 36 states and 40 of 60 arrows.` When the route to a state that
+/// breaks a rule or is out of range does not fit, its first arrows are drawn as far as the
+/// limit allows, the state itself is not, and the line goes on with `A broken state lies
+/// beyond what is shown.` or `2 broken states lie beyond what is shown.`
 #[must_use]
 pub fn chart(graph: &Graph) -> String {
     let drawing = Drawing::new(graph);

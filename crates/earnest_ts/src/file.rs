@@ -2,7 +2,7 @@ use crate::Reader;
 use crate::members::MemberKind;
 use crate::names::LIBRARY_MODULE;
 use crate::terms::bare;
-use earnest_ast::{Draft, HelperDraft, ViewDraft};
+use earnest_ast::{Draft, HelperDraft, HelperKind, Language, ViewDraft};
 use oxc_ast::ast::{
     Argument, ArrowFunctionExpression, BindingPattern, CallExpression, Declaration,
     ExportNamedDeclaration, Expression, ImportDeclaration, ImportDeclarationSpecifier, Program,
@@ -67,6 +67,7 @@ impl Reader<'_> {
                 Pending::Helper { name, arrow } => {
                     let (parameters, body) = self.function(arrow);
                     helpers.push(HelperDraft {
+                        kind: HelperKind::Function,
                         name,
                         parameters,
                         body,
@@ -351,6 +352,7 @@ impl Reader<'_> {
         let draft = Draft {
             name: self.sentence(name),
             file: self.file.to_owned(),
+            language: Language::TypeScript,
             place: self.place(start),
             fields: self
                 .fields(fields)

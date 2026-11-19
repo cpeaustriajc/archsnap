@@ -4,7 +4,7 @@ use super::{Lowerer, Lowering};
 use earnest_ast::{Term, TermKind};
 use earnest_diagnostics::Place;
 use earnest_ir::{Expr, MapOp, Math, Op, Order, SeqOp, SetOp, Shelf, Sweep};
-use earnest_value::Value;
+use earnest_value::{IntType, Value};
 
 #[derive(Clone, Copy)]
 enum Takes {
@@ -86,13 +86,6 @@ fn queue_signature(name: &str) -> Option<Signature> {
     })
 }
 
-fn optional_once(inner: Type) -> Type {
-    match inner {
-        Type::Optional(_) | Type::Null => inner,
-        other => Type::optional(other),
-    }
-}
-
 fn is(expr: Expr, wanted: Expr) -> Expr {
     apply(Op::Equal, vec![expr, wanted])
 }
@@ -172,9 +165,12 @@ impl Lowerer<'_> {
             Type::Timer => self.on_timer(on.expr, &call),
             Type::Request => self.on_request(on.expr, &call),
             Type::Retry(most) => self.on_retry(on.expr, most, &call),
-            Type::Unknown | Type::Null | Type::Bool | Type::Int | Type::Text | Type::Record(_) => {
-                Err(self.unknown(&on.ty, &call))
-            }
+            Type::Unknown
+            | Type::Null
+            | Type::Bool
+            | Type::Int(_)
+            | Type::Text
+            | Type::Record(_) => Err(self.unknown(&on.ty, &call)),
         }
     }
 
@@ -232,6 +228,7 @@ impl Lowerer<'_> {
         let (op, takes, gives) = signature;
         let mut arguments = vec![on];
         let mut same = shelves.same.clone();
+        let size = Type::Int(self.size_type());
         match takes {
             Takes::Nothing => self.arity(call, 0)?,
             Takes::Item | Takes::Key | Takes::Same | Takes::Number => {
@@ -239,12 +236,14 @@ impl Lowerer<'_> {
                 let want = match takes {
                     Takes::Item => &shelves.item,
                     Takes::Key => &shelves.key,
-                    Takes::Number => &Type::Int,
+                    Takes::Number => &size,
                     Takes::Same | Takes::Nothing | Takes::KeyAndValue => &shelves.same,
                 };
                 let passed = self.argument(call, 0, want, scope)?;
                 if matches!(takes, Takes::Item) {
                     same = with_item(&same, passed.ty);
+                } else if matches!(takes, Takes::Same) {
+                    same = passed.ty;
                 }
                 arguments.push(passed.expr);
             }
@@ -259,13 +258,29 @@ impl Lowerer<'_> {
         }
         let ty = match gives {
             Gives::Bool => Type::Bool,
-            Gives::Int => Type::Int,
+            Gives::Int => size,
             Gives::Same => same,
-            Gives::OptionalItem => optional_once(shelves.item.clone()),
-            Gives::OptionalValue => optional_once(shelves.value.clone()),
+            Gives::OptionalItem => self.found(&shelves.item, call)?,
+            Gives::OptionalValue => self.found(&shelves.value, call)?,
             Gives::KeySet => Type::Set(Box::new(shelves.key.clone())),
         };
         Ok(Typed::new(apply(op, arguments), ty))
+    }
+
+    pub(super) fn size_type(&self) -> Option<IntType> {
+        self.is_rust().then_some(IntType::Usize)
+    }
+
+    fn found(&mut self, held: &Type, call: &Call<'_>) -> Lowering<Type> {
+        if self.is_rust() && held.can_be_null() {
+            return Err(self.stop(
+                call.place,
+                &format!("`{}` on a collection of optional values", call.name),
+                "in Rust it gives an optional value inside an optional value, such as \
+                 `Some(None)`, which the checker can't tell from `None`",
+            ));
+        }
+        Ok(held.clone().once_optional())
     }
 
     fn on_shelf(
@@ -523,7 +538,7 @@ impl Lowerer<'_> {
     fn on_retry(&mut self, on: Expr, most: i64, call: &Call<'_>) -> Lowering<Typed> {
         let retry = Type::Retry(most);
         let lowered = match call.name {
-            "attempts" => Typed::new(on, Type::Int),
+            "attempts" => Typed::new(on, Type::Int(self.size_type())),
             "can_retry" => Typed::new(
                 apply(Op::Order(Order::Less), vec![on, int(most)]),
                 Type::Bool,
@@ -555,7 +570,7 @@ fn with_item(same: &Type, given: Type) -> Type {
         Type::Unknown
         | Type::Null
         | Type::Bool
-        | Type::Int
+        | Type::Int(_)
         | Type::Text
         | Type::Optional(_)
         | Type::Record(_)

@@ -78,11 +78,7 @@ mod tests {
                     .unwrap();
             }
         }
-        let loaded = load(Found {
-            path: path.to_owned(),
-            language: Language::TypeScript,
-            source,
-        });
+        let loaded = load(Found::model(path, Language::TypeScript, &source));
         assert!(
             loaded.problems().is_empty(),
             "the test file is readable: {:?}",

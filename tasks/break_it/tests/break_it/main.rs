@@ -4,6 +4,7 @@
 //! passes once the finding is fixed. `tasks/break_it/README.md` has the hand derivation of each
 //! expected result.
 
+mod second;
 mod support;
 
 use support::{Sandbox, is_broken_after, rule};

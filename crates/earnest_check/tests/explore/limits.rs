@@ -201,3 +201,101 @@ fn the_state_limit_gives_the_same_outcome_on_one_thread_and_on_four() {
     assert_eq!(single.reason.as_deref(), Some("state limit of 3000"));
     assert_eq!(explore(&model, &limited(4)), single);
 }
+
+fn start_states_zero_to_four() -> Model {
+    let mut sketch = Sketch::new();
+    let n = sketch.number("n", 0, 4, &[0, 1, 2, 3, 4]);
+    sketch.end("any", yes());
+    sketch.rule("neverThree", is_not(&n, 3));
+    sketch.model()
+}
+
+#[test]
+fn a_start_state_counted_at_the_state_limit_has_its_rules_judged() {
+    let outcome = explore(&start_states_zero_to_four(), &with_states(4));
+    assert_eq!(outcome.states, 4, "the start states 0, 1, 2 and 3");
+    assert_eq!(outcome.reason.as_deref(), Some("state limit of 4"));
+    assert_eq!(outcome.status, Status::Fail, "state 3 is counted");
+    assert_eq!(outcome.rules[0].verdict, Verdict::Broken);
+    let path = outcome.rules[0]
+        .path
+        .as_ref()
+        .expect("a broken rule has a path");
+    assert_eq!(texts(&path.start), ["n = 3"]);
+    assert!(path.steps.is_empty(), "a start state is no step away");
+}
+
+#[test]
+fn a_start_state_beyond_the_state_limit_is_neither_counted_nor_judged() {
+    let outcome = explore(&start_states_zero_to_four(), &with_states(3));
+    unfinished_at(&outcome, 3, "state limit of 3");
+    assert_eq!(outcome.rules[0].verdict, Verdict::Unknown);
+}
+
+fn fork() -> Model {
+    let mut sketch = Sketch::new();
+    let n = sketch.number("n", 0, 9, &[0]);
+    sketch.action("step", is(&n, 0), &[(&n, plus(&n, 1))]);
+    sketch.action("leap", is(&n, 0), &[(&n, plus(&n, 7))]);
+    sketch.end("moved", not(&is(&n, 0)));
+    sketch.rule("neverOne", is_not(&n, 1));
+    sketch.rule("neverSeven", is_not(&n, 7));
+    sketch.model()
+}
+
+#[test]
+fn a_state_counted_just_before_the_state_limit_has_its_rules_judged() {
+    let outcome = explore(&fork(), &with_states(2));
+    assert_eq!(outcome.states, 2, "the start and the state after `step`");
+    assert_eq!(outcome.reason.as_deref(), Some("state limit of 2"));
+    assert_eq!(outcome.status, Status::Fail);
+    assert_eq!(outcome.rules[0].verdict, Verdict::Broken, "1 is counted");
+    assert_eq!(
+        outcome.rules[1].verdict,
+        Verdict::Unknown,
+        "7 is the state the limit left out"
+    );
+    let path = outcome.rules[0]
+        .path
+        .as_ref()
+        .expect("a broken rule has a path");
+    assert_eq!(steps(path), ["step  n: 0 -> 1"]);
+    assert!(
+        outcome.findings.is_empty(),
+        "no action is tried from a state the search did not go on from: {:?}",
+        outcome.findings
+    );
+}
+
+#[test]
+fn a_state_counted_before_the_time_limit_has_its_rules_judged() {
+    let (mut sketch, n) = counter(3);
+    sketch.rule("neverZero", is_not(&n, 0));
+    let limits = Limits {
+        time_limit: Some(Duration::ZERO),
+        ..Limits::default()
+    };
+    let outcome = explore(&sketch.model(), &limits);
+    assert_eq!(outcome.states, 1, "the start state");
+    assert_eq!(outcome.reason.as_deref(), Some("time limit of 0 s"));
+    assert_eq!(outcome.status, Status::Fail);
+    assert_eq!(outcome.rules[0].verdict, Verdict::Broken);
+}
+
+#[test]
+fn the_states_judged_at_the_limit_are_the_same_on_one_thread_and_on_four() {
+    let mut sketch = Sketch::new();
+    let every_start: Vec<i64> = (0..2000).collect();
+    let n = sketch.number("n", 0, 1999, &every_start);
+    sketch.end("any", yes());
+    sketch.rule("not1234", is_not(&n, 1234));
+    let model = sketch.model();
+    let limited = |jobs: usize| Limits {
+        max_states: 1500,
+        ..with_jobs(jobs)
+    };
+    let single = explore(&model, &limited(1));
+    assert_eq!(single.states, 1500);
+    assert_eq!(single.rules[0].verdict, Verdict::Broken, "1234 is counted");
+    assert_eq!(explore(&model, &limited(4)), single);
+}

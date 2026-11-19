@@ -168,13 +168,29 @@ proptest! {
         let drawn = read(&text);
         let states = graph.nodes.len() - drawn.states.len();
         let arrows = graph.edges.len() - drawn.arrows.len();
+        let from_a_start = steps_from_a_start(&graph);
+        let beyond = graph
+            .nodes
+            .iter()
+            .zip(&from_a_start)
+            .enumerate()
+            .filter(|(position, (node, steps))| {
+                let marked = !node.broken.is_empty() || !node.outside.is_empty();
+                marked && steps.is_some() && drawn.label_of(&format!("s{position}")).is_none()
+            })
+            .count();
+        let lies_beyond = match beyond {
+            0 => String::new(),
+            1 => " A broken state lies beyond what is shown.".to_owned(),
+            many => format!(" {many} broken states lie beyond what is shown."),
+        };
         let expected = (states > 0 || arrows > 0).then(|| format!(
-            "Not shown: {states} of {} states and {arrows} of {} arrows.",
+            "Not shown: {states} of {} states and {arrows} of {} arrows.{lies_beyond}",
             graph.nodes.len(),
             graph.edges.len()
         ));
         prop_assert_eq!(drawn.note, expected, "the note of\n{}", text);
-        let reachable = steps_from_a_start(&graph).iter().all(Option::is_some);
+        let reachable = from_a_start.iter().all(Option::is_some);
         if graph.edges.len() <= ARROW_LIMIT && reachable {
             prop_assert_eq!(states + arrows, 0, "a small graph is drawn whole:\n{}", text);
         }

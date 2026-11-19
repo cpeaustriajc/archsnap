@@ -1,4 +1,4 @@
-use crate::discovery::{Found, Language};
+use crate::discovery::{Found, Language, Text};
 use earnest_ast::{Draft, Reading};
 use earnest_diagnostics::Problem;
 use earnest_ir::Model;
@@ -19,7 +19,6 @@ pub(crate) enum Content {
 #[derive(Debug)]
 pub(crate) struct ModelFile {
     pub(crate) path: String,
-    pub(crate) language: Language,
     pub(crate) source: String,
     pub(crate) content: Content,
 }
@@ -68,19 +67,28 @@ fn understand(reading: Reading) -> Content {
 }
 
 pub(crate) fn load(found: Found) -> ModelFile {
-    let content = understand(read(found.language, &found.path, &found.source));
-    ModelFile {
-        path: found.path,
-        language: found.language,
-        source: found.source,
-        content,
+    match found.text {
+        Text::Model { language, source } => {
+            let content = understand(read(language, &found.path, &source));
+            ModelFile {
+                path: found.path,
+                source,
+                content,
+            }
+        }
+        Text::Unread(problem) => ModelFile {
+            path: found.path,
+            source: String::new(),
+            content: Content::Unreadable(vec![problem]),
+        },
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Content, ModelFile, load};
-    use crate::discovery::{Found, Language};
+    use crate::discovery::{Found, Language, Text};
+    use earnest_diagnostics::{Place, Problem};
 
     const COUNTER: &str = "\
 import { m } from \"@earnest/model\";
@@ -96,11 +104,7 @@ export const bounded = Counter.rule({
 ";
 
     fn loaded(path: &str, language: Language, source: &str) -> ModelFile {
-        load(Found {
-            path: path.to_owned(),
-            language,
-            source: source.to_owned(),
-        })
+        load(Found::model(path, language, source))
     }
 
     #[test]
@@ -178,5 +182,77 @@ impl Lamp {
             file.problems()
         );
         assert_eq!(file.models().len(), 1, "one Rust model");
+    }
+
+    #[test]
+    fn a_file_that_could_not_be_read_is_unreadable_with_the_problem_it_was_found_with() {
+        let problem = Problem::new(
+            "src/stray.model.ts",
+            Place {
+                line: 7,
+                column: 62,
+            },
+            "`byte 0xE9`",
+            "the file is not UTF-8 text",
+        );
+        let file = load(Found {
+            path: "src/stray.model.ts".to_owned(),
+            text: Text::Unread(problem.clone()),
+        });
+        assert!(file.models().is_empty(), "no model is checked");
+        assert_eq!(file.problems(), [problem], "the problem is kept as it is");
+        assert_eq!(file.path, "src/stray.model.ts", "under the file's path");
+    }
+
+    const ITEMS: &str = "\
+import { m } from \"@earnest/model\";
+
+const Guest = m.enum([\"ann\", \"bob\"]);
+const Item = m.record({ qty: m.int(0, 2), who: Guest.optional() });
+
+export const Pick = m.model(\"Pick\", {
+\tchosen: Item.optional().initial(null),
+});
+
+export const pick = Pick.action(\"a guest picks an item\", {
+\tinput: { g: Guest },
+\twhen: (s) => s.chosen === null,
+\tthen: (_, { g }) => THEN,
+});
+";
+
+    fn exported_update(then: &str) -> String {
+        let source = ITEMS.replace("THEN", then);
+        let file = loaded("pick.model.ts", Language::TypeScript, &source);
+        assert!(
+            file.problems().is_empty(),
+            "the file is readable: {:?}",
+            file.problems()
+        );
+        let module = earnest_tla::write(&file.models()[0].model).module;
+        module
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("THEN /\\ chosen' = "))
+            .unwrap_or_else(|| panic!("the action sets `chosen`: {module}"))
+            .to_owned()
+    }
+
+    #[test]
+    fn a_record_that_gives_an_optional_field_a_value_exports_as_the_declared_record() {
+        assert_eq!(
+            exported_update(
+                "({ chosen: g === \"ann\" ? { qty: 0, who: g } : { qty: 1, who: null } })"
+            ),
+            "<<(IF (g = \"ann\") THEN [qty |-> 0, who |-> <<g>>] ELSE [qty |-> 1, who |-> <<>>])>>",
+            "`who` is the tuple of an optional in both branches, as the field declares it"
+        );
+        assert_eq!(
+            exported_update(
+                "{ const fresh = { qty: 0, who: g }; return { chosen: { ...fresh, qty: 1 } }; }"
+            ),
+            "(LET local == [qty |-> 0, who |-> g] IN <<[[local EXCEPT !.qty = 1] EXCEPT !.who = \
+             <<[local EXCEPT !.qty = 1].who>>]>>)",
+            "the `who` of the bound record is wrapped where the record meets its declaration"
+        );
     }
 }

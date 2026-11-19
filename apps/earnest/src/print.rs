@@ -192,11 +192,11 @@ mod tests {
     use std::io::{self, Write};
 
     fn file(path: &str, body: &str) -> ModelFile {
-        load(Found {
-            path: path.to_owned(),
-            language: Language::TypeScript,
-            source: format!("import {{ m }} from \"@earnest/model\";\n{body}"),
-        })
+        load(Found::model(
+            path,
+            Language::TypeScript,
+            &format!("import {{ m }} from \"@earnest/model\";\n{body}"),
+        ))
     }
 
     fn files() -> Vec<ModelFile> {

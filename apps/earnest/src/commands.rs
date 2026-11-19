@@ -1,5 +1,5 @@
 use crate::arguments::{self, Chart, Confirm, Models, Report, Tla};
-use crate::changes::{Difference, check_base, rule_changes};
+use crate::changes::{Compare, Difference, check_base, rule_changes};
 use crate::confirm::{Tlc, confirm_lines, differences};
 use crate::discovery::discover;
 use crate::print::{to_stderr, to_stdout, unreadable_lines};
@@ -104,10 +104,17 @@ pub(crate) fn report_command(arguments: &Report) -> Result<Exit, String> {
             outcome: &ran.outcome,
         })
         .collect();
-    let compared = arguments
-        .base
-        .as_deref()
-        .map(|base| (base, rule_changes(base, &targets, bounds)));
+    let compared = arguments.base.as_deref().map(|base| {
+        let compare = Compare {
+            base,
+            roots: &arguments.selection.models.paths,
+            files: &files,
+            model: arguments.selection.models.model.as_deref(),
+            rule,
+            bounds,
+        };
+        (base, rule_changes(&compare, &targets))
+    });
     let changes: Vec<RuleChange<'_>> = compared
         .iter()
         .flat_map(|(_, compared)| compared.changes.iter().map(Difference::for_the_chart))
@@ -212,8 +219,7 @@ pub(crate) fn confirm_command(arguments: &Confirm) -> Result<Exit, String> {
             folder: Path::new(CONFIRM_FOLDER).join(&exported.name),
             workers: bounds.jobs,
         };
-        let rule_ids: Vec<&str> = model.rules.iter().map(|rule| rule.id.as_str()).collect();
-        let found = match tlc.check(exported, &rule_ids) {
+        let found = match tlc.check(exported) {
             Ok((counting, rules)) => differences(&ours, &counting, &rules),
             Err(error) => vec![error],
         };

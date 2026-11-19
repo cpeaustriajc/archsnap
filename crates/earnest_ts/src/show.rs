@@ -66,7 +66,9 @@ pub(crate) fn show(term: &Term) -> String {
             method,
             arguments,
         } => format!("{}.{method}({})", show(target), listed(arguments)),
-        TermKind::Helper { name, arguments } => format!("{name}({})", listed(arguments)),
+        TermKind::Helper {
+            name, arguments, ..
+        } => format!("{name}({})", listed(arguments)),
         TermKind::Unary(Unary::Not, inner) => format!("(! {})", show(inner)),
         TermKind::Unary(_, inner) => format!("(- {})", show(inner)),
         TermKind::Binary(binary, left, right) => {
@@ -116,7 +118,7 @@ pub(crate) fn show(term: &Term) -> String {
 fn show_kind(kind: &ShapeKind) -> String {
     match kind {
         ShapeKind::Bool => "bool".to_owned(),
-        ShapeKind::Int { lo, hi } => format!("int({lo}, {hi})"),
+        ShapeKind::Int { lo, hi, .. } => format!("int({lo}, {hi})"),
         ShapeKind::OneOf(choices) => format!("enum({})", listed(choices)),
         ShapeKind::Optional(inner) => format!("optional({})", show_shape(inner)),
         ShapeKind::Record(fields) => {

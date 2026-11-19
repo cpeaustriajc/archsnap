@@ -334,6 +334,7 @@ name = "earnest_ast"
 version = "0.1.0"
 dependencies = [
  "earnest_diagnostics",
+ "earnest_value",
 ]
 
 [[package]]
@@ -402,6 +403,7 @@ dependencies = [
  "earnest_check",
  "earnest_diagnostics",
  "earnest_semantic",
+ "earnest_value",
  "proc-macro2",
  "syn 2.0.119",
 ]

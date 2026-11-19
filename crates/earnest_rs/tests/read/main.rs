@@ -6,9 +6,12 @@
 mod forms;
 #[path = "models/party.rs"]
 mod party;
+#[path = "models/shelf.rs"]
+mod shelf;
 #[path = "models/ticket.rs"]
 mod ticket;
 mod twins;
+mod typed;
 mod unreadable;
 
 use earnest_ast::Draft;

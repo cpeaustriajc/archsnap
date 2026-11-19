@@ -403,7 +403,7 @@ test("only a rule that could not be evaluated somewhere and was not seen broken 
 	assert.equal(only(found).path.steps.length, 2);
 });
 
-test("a when that faults leaves the action unable to happen", () => {
+test("a when that faults is a fault, and the state is not stuck", () => {
 	const Model = People();
 	const age = Model.action("a year passes", {
 		when: (s) => assumedPresent(s.who) && s.who.age === 0,
@@ -411,11 +411,51 @@ test("a when that faults leaves the action unable to happen", () => {
 	});
 	const found = explore(Model, { exports: { age } });
 	assert.equal(found.states, 1);
-	assert.deepEqual(kinds(found), ["stuck", "fault"]);
+	assert.deepEqual(kinds(found), ["fault"]);
 	assert.equal(
-		found.findings[1]?.message,
+		only(found).message,
 		"the `when` of the action `age` reads a value that is null in this state",
 	);
+});
+
+test("an end that faults is a fault, and the state is not stuck", () => {
+	const Model = People();
+	const gone = Model.end({
+		says: "Whoever was there is a newborn",
+		when: (s) => assumedPresent(s.who) && s.who.age === 0,
+	});
+	const found = explore(Model, { exports: { gone } });
+	assert.equal(found.states, 1);
+	assert.equal(found.status, "fail");
+	assert.deepEqual(kinds(found), ["fault"]);
+	assert.equal(only(found).message, "the end `gone` reads a value that is null in this state");
+});
+
+test("an end that faults beside an end that is true leaves the fault and no stuck state", () => {
+	const Model = People();
+	const gone = Model.end({
+		says: "Whoever was there is a newborn",
+		when: (s) => assumedPresent(s.who) && s.who.age === 0,
+	});
+	const empty = Model.end({ says: "Nobody is there", when: (s) => s.who === null });
+	const found = explore(Model, { exports: { gone, empty } });
+	assert.deepEqual(kinds(found), ["fault"]);
+});
+
+test("an end is not asked where an action can happen, so it can't fault there", () => {
+	const Model = People();
+	const arrive = Model.action("someone arrives", {
+		when: (s) => s.who === null,
+		then: () => ({ who: { age: 1 } }),
+	});
+	const gone = Model.end({
+		says: "Whoever is there is an adult",
+		when: (s) => assumedPresent(s.who) && s.who.age === 1,
+	});
+	const found = explore(Model, { exports: { arrive, gone } });
+	assert.equal(found.states, 2);
+	assert.equal(found.status, "pass");
+	assert.deepEqual(kinds(found), []);
 });
 
 test("a then that faults gives no next state, and the state is not stuck", () => {
@@ -479,20 +519,35 @@ test("maxStates equal to the number of states lets the search finish", () => {
 	assert.equal(found.reason, null);
 });
 
-test("a rule is only seen broken once the search has gone on from the state that breaks it", () => {
+test("a state counted at the limit has its rules judged, though the search does not go on from it", () => {
 	const { Hops, ...exports } = hops();
 	const found = explore(Hops, { maxStates: 5, exports });
 	assert.equal(found.states, 5);
-	assert.equal(found.status, "unfinished");
+	assert.equal(found.status, "fail");
 	assert.equal(found.reason, "state limit of 5");
 	assert.deepEqual(
-		found.rules.map((rule) => [rule.id, rule.verdict]),
+		found.rules.map((rule) => [rule.id, rule.verdict, rule.path?.steps.length ?? null]),
 		[
-			["belowFour", "unknown"],
-			["notFive", "unknown"],
-			["notNegative", "unknown"],
+			["belowFour", "broken", 2],
+			["notFive", "unknown", null],
+			["notNegative", "unknown", null],
 		],
 	);
+	assert.deepEqual(kinds(found), []);
+});
+
+test("a start state counted at the limit has its rules judged", () => {
+	const Dial = m.model("Dial", { n: m.int(0, 2) });
+	const notOne = Dial.rule({ says: "n is never one", holds: (s) => s.n !== 1 });
+	const counted = explore(Dial, { maxStates: 2, exports: { notOne } });
+	assert.equal(counted.states, 2);
+	assert.equal(counted.status, "fail");
+	assert.equal(counted.reason, "state limit of 2");
+	assert.deepEqual(counted.rules[0]?.path, { start: [{ name: "n", value: 1 }], steps: [] });
+	const leftOut = explore(Dial, { maxStates: 1, exports: { notOne } });
+	assert.equal(leftOut.states, 1);
+	assert.equal(leftOut.status, "unfinished");
+	assert.equal(leftOut.rules[0]?.verdict, "unknown");
 });
 
 test("a rule seen broken before the limit is broken, and the model fails", () => {

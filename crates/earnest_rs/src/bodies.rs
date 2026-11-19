@@ -216,9 +216,9 @@ impl Reader<'_> {
 
     fn binding(&mut self, local: &Local) -> (String, Term) {
         self.refuse_conditional(&local.attrs);
-        let pattern = match &local.pat {
-            Pat::Type(typed) => typed.pat.as_ref(),
-            other => other,
+        let (pattern, stated) = match &local.pat {
+            Pat::Type(typed) => (typed.pat.as_ref(), Some(typed.ty.as_ref())),
+            other => (other, None),
         };
         let name = match pattern {
             Pat::Ident(named) if named.subpat.is_none() && named.by_ref.is_none() => {
@@ -246,7 +246,11 @@ impl Reader<'_> {
                         "`let ... else` is outside the library",
                     );
                 }
-                self.term(&init.expr)
+                let value = self.term(&init.expr);
+                match stated {
+                    Some(ty) => self.of_type(ty, value),
+                    None => value,
+                }
             }
             None => self.nothing(
                 local.let_token.span,

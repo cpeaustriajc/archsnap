@@ -9,3 +9,5 @@ Values, interned names and finite domains.
   the text report and the JSON output show it.
 - `Domain` is the finite set of values a field or an input declares. It can count its values
   without listing them, list them, and say whether a value belongs.
+- `IntType` is an integer type of Rust, such as `u8` or `usize`, with its smallest and largest
+  number. A number in a Rust model file has one, and a result outside it is a fault.

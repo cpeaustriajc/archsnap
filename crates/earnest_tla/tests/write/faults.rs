@@ -1,6 +1,8 @@
 use crate::build::{bind, body_of, both, choose, either, int, null, one, two, yes};
 use crate::ops::{Stage, stage};
 use earnest_ir::{Expr, Math, Op, Order, Shelf, Sweep};
+use earnest_tla::Invariants;
+use earnest_value::IntType;
 
 fn asked_first(mut stage: Stage, guard: Expr) -> String {
     stage.sketch.action("act", guard, &[]);
@@ -233,8 +235,132 @@ fn an_end_that_cannot_be_read_does_not_stop_the_checker() {
 }
 
 #[test]
-fn a_rule_that_cannot_be_read_is_left_to_stop_the_checker() {
-    let stage = stage();
+fn a_rule_that_cannot_be_read_is_true_there_and_a_second_invariant_says_where() {
+    let mut stage = stage();
     let holds = above_zero(&present(&stage));
-    assert_eq!(stage.sketch.shown(holds), "(maybe[1] > 0)");
+    stage.sketch.rule("positive", holds);
+    let files = stage.sketch.written();
+    assert_eq!(
+        body_of(&files.module, "Rule_positive"),
+        ["InRange => ((~(maybe # <<>>)) \\/ (maybe[1] > 0))"],
+        "the rule is not judged where the optional is absent"
+    );
+    assert_eq!(
+        body_of(&files.module, "Judged_positive"),
+        ["InRange => (maybe # <<>>)"],
+        "a state where the optional is absent breaks this invariant"
+    );
+    assert_eq!(
+        files.invariants(),
+        ["Rule_positive"],
+        "the configuration names one invariant for the rule"
+    );
+    assert_eq!(
+        files.config_judging(&files.rules[0]),
+        "INIT Init\nNEXT Next\nCHECK_DEADLOCK FALSE\nINVARIANT Rule_positive\n\
+         INVARIANT Judged_positive\n",
+        "a run that judges the rule checks both"
+    );
+    assert_eq!(
+        files.rules,
+        [Invariants {
+            rule: "positive".to_owned(),
+            holds: "Rule_positive".to_owned(),
+            judged: Some("Judged_positive".to_owned()),
+        }]
+    );
+}
+
+#[test]
+fn a_rule_that_always_has_a_value_has_no_second_invariant() {
+    let mut stage = stage();
+    let holds = above_zero(&stage.n);
+    stage.sketch.rule("positive", holds);
+    stage.sketch.rule("Judged_positive", yes());
+    let files = stage.sketch.written();
+    assert_eq!(
+        body_of(&files.module, "Rule_positive"),
+        ["InRange => (n > 0)"]
+    );
+    assert_eq!(
+        files.invariants(),
+        ["Rule_positive", "Rule_Judged_positive"],
+        "one invariant for each rule"
+    );
+    assert_eq!(files.rules[0].judged, None, "nothing can fault");
+    assert_eq!(
+        files.config_judging(&files.rules[0]),
+        "INIT Init\nNEXT Next\nCHECK_DEADLOCK FALSE\nINVARIANT Rule_positive\n",
+        "a run that judges the rule checks it alone"
+    );
+}
+
+#[test]
+fn the_second_invariant_of_a_rule_gets_a_name_nothing_else_has() {
+    let mut stage = stage();
+    stage
+        .sketch
+        .field("Judged_positive", earnest_value::Domain::Bool, Vec::new());
+    let holds = above_zero(&present(&stage));
+    stage.sketch.rule("positive", holds);
+    let files = stage.sketch.written();
+    assert_eq!(
+        files.rules[0].judged.as_deref(),
+        Some("Judged_positive_2"),
+        "the field has the plain name"
+    );
+    assert_eq!(
+        body_of(&files.module, "Judged_positive_2"),
+        ["InRange => (maybe # <<>>)"]
+    );
+}
+
+fn one_less(stage: &Stage, ty: IntType) -> Expr {
+    let less = two(Op::Math(Math::Subtract), &stage.n, int(1));
+    two(
+        Op::Order(Order::LessOrEqual),
+        &one(Op::Fit(ty), &less),
+        int(2),
+    )
+}
+
+#[test]
+fn a_number_that_must_fit_a_narrow_integer_type_is_asked_to_be_inside_it() {
+    let stage = stage();
+    let guard = one_less(&stage, IntType::U8);
+    assert_eq!(
+        asked_first(stage, guard),
+        "IF InRange /\\ ((n - 1) \\in 0..255) /\\ ((n - 1) <= 2)"
+    );
+    let signed = self::stage();
+    let guard = one_less(&signed, IntType::I8);
+    assert_eq!(
+        asked_first(signed, guard),
+        "IF InRange /\\ ((n - 1) \\in (-128)..127) /\\ ((n - 1) <= 2)"
+    );
+}
+
+#[test]
+fn a_type_wider_than_tlc_counts_is_asked_only_for_the_bound_tlc_can_reach() {
+    let size = stage();
+    let guard = one_less(&size, IntType::Usize);
+    assert_eq!(
+        asked_first(size, guard),
+        "IF InRange /\\ ((n - 1) >= 0) /\\ ((n - 1) <= 2)",
+        "a `usize` has no number below zero, and its top is beyond what TLC holds"
+    );
+    let unsigned = stage();
+    let guard = one_less(&unsigned, IntType::U32);
+    assert_eq!(
+        asked_first(unsigned, guard),
+        "IF InRange /\\ ((n - 1) >= 0) /\\ ((n - 1) <= 2)",
+        "the top of a `u32` is beyond what TLC holds"
+    );
+    let wide = stage();
+    let guard = one_less(&wide, IntType::I32);
+    assert_eq!(
+        asked_first(wide, guard),
+        "IF InRange /\\ ((n - 1) <= 2)",
+        "TLC holds exactly an `i32`, so it stops by itself outside one"
+    );
 }

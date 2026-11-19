@@ -465,9 +465,14 @@ pub(crate) fn assert_well_formed(files: &Files, rules: usize) {
             .filter(|token| **token == name(defined))
             .count();
         let configured = files.config.split_whitespace().any(|word| word == defined);
+        let judges = files
+            .rules
+            .iter()
+            .any(|each| each.judged.as_deref() == Some(defined.as_str()));
         assert!(
-            written > 1 || configured,
-            "`{defined}` is used by the module or named in the configuration"
+            written > 1 || configured || judges,
+            "`{defined}` is used by the module, named in the configuration or says where a \
+             rule has no value"
         );
     }
     let lines: Vec<&str> = files.config.lines().collect();
@@ -484,6 +489,20 @@ pub(crate) fn assert_well_formed(files: &Files, rules: usize) {
         })
         .collect();
     assert_eq!(invariants.len(), rules, "one invariant for each rule");
+    assert_eq!(files.rules.len(), rules, "and one entry for each rule");
+    for each in &files.rules {
+        assert!(
+            invariants.contains(each.holds.as_str()),
+            "`{}` is in the configuration",
+            each.holds
+        );
+        for invariant in each.names() {
+            assert!(
+                definitions.contains(invariant),
+                "`{invariant}` is defined in the module"
+            );
+        }
+    }
     for invariant in invariants {
         assert!(
             definitions.contains(invariant),

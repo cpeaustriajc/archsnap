@@ -15,15 +15,29 @@ use earnest_ast::Reading;
 
 /// Reads every model in the Rust source text `source`.
 ///
-/// `file` is the path the problems and the drafts carry; nothing is read from disk. A model
+/// `file` is the path the problems and the drafts carry; nothing is read from disk. A byte
+/// order mark at the start of `source` is skipped, as `rustc` skips it. A model
 /// is a struct that derives `Model` together with its `#[model]` block. In the drafts, a
 /// field's shape comes from its Rust type, `#[range(lo, hi)]` and `#[initial(value)]`; an
 /// enum that derives `Domain` is known by its variant names, so `Gate::Locked` is the text
 /// `"Locked"`; ids are method names; the state is named `self`; and a rule's `text` is the
 /// source of its body with each run of white space as one space. `x.clone()` and `&x` are
 /// read as `x`. Top-level constants, functions, and methods of the block without an
-/// attribute become the drafts' constants and helpers. An item marked `#[cfg(test)]` that is
-/// not part of a model (a module, a function, a constant, a plain `impl` block) is skipped.
+/// attribute become the drafts' constants and helpers. A function is a helper of the kind
+/// `Function` and a method one of the kind `Method`, so the two may share a name. An item
+/// marked `#[cfg(test)]` that is not part of a model (a module, a function, a constant, a
+/// plain `impl` block) is skipped.
+///
+/// Every draft has the language `Rust`. A number's shape carries its integer type, and a
+/// value whose type the file writes out is a `Declared` term: a constant, a `let` with a
+/// type, a number with a suffix, and each parameter and the result of a helper. A helper's
+/// parameter needs no `#[range]`; a field and an action's input do, and the range must lie
+/// inside the integer type.
+///
+/// An `Option` as the value of a `Map` or the item of a `Seq` or a `Queue` is a problem:
+/// `get`, `first`, `last` and `head` would give `Some(None)`, which the checker can't tell
+/// from `None`. So is a function named `forall`, `exists` or `Some`, whose calls are read as
+/// the library's.
 ///
 /// Any other `#[cfg]` or `#[cfg_attr]`, on an item, a method, a field, an input, a statement
 /// or an expression, is a problem: the file is read once for every build, so a part kept in

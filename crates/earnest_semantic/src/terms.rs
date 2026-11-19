@@ -1,9 +1,9 @@
-use super::types::{Binding, Scope, Type, Typed};
+use super::types::{Binding, Scope, Type, Typed, fitted, fitted_when_present};
 use super::{Lowerer, Lowering};
-use earnest_ast::{Binary, Reach, Shape, Term, TermKind, Unary};
+use earnest_ast::{Binary, HelperKind, Language, Reach, Shape, Term, TermKind, Unary};
 use earnest_diagnostics::Place;
 use earnest_ir::{Expr, Math, Op, Order, Shelf, Sweep};
-use earnest_value::{Sym, Value};
+use earnest_value::{IntType, Sym, Value};
 
 pub(super) fn apply(op: Op, arguments: Vec<Expr>) -> Expr {
     Expr::Apply(op, arguments)
@@ -26,13 +26,20 @@ fn can_be_null(ty: &Type) -> bool {
     matches!(ty, Type::Optional(_) | Type::Null)
 }
 
+fn is_null(expr: Expr) -> Expr {
+    apply(Op::Equal, vec![expr, Expr::Const(Value::Null)])
+}
+
 impl Lowerer<'_> {
     pub(super) fn term(&mut self, term: &Term, scope: &mut Scope) -> Lowering<Typed> {
         let place = term.place;
         match &term.kind {
             TermKind::Null => Ok(Typed::new(Expr::Const(Value::Null), Type::Null)),
             TermKind::Bool(flag) => Ok(Typed::new(Expr::Const(Value::Bool(*flag)), Type::Bool)),
-            TermKind::Int(number) => Ok(Typed::new(Expr::Const(Value::Int(*number)), Type::Int)),
+            TermKind::Int(number) => Ok(Typed::new(
+                Expr::Const(Value::Int(*number)),
+                Type::Int(None),
+            )),
             TermKind::Text(text) => Ok(self.text(text)),
             TermKind::Name(name) => self.name(name, place, scope),
             TermKind::Member(target, name) => self.member(target, name, place, scope),
@@ -44,7 +51,11 @@ impl Lowerer<'_> {
                 let on = self.term(target, scope)?;
                 self.method(on, method, arguments, place, scope)
             }
-            TermKind::Helper { name, arguments } => self.helper(name, arguments, place, scope),
+            TermKind::Helper {
+                kind,
+                name,
+                arguments,
+            } => self.helper(*kind, name, arguments, place, scope),
             TermKind::Unary(unary, inner) => self.unary(*unary, inner, scope),
             TermKind::Binary(binary, left, right) => {
                 self.binary(*binary, left, right, place, scope)
@@ -60,7 +71,7 @@ impl Lowerer<'_> {
                 "a function can only be passed to every, some, filter, forall and exists",
             )),
             TermKind::Bind { name, value, body } => {
-                let bound = self.term(value, scope)?;
+                let bound = self.bound(name, value, scope)?;
                 let slot = scope.slot();
                 scope
                     .names
@@ -102,6 +113,12 @@ impl Lowerer<'_> {
                 "a template string",
                 "text is built only in a view's state and group labels",
             )),
+            TermKind::Declared { shape, value } => {
+                let declared = self.shape(shape)?.ty;
+                let lowered = self.term(value, scope)?;
+                let expr = self.coerce(lowered, &declared, value.place)?;
+                Ok(Typed::new(expr, declared))
+            }
             _ => Err(self.unknown_syntax(place, "an expression")),
         }
     }
@@ -126,9 +143,58 @@ impl Lowerer<'_> {
         self.coerce(lowered, &Type::Bool, term.place)
     }
 
-    fn number(&mut self, term: &Term, scope: &mut Scope) -> Lowering<Expr> {
-        let lowered = self.term(term, scope)?;
-        self.coerce(lowered, &Type::Int, term.place)
+    pub(super) fn is_rust(&self) -> bool {
+        self.draft.language == Language::Rust
+    }
+
+    pub(super) fn bound(&mut self, name: &str, value: &Term, scope: &mut Scope) -> Lowering<Typed> {
+        let bound = self.term(value, scope)?;
+        if self.is_rust() && bound.ty.has_a_number_without_a_type() {
+            return Err(self.stop(
+                value.place,
+                &format!("`let {name}` with a number of no stated type"),
+                &format!(
+                    "the checker can't tell which integer type the number has, and Rust may \
+                     pick another than it would: write the type after the name, as in \
+                     `let {name}: u8 = 1;`"
+                ),
+            ));
+        }
+        Ok(bound)
+    }
+
+    fn mixed(&mut self, left: &Type, right: &Type, place: Place) -> Lowering<()> {
+        let Some((first, second)) = left.mixes_integer_types(right) else {
+            return Ok(());
+        };
+        Err(self.stop(
+            place,
+            &format!(
+                "a `{}` number with a `{}` number",
+                first.name(),
+                second.name()
+            ),
+            "Rust does not mix integer types: both numbers must have one type",
+        ))
+    }
+
+    fn numbers(
+        &mut self,
+        left: (&Term, Typed),
+        right: (&Term, Typed),
+        place: Place,
+        fallback: Option<IntType>,
+    ) -> Lowering<(Expr, Expr, Option<IntType>)> {
+        let ((left_term, first), (right_term, second)) = (left, right);
+        self.mixed(&first.ty, &second.ty, place)?;
+        let ty = first.ty.int_type().or(second.ty.int_type()).or(fallback);
+        let lower = self.coerce(first, &Type::Int(ty), left_term.place)?;
+        let upper = self.coerce(second, &Type::Int(ty), right_term.place)?;
+        Ok((lower, upper, ty))
+    }
+
+    fn default_int_type(&self) -> Option<IntType> {
+        self.is_rust().then_some(IntType::I32)
     }
 
     fn name(&mut self, name: &str, place: Place, scope: &mut Scope) -> Lowering<Typed> {
@@ -158,7 +224,8 @@ impl Lowerer<'_> {
                 "the model file does not define this name, so the checker can't know its value",
             ));
         };
-        if self.in_flight.iter().any(|running| running == name) {
+        let running = (None, name.to_owned());
+        if self.in_flight.contains(&running) {
             return Err(self.stop(
                 place,
                 &format!("recursion in `{name}`"),
@@ -166,7 +233,7 @@ impl Lowerer<'_> {
             ));
         }
         let mut fresh = Scope::starting_at(scope.slots);
-        self.in_flight.push(name.to_owned());
+        self.in_flight.push(running);
         let lowered = self.term(constant, &mut fresh);
         self.in_flight.pop();
         scope.slots = fresh.slots;
@@ -250,20 +317,26 @@ impl Lowerer<'_> {
 
     fn helper(
         &mut self,
+        kind: HelperKind,
         name: &str,
         arguments: &[Term],
         place: Place,
         scope: &mut Scope,
     ) -> Lowering<Typed> {
         let draft = self.draft;
-        let Some(found) = draft.helpers.iter().find(|helper| helper.name == name) else {
+        let known = draft
+            .helpers
+            .iter()
+            .find(|helper| helper.kind == kind && helper.name == name);
+        let Some(found) = known else {
             return Err(self.stop(
                 place,
                 &format!("a call to `{name}`"),
                 "it is not a library primitive or a function defined in the model file",
             ));
         };
-        if self.in_flight.iter().any(|running| running == name) {
+        let running = (Some(kind), name.to_owned());
+        if self.in_flight.contains(&running) {
             return Err(self.stop(
                 place,
                 &format!("recursion in `{name}`"),
@@ -301,7 +374,7 @@ impl Lowerer<'_> {
                 }
             }
         }
-        self.in_flight.push(name.to_owned());
+        self.in_flight.push(running);
         let body = self.term(&found.body, &mut inner);
         self.in_flight.pop();
         scope.slots = inner.slots;
@@ -324,8 +397,13 @@ impl Lowerer<'_> {
                 Ok(Typed::new(apply(Op::Not, vec![lowered]), Type::Bool))
             }
             Unary::Negate => {
-                let lowered = self.number(inner, scope)?;
-                Ok(Typed::new(apply(Op::Negate, vec![lowered]), Type::Int))
+                let lowered = self.term(inner, scope)?;
+                let ty = lowered.ty.int_type();
+                let number = self.coerce(lowered, &Type::Int(ty), inner.place)?;
+                Ok(Typed::new(
+                    in_type(apply(Op::Negate, vec![number]), ty),
+                    Type::Int(ty),
+                ))
             }
             _ => Err(self.unknown_syntax(inner.place, "an operator")),
         }
@@ -339,7 +417,7 @@ impl Lowerer<'_> {
         place: Place,
         scope: &mut Scope,
     ) -> Lowering<Typed> {
-        let (op, ty) = match binary {
+        let op = match binary {
             Binary::And | Binary::Or => {
                 let first = Box::new(self.truth(left, scope)?);
                 let second = Box::new(self.truth(right, scope)?);
@@ -368,15 +446,19 @@ impl Lowerer<'_> {
             Binary::GreaterOrEqual => {
                 return self.order(Order::GreaterOrEqual, left, right, place, scope);
             }
-            Binary::Add => (Op::Math(Math::Add), Type::Int),
-            Binary::Subtract => (Op::Math(Math::Subtract), Type::Int),
-            Binary::Multiply => (Op::Math(Math::Multiply), Type::Int),
-            Binary::Remainder => (Op::Math(Math::Remainder), Type::Int),
+            Binary::Add => Op::Math(Math::Add),
+            Binary::Subtract => Op::Math(Math::Subtract),
+            Binary::Multiply => Op::Math(Math::Multiply),
+            Binary::Remainder => Op::Math(Math::Remainder),
             _ => return Err(self.unknown_syntax(place, "an operator")),
         };
-        let first = self.number(left, scope)?;
-        let second = self.number(right, scope)?;
-        Ok(Typed::new(apply(op, vec![first, second]), ty))
+        let first = self.term(left, scope)?;
+        let second = self.term(right, scope)?;
+        let (lower, upper, ty) = self.numbers((left, first), (right, second), place, None)?;
+        Ok(Typed::new(
+            in_type(apply(op, vec![lower, upper]), ty),
+            Type::Int(ty),
+        ))
     }
 
     fn order(
@@ -398,8 +480,8 @@ impl Lowerer<'_> {
                  Rust, `value.is_some_and(|number| number < 5)`)",
             ));
         }
-        let lower = self.coerce(first, &Type::Int, left.place)?;
-        let upper = self.coerce(second, &Type::Int, right.place)?;
+        let fallback = self.default_int_type();
+        let (lower, upper, _) = self.numbers((left, first), (right, second), place, fallback)?;
         Ok(Typed::new(
             apply(Op::Order(order), vec![lower, upper]),
             Type::Bool,
@@ -413,26 +495,26 @@ impl Lowerer<'_> {
         right: Typed,
         place: Place,
     ) -> Lowering<Typed> {
-        let (first, second) = if left.ty.fits(&right.ty) {
-            (left.expr, right.expr)
-        } else {
-            match (&left.ty, &right.ty) {
-                (Type::Optional(inner), other) if inner.fits(other) => {
-                    (left.expr, apply(Op::SomeOf, vec![right.expr]))
-                }
-                (other, Type::Optional(inner)) if inner.fits(other) => {
-                    (apply(Op::SomeOf, vec![left.expr]), right.expr)
-                }
-                (have, other) => {
-                    let feature = format!("{} compared with {}", have.kind(), other.kind());
-                    return Err(self.stop(
-                        place,
-                        &feature,
-                        "the two sides can never be equal, so the comparison is a mistake",
-                    ));
-                }
-            }
+        self.mixed(&left.ty, &right.ty, place)?;
+        let never_null = |ty: &Type| !matches!(ty, Type::Null | Type::Optional(_) | Type::Unknown);
+        let both = match (&left.ty, &right.ty) {
+            (Type::Null, other) | (other, Type::Null) if never_null(other) => None,
+            (first, second) => first.union(second),
         };
+        let Some(joined) = both else {
+            let feature = format!("{} compared with {}", left.ty.kind(), right.ty.kind());
+            return Err(self.stop(
+                place,
+                &feature,
+                "the two sides can never be equal, so the comparison is a mistake",
+            ));
+        };
+        let ty = match (joined, self.default_int_type()) {
+            (Type::Int(None), Some(fallback)) => Type::Int(Some(fallback)),
+            (kept, _) => kept,
+        };
+        let first = self.coerce(left, &ty, place)?;
+        let second = self.coerce(right, &ty, place)?;
         Ok(Typed::new(apply(op, vec![first, second]), Type::Bool))
     }
 
@@ -459,40 +541,22 @@ impl Lowerer<'_> {
     }
 
     fn join(&mut self, left: Typed, right: Typed, place: Place) -> Lowering<(Expr, Expr, Type)> {
-        if left.ty.fits(&right.ty) {
-            let ty = left.ty.merged(&right.ty).merged(&left.ty);
-            return Ok((left.expr, right.expr, ty));
-        }
-        match (&left.ty, &right.ty) {
-            (Type::Null, other) => Ok((
-                left.expr,
-                apply(Op::SomeOf, vec![right.expr]),
-                Type::optional(other.clone()),
-            )),
-            (other, Type::Null) => Ok((
-                apply(Op::SomeOf, vec![left.expr]),
-                right.expr,
-                Type::optional(other.clone()),
-            )),
-            (Type::Optional(inner), other) if inner.fits(other) => Ok((
-                left.expr,
-                apply(Op::SomeOf, vec![right.expr]),
-                left.ty.clone(),
-            )),
-            (other, Type::Optional(inner)) if inner.fits(other) => Ok((
-                apply(Op::SomeOf, vec![left.expr]),
-                right.expr,
-                right.ty.clone(),
-            )),
-            (have, other) => {
-                let feature = format!("a choice between {} and {}", have.kind(), other.kind());
-                Err(self.stop(
-                    place,
-                    &feature,
-                    "both branches must give the same kind of value",
-                ))
-            }
-        }
+        self.mixed(&left.ty, &right.ty, place)?;
+        let Some(ty) = left.ty.union(&right.ty) else {
+            let feature = format!(
+                "a choice between {} and {}",
+                left.ty.kind(),
+                right.ty.kind()
+            );
+            return Err(self.stop(
+                place,
+                &feature,
+                "both branches must give the same kind of value",
+            ));
+        };
+        let first = self.coerce(left, &ty, place)?;
+        let second = self.coerce(right, &ty, place)?;
+        Ok((first, second, ty))
     }
 
     fn record(
@@ -558,12 +622,15 @@ impl Lowerer<'_> {
         for item in items {
             lowered.push(self.term(item, scope)?);
         }
-        let item_type = lowered
+        let first_known = lowered
             .iter()
             .map(|typed| &typed.ty)
             .find(|ty| !matches!(ty, Type::Unknown | Type::Null))
             .cloned()
             .unwrap_or(Type::Unknown);
+        let item_type = lowered.iter().fold(first_known, |joined, typed| {
+            joined.union(&typed.ty).unwrap_or(joined)
+        });
         let mut exprs = Vec::with_capacity(lowered.len());
         for typed in lowered {
             exprs.push(self.coerce(typed, &item_type, place)?);
@@ -638,7 +705,7 @@ impl Lowerer<'_> {
 
     pub(super) fn coerce(&mut self, have: Typed, want: &Type, place: Place) -> Lowering<Expr> {
         if have.ty.fits(want) {
-            return Ok(have.expr);
+            return self.typed_as(have, want, place);
         }
         match (have.expr, have.ty, want) {
             (expr, Type::Optional(inner), wanted) if !matches!(wanted, Type::Optional(_)) => self
@@ -651,10 +718,24 @@ impl Lowerer<'_> {
                 let coerced = self.coerce(Typed::new(expr, ty), inner, place)?;
                 Ok(apply(Op::SomeOf, vec![coerced]))
             }
+            (expr, Type::Optional(inner), Type::Optional(wanted)) => {
+                let present = Typed::new(apply(Op::Unwrap, vec![expr.clone()]), *inner);
+                let coerced = self.coerce(present, wanted, place)?;
+                Ok(Expr::Choose(
+                    Box::new(is_null(expr)),
+                    Box::new(Expr::Const(Value::Null)),
+                    Box::new(apply(Op::SomeOf, vec![coerced])),
+                ))
+            }
             (Expr::Record(fields), Type::Record(have_types), Type::Record(want_types))
                 if have_types.len() == want_types.len() =>
             {
                 self.coerce_record(fields, &have_types, want_types, place)
+            }
+            (expr, Type::Record(have_types), Type::Record(want_types))
+                if have_types.len() == want_types.len() =>
+            {
+                self.coerce_fields(expr, &have_types, want_types, place)
             }
             (Expr::SetOf(items), Type::Set(item), Type::Set(wanted)) => {
                 Ok(Expr::SetOf(self.coerce_each(items, &item, wanted, place)?))
@@ -671,6 +752,52 @@ impl Lowerer<'_> {
                 ))
             }
         }
+    }
+
+    fn typed_as(&mut self, have: Typed, want: &Type, place: Place) -> Lowering<Expr> {
+        self.mixed(&have.ty, want, place)?;
+        Ok(match (&have.ty, want) {
+            (Type::Int(None), Type::Int(Some(ty))) => fitted(have.expr, *ty),
+            (Type::Optional(inner), Type::Optional(wanted)) => match (&**inner, &**wanted) {
+                (Type::Int(None), Type::Int(Some(ty))) => fitted_when_present(have.expr, *ty),
+                _ => have.expr,
+            },
+            _ => have.expr,
+        })
+    }
+
+    fn coerce_fields(
+        &mut self,
+        record: Expr,
+        have: &[(String, Type)],
+        want: &[(String, Type)],
+        place: Place,
+    ) -> Lowering<Expr> {
+        let mut changes = Vec::new();
+        for (name, wanted_type) in want {
+            let Some((_, had_type)) = have.iter().find(|(known, _)| known == name) else {
+                return Err(self.stop(
+                    place,
+                    &format!("the record field `{name}`"),
+                    "the record given here has no field with this name",
+                ));
+            };
+            let sym = self.symbols.intern(name);
+            let read = Expr::Get(Box::new(record.clone()), sym);
+            let coerced = self.coerce(
+                Typed::new(read.clone(), had_type.clone()),
+                wanted_type,
+                place,
+            )?;
+            if coerced != read {
+                changes.push((sym, coerced));
+            }
+        }
+        Ok(if changes.is_empty() {
+            record
+        } else {
+            Expr::With(Box::new(record), changes)
+        })
     }
 
     fn coerce_each(
@@ -710,5 +837,12 @@ impl Lowerer<'_> {
             coerced.push((sym, self.coerce(typed, wanted_type, place)?));
         }
         Ok(Expr::Record(coerced))
+    }
+}
+
+fn in_type(expr: Expr, ty: Option<IntType>) -> Expr {
+    match ty {
+        Some(known) => apply(Op::Fit(known), vec![expr]),
+        None => expr,
     }
 }

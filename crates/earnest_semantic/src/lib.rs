@@ -4,14 +4,19 @@
 //! or every [`Problem`] that stops it: a name the file does not define, a primitive that does
 //! not exist, a value of the wrong kind, a helper that calls itself, a starting value outside
 //! its field, or a declaration with too many values to try.
+//!
+//! A draft's language decides two things. In a draft read from Rust every number is computed
+//! in its integer type, and a result outside the type is a fault when the model runs; and an
+//! optional value that would sit inside another optional value is a problem, because Rust
+//! tells `Some(None)` from `None` and the model's values can't.
 
 mod methods;
 mod terms;
 mod types;
 
 use earnest_ast::{
-    ActionBody, ActionDraft, Draft, EndDraft, FieldDraft, LabelDraft, RuleDraft, Shape, ShapeKind,
-    TemplatePiece, Term, TermKind,
+    ActionBody, ActionDraft, Draft, EndDraft, FieldDraft, HelperKind, LabelDraft, RuleDraft, Shape,
+    ShapeKind, TemplatePiece, Term, TermKind,
 };
 use earnest_diagnostics::{Place, Problem};
 use earnest_ir::{Action, End, Expr, Field, Frame, Input, Label, Model, Piece, Rule, View, eval};
@@ -28,7 +33,7 @@ struct Lowerer<'a> {
     symbols: Symbols,
     problems: Vec<Problem>,
     fields: Vec<(String, Type)>,
-    in_flight: Vec<String>,
+    in_flight: Vec<(Option<HelperKind>, String)>,
 }
 
 struct Shaped {
@@ -42,7 +47,8 @@ struct Shaped {
 /// Fields keep the draft's order, and so do actions, rules and ends. A field without a
 /// starting value starts at every value it declares, or empty, free, idle or at zero for a
 /// collection, lock, timer, request or retry. Every top-level constant is checked, also one
-/// that nothing reads.
+/// that nothing reads. A record literal is a value of a declared record when each field is,
+/// so a field declared optional takes a plain value or `null`.
 ///
 /// # Errors
 ///
@@ -206,7 +212,7 @@ impl Lowerer<'_> {
         let value = match eval(&expr, &mut Frame::new(&[], scope.slots)) {
             Ok(value) => value,
             Err(fault) => {
-                return Err(self.stop(term.place, "a starting value", fault.describe()));
+                return Err(self.stop(term.place, "a starting value", &fault.describe()));
             }
         };
         if domain.contains(&value) {
@@ -293,7 +299,7 @@ impl Lowerer<'_> {
             return self.changes(inner, scope);
         }
         if let TermKind::Bind { name, value, body } = &term.kind {
-            let bound = self.term(value, scope)?;
+            let bound = self.bound(name, value, scope)?;
             let slot = scope.slot();
             scope
                 .names
@@ -437,7 +443,7 @@ impl Lowerer<'_> {
     fn shape(&mut self, shape: &Shape) -> Lowering<Shaped> {
         match &shape.kind {
             ShapeKind::Bool => Ok(plain(Domain::Bool, Type::Bool)),
-            ShapeKind::Int { lo, hi } => {
+            ShapeKind::Int { lo, hi, ty } => {
                 if lo > hi {
                     return Err(self.stop(
                         shape.place,
@@ -445,7 +451,7 @@ impl Lowerer<'_> {
                         "the lower bound is above the upper bound",
                     ));
                 }
-                Ok(plain(Domain::Int { lo: *lo, hi: *hi }, Type::Int))
+                Ok(plain(Domain::Int { lo: *lo, hi: *hi }, Type::Int(*ty)))
             }
             ShapeKind::OneOf(options) => self.one_of(options, shape.place),
             ShapeKind::Optional(inner) => {
@@ -473,7 +479,7 @@ impl Lowerer<'_> {
             }
             ShapeKind::Map(key, value) => {
                 let keys = self.shape(key)?;
-                let values = self.shape(value)?;
+                let values = self.held(value, "a map value")?;
                 Ok(Shaped {
                     domain: Domain::Map(Box::new(keys.domain), Box::new(values.domain)),
                     ty: Type::Map(Box::new(keys.ty), Box::new(values.ty)),
@@ -481,7 +487,7 @@ impl Lowerer<'_> {
                 })
             }
             ShapeKind::Seq { item, max } => {
-                let shaped = self.shape(item)?;
+                let shaped = self.held(item, "a sequence item")?;
                 Ok(Shaped {
                     domain: Domain::Seq {
                         item: Box::new(shaped.domain),
@@ -492,7 +498,7 @@ impl Lowerer<'_> {
                 })
             }
             ShapeKind::Queue { item, capacity } => {
-                let shaped = self.shape(item)?;
+                let shaped = self.held(item, "a queue item")?;
                 Ok(Shaped {
                     domain: Domain::Seq {
                         item: Box::new(shaped.domain),
@@ -527,6 +533,29 @@ impl Lowerer<'_> {
                 "this version of the checker does not know it",
             )),
         }
+    }
+
+    fn held(&mut self, shape: &Shape, what: &str) -> Lowering<Shaped> {
+        let shaped = self.shape(shape)?;
+        if matches!(shaped.ty, Type::Lock(Some(_))) {
+            return Err(self.stop(
+                shape.place,
+                &format!("a lock with an owner as {what}"),
+                "reading it gives an optional value, and a free lock is already the value \
+                 `null`, so a free lock could not be told from no lock: keep the owner in an \
+                 optional field of a record",
+            ));
+        }
+        if self.is_rust() && matches!(shaped.ty, Type::Optional(_)) {
+            return Err(self.stop(
+                shape.place,
+                &format!("an optional value as {what}"),
+                "in Rust reading it gives `Some(None)`, an optional value inside an optional \
+                 value, which the checker can't tell from `None`: hold a record with an \
+                 optional field, or leave the entry out",
+            ));
+        }
+        Ok(shaped)
     }
 
     fn staged(&mut self, stages: &[&str], ty: Type) -> Shaped {
@@ -582,7 +611,7 @@ impl Lowerer<'_> {
         for option in options {
             let (value, found) = match &option.kind {
                 TermKind::Text(text) => (Value::Str(self.symbols.intern(text)), Type::Text),
-                TermKind::Int(number) => (Value::Int(*number), Type::Int),
+                TermKind::Int(number) => (Value::Int(*number), Type::Int(None)),
                 TermKind::Bool(flag) => (Value::Bool(*flag), Type::Bool),
                 _ => {
                     return Err(self.stop(
@@ -600,9 +629,15 @@ impl Lowerer<'_> {
                 ));
             }
             ty = found;
-            if !values.contains(&value) {
-                values.push(value);
+            if values.contains(&value) {
+                let shown = self.symbols.show(&value);
+                return Err(self.stop(
+                    option.place,
+                    &format!("the choice {shown} listed twice"),
+                    "list each value once",
+                ));
             }
+            values.push(value);
         }
         if values.is_empty() {
             return Err(self.stop(place, "an empty list of choices", "list at least one value"));

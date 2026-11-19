@@ -11,12 +11,21 @@ The typed lowering: tree to checked model, where each primitive gets its meaning
   primitive's property by its `snake_case` or its camelCase name once the value is known not to
   be a record, and
 - checks that every value has the kind its place needs, wrapping or unwrapping optional values
-  where a plain one meets an optional one.
+  where a plain one meets an optional one, also field by field where two records meet or a
+  record meets its declaration, and
+- in a draft read from Rust, gives every number its integer type and asks each sum, difference,
+  product and negation to stay inside it, with `i32` for a number nothing types and `usize` for
+  a size or a position.
 
 Anything it can't give a meaning to becomes a `Problem` at the place of the term: a name the file
 does not define, also in a constant nothing reads, a primitive that does not exist, a value of
 the wrong kind, two optional values compared by order, a helper function that calls itself, a
-starting value outside its field, or a declaration with more than a million values to try.
+starting value outside its field, a value listed twice in a list of choices, a lock with an
+owner held in a map, a sequence or a queue, or a declaration with more than a million values to
+try. In a draft read from Rust it also refuses what the checker would read differently from
+Rust: an optional value held in a map, a sequence or a queue, or read out of a written
+collection of optional values; numbers of two integer types that meet; and a `let` that binds a
+number nothing gives a type.
 
 `lower_with_earlier` also lowers the rules of an older version of the model, each with the
 constants and helper functions of its own file, so `earnest verify --base` can evaluate an old

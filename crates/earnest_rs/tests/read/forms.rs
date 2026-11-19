@@ -1,6 +1,7 @@
 use crate::{actions, drafts, only_draft, search};
 use earnest_ast::{Binary, ShapeKind, Term, TermKind};
 use earnest_check::{Status, Verdict};
+use earnest_value::IntType;
 
 const PARTY: &str = include_str!("models/party.rs");
 const TICKET: &str = include_str!("models/ticket.rs");
@@ -49,7 +50,11 @@ fn a_field_is_declared_by_its_type_and_its_attributes() {
     assert_eq!(draft.fields[0].shape.initial, None, "no `#[initial]`");
     assert_eq!(
         draft.fields[1].shape.kind,
-        ShapeKind::Int { lo: 0, hi: 3 },
+        ShapeKind::Int {
+            lo: 0,
+            hi: 3,
+            ty: Some(IntType::U8),
+        },
         "a bound may be a constant of the file"
     );
     let initial = draft.fields[1]
@@ -122,7 +127,11 @@ fn an_action_takes_its_inputs_from_parameters_and_its_guard_from_every_require()
     assert_eq!(inputs, ["glasses", "measure"], "inputs in parameter order");
     assert_eq!(
         pour.inputs[0].1.kind,
-        ShapeKind::Int { lo: 1, hi: 2 },
+        ShapeKind::Int {
+            lo: 1,
+            hi: 2,
+            ty: Some(IntType::U8),
+        },
         "`#[range]` on a parameter"
     );
 }
@@ -132,7 +141,19 @@ fn constants_functions_and_plain_methods_become_constants_and_helpers() {
     let draft = only_draft("party.rs", PARTY);
     assert_eq!(draft.constants.len(), 1, "one constant");
     assert_eq!(draft.constants[0].0, "MOST_DRINKS", "its name");
-    assert_eq!(draft.constants[0].1.kind, TermKind::Int(3), "its value");
+    let TermKind::Declared { shape, value } = &draft.constants[0].1.kind else {
+        panic!("a constant has its type: {:?}", draft.constants[0].1);
+    };
+    assert_eq!(
+        shape.kind,
+        ShapeKind::Int {
+            lo: 0,
+            hi: 255,
+            ty: Some(IntType::U8),
+        },
+        "the whole of the type it is declared with"
+    );
+    assert_eq!(value.kind, TermKind::Int(3), "its value");
     let helpers: Vec<(&str, Vec<&str>)> = draft
         .helpers
         .iter()
@@ -146,10 +167,34 @@ fn constants_functions_and_plain_methods_become_constants_and_helpers() {
         [("strength", vec!["measure"]), ("has_company", vec!["self"]),],
         "a method without an attribute is a helper that takes the state"
     );
+    let TermKind::Bind { name, value, body } = &draft.helpers[0].body.kind else {
+        panic!(
+            "a parameter is bound with its type: {:?}",
+            draft.helpers[0].body
+        );
+    };
+    assert_eq!(name, "measure", "the parameter");
     assert!(
-        matches!(draft.helpers[0].body.kind, TermKind::Choose(_, _, _)),
-        "an early `return` is a choice: {:?}",
-        draft.helpers[0].body
+        matches!(&value.kind, TermKind::Declared { shape, .. }
+            if matches!(shape.kind, ShapeKind::OneOf(_))),
+        "its type is the enum: {value:?}"
+    );
+    let TermKind::Declared { shape, value } = &body.kind else {
+        panic!("the result has the type the function returns: {body:?}");
+    };
+    assert!(
+        matches!(
+            shape.kind,
+            ShapeKind::Int {
+                ty: Some(IntType::U8),
+                ..
+            }
+        ),
+        "a `u8`: {shape:?}"
+    );
+    assert!(
+        matches!(value.kind, TermKind::Choose(_, _, _)),
+        "an early `return` is a choice: {value:?}"
     );
 }
 
@@ -186,7 +231,15 @@ fn records_options_and_choices_over_a_type_give_the_result_worked_out_by_hand() 
         panic!("a struct that derives `Domain` is a record");
     };
     assert_eq!(seat[0].0, "row", "the record's first field");
-    assert_eq!(seat[0].1.kind, ShapeKind::Int { lo: 1, hi: 2 }, "its range");
+    assert_eq!(
+        seat[0].1.kind,
+        ShapeKind::Int {
+            lo: 1,
+            hi: 2,
+            ty: Some(IntType::U8),
+        },
+        "its range"
+    );
     assert_eq!(seat[1].1.kind, ShapeKind::Bool, "the second field");
     assert!(
         matches!(&draft.fields[1].shape.kind, ShapeKind::Optional(inner)
@@ -338,7 +391,11 @@ impl Stock {
     };
     assert_eq!(
         counted.kind,
-        ShapeKind::Int { lo: 1, hi: 2 },
+        ShapeKind::Int {
+            lo: 1,
+            hi: 2,
+            ty: Some(IntType::U8),
+        },
         "the field's `#[range]` is the range of the number inside its type"
     );
     assert!(
@@ -358,5 +415,19 @@ impl Stock {
         outcome.status,
         Status::Pass,
         "the rule holds and the last state is an end"
+    );
+}
+
+#[test]
+fn a_byte_order_mark_before_the_file_changes_nothing() {
+    let plain = only_draft("party.rs", PARTY);
+    let marked = only_draft("party.rs", &format!("\u{feff}{PARTY}"));
+    assert_eq!(
+        marked, plain,
+        "the same model, with every rule's text and every place as without the mark"
+    );
+    assert_eq!(
+        marked.rules[1].text, "self.drinks <= 2",
+        "the text of a rule is cut from the right bytes"
     );
 }

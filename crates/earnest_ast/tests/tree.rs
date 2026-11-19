@@ -1,7 +1,10 @@
 //! A tree is plain data: built by hand, compared by value.
 
-use earnest_ast::{Reading, Term, TermKind, ViewDraft, condition_text};
+use earnest_ast::{
+    HelperKind, Reading, Shape, ShapeKind, Term, TermKind, ViewDraft, condition_text,
+};
 use earnest_diagnostics::Place;
+use earnest_value::IntType;
 
 #[test]
 fn a_new_term_keeps_its_place_and_kind() {
@@ -43,4 +46,43 @@ fn the_text_of_a_condition_has_one_space_for_each_run_of_white_space() {
     );
     assert_eq!(condition_text("s.n<=2"), "s.n<=2");
     assert_eq!(condition_text(" \n\t"), "");
+}
+
+#[test]
+fn a_call_of_a_method_is_another_term_than_a_call_of_the_function_of_its_name() {
+    let call = |kind: HelperKind| {
+        Term::new(
+            Place::default(),
+            TermKind::Helper {
+                kind,
+                name: "pick".to_owned(),
+                arguments: Vec::new(),
+            },
+        )
+    };
+    assert_ne!(call(HelperKind::Function), call(HelperKind::Method));
+    assert_eq!(call(HelperKind::Method), call(HelperKind::Method));
+}
+
+#[test]
+fn a_number_shape_with_an_integer_type_is_another_shape_than_one_without() {
+    let number = |ty: Option<IntType>| Shape {
+        place: Place::default(),
+        kind: ShapeKind::Int { lo: 0, hi: 3, ty },
+        initial: None,
+    };
+    assert_ne!(number(Some(IntType::U8)), number(None));
+    assert_ne!(number(Some(IntType::U8)), number(Some(IntType::U16)));
+    let declared = Term::new(
+        Place::default(),
+        TermKind::Declared {
+            shape: Box::new(number(Some(IntType::U8))),
+            value: Box::new(Term::new(Place::default(), TermKind::Int(1))),
+        },
+    );
+    assert_ne!(
+        declared.kind,
+        TermKind::Int(1),
+        "a value with its type written out is not the bare value"
+    );
 }

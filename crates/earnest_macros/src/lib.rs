@@ -24,6 +24,11 @@ fn finish(expanded: syn::Result<proc_macro2::TokenStream>) -> TokenStream {
 /// order. On a struct with named fields, every field must itself have a `Domain`, or be an
 /// integer with `#[range(lo, hi)]` (both bounds included); the values are every combination
 /// of the fields' values. The type must also be `Clone`.
+///
+/// `earnest verify` refuses a few types this derive accepts, because it can't read them as
+/// Rust runs them: an `Option` as the value of a `Map` or the item of a `Seq` or a `Queue`,
+/// where `get`, `first`, `last` and `head` give `Some(None)`; a `Lock<Owner>` held the same
+/// way; `Option<Option<T>>`; and a range that reaches outside its integer type.
 #[proc_macro_derive(Domain, attributes(range))]
 pub fn derive_domain(input: TokenStream) -> TokenStream {
     finish(domain::expand(input.into()))
@@ -39,6 +44,15 @@ pub fn derive_domain(input: TokenStream) -> TokenStream {
 /// and parts. `#[range(lo, hi)]` on a field whose type holds an integer, such as
 /// `Option<u8>` or `Map<Item, u8>`, is the range of that integer. Every field type must be
 /// `Clone`.
+///
+/// `earnest verify` refuses a few field types this derive accepts, because it can't read
+/// them as Rust runs them: `Map<K, Option<V>>`, `Seq<Option<T>, MAX>` and
+/// `Queue<Option<T>, CAPACITY>`, where `get`, `first`, `last` and `head` give `Some(None)`,
+/// which the checker can't tell from `None`; a `Lock<Owner>` held the same way;
+/// `Option<Option<T>>` and `Lock<Option<T>>`; and a range that reaches outside its integer
+/// type. Hold a struct with an `Option` field instead, or leave the entry out. The checker
+/// computes each number in its integer type, so a rule that subtracts below zero on a `u8`
+/// is reported as a fault, where a test of the model panics.
 #[proc_macro_derive(Model, attributes(initial, range))]
 pub fn derive_model(input: TokenStream) -> TokenStream {
     finish(starts::expand(input.into()))
@@ -52,6 +66,8 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
 /// The macro also implements `earnest::model::Behavior` for the type, which tries every
 /// action with every input value; for that, each input type must have a `Domain` and be
 /// `Clone` and `Debug`, and an integer input needs `#[range(lo, hi)]` on the parameter.
+/// A method without one of the three attributes is a helper: it is left as it is, takes its
+/// parameters as plain Rust, and needs no `#[range]`, which Rust would not accept there.
 #[proc_macro_attribute]
 pub fn model(arguments: TokenStream, input: TokenStream) -> TokenStream {
     finish(behavior::expand(&arguments.into(), input.into()))

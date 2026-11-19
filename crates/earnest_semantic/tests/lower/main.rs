@@ -6,5 +6,7 @@ mod earlier;
 mod fields;
 mod optional;
 mod primitives;
+mod records;
 mod refusals;
+mod rust;
 mod views;

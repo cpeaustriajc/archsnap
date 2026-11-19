@@ -1,5 +1,6 @@
 use crate::reader::{OUTSIDE, Reader, at, path_text, why_outside};
-use earnest_ast::{Binary, Reach, Term, TermKind, Unary};
+use earnest_ast::{Binary, HelperKind, Reach, Shape, ShapeKind, Term, TermKind, Unary};
+use earnest_value::IntType;
 use proc_macro2::Span;
 use syn::spanned::Spanned;
 use syn::{
@@ -167,12 +168,34 @@ impl Reader<'_> {
         match &literal.lit {
             Lit::Bool(flag) => at(span, TermKind::Bool(flag.value)),
             Lit::Int(number) => {
-                if let Ok(value) = number.base10_parse() {
-                    at(span, TermKind::Int(value))
-                } else {
+                let Ok(value) = number.base10_parse() else {
                     let feature = self.short_text(span);
-                    self.nothing(span, &feature, "the number is too large for the checker")
+                    return self.nothing(span, &feature, "the number is too large for the checker");
+                };
+                let plain = at(span, TermKind::Int(value));
+                if number.suffix().is_empty() {
+                    return plain;
                 }
+                let Some(ty) = IntType::named(number.suffix()) else {
+                    let feature = self.short_text(span);
+                    return self.nothing(span, &feature, "a model holds whole numbers only");
+                };
+                let shape = Shape {
+                    place: plain.place,
+                    kind: ShapeKind::Int {
+                        lo: ty.lowest(),
+                        hi: ty.highest(),
+                        ty: Some(ty),
+                    },
+                    initial: None,
+                };
+                at(
+                    span,
+                    TermKind::Declared {
+                        shape: Box::new(shape),
+                        value: Box::new(plain),
+                    },
+                )
             }
             _ => {
                 let feature = self.short_text(span);
@@ -279,6 +302,7 @@ impl Reader<'_> {
         at(
             call.span(),
             TermKind::Helper {
+                kind: HelperKind::Method,
                 name: name.to_owned(),
                 arguments,
             },
@@ -318,6 +342,7 @@ impl Reader<'_> {
                 at(
                     span,
                     TermKind::Helper {
+                        kind: HelperKind::Function,
                         name: (*name).to_owned(),
                         arguments: passed.collect(),
                     },

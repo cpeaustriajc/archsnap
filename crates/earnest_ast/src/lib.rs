@@ -8,6 +8,7 @@
 //! property: the lowering decides by the kind of the value that is read.
 
 use earnest_diagnostics::{Place, Problem};
+use earnest_value::IntType;
 
 /// An operator with one operand.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,7 +107,10 @@ pub enum TermKind {
     },
     /// A call to a helper function the model file defines.
     Helper {
-        /// The helper's name, matching a [`HelperDraft`].
+        /// Whether a function of the file or a method of the model is called. The two may
+        /// share a name.
+        kind: HelperKind,
+        /// The helper's name, matching a [`HelperDraft`] of the same kind.
         name: String,
         /// The arguments in order. Passing the whole state is allowed here.
         arguments: Vec<Term>,
@@ -138,7 +142,9 @@ pub enum TermKind {
         /// The expression the function gives back.
         body: Box<Term>,
     },
-    /// A `const` or `let` binding followed by the rest of the function body.
+    /// A `const` or `let` binding followed by the rest of the function body. In a draft read
+    /// from Rust, a value that holds a number nothing gives an integer type is refused: wrap
+    /// it in a [`TermKind::Declared`].
     Bind {
         /// The bound name, visible in `body` only.
         name: String,
@@ -162,6 +168,46 @@ pub enum TermKind {
     },
     /// A template string. It is allowed only as a view's state or group label.
     Template(Vec<TemplatePiece>),
+    /// A value where the file writes its type: in Rust a `let` with a type, a constant, a
+    /// parameter or the result of a helper, and a number with a suffix such as `1u8`.
+    ///
+    /// The value must be of the shape's kind and each number in it gets the shape's integer
+    /// type. The bounds of a number range in the shape are not checked.
+    Declared {
+        /// The type, as a declaration.
+        shape: Box<Shape>,
+        /// The value that has it.
+        value: Box<Term>,
+    },
+}
+
+/// What a helper is. A Rust file may have a function and a method with one name, and
+/// `pick(x)` calls the first where `self.pick(x)` calls the second.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HelperKind {
+    /// A function at the top of the file.
+    Function,
+    /// A method of the model without `#[action]`, `#[rule]` or `#[end]`. Its first parameter
+    /// is the state.
+    Method,
+}
+
+/// The language a draft was read from, for the two things that mean something else in each.
+///
+/// Everything else in a draft means the same whichever reader made it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Language {
+    /// A number is one kind of value held in 64 bits, and `null` is one value: an optional
+    /// read from a collection of optional values is absent or present, never both.
+    TypeScript,
+    /// Every number has an integer type and a result outside its type is a fault. A number
+    /// no declaration gives a type is an `i32`, a size is a `usize`, and a `let` must say the
+    /// type of a number that nothing else does. `Some(None)` is another value than `None`,
+    /// which the checker can't hold, so an optional read from a collection of optional values
+    /// is refused.
+    Rust,
 }
 
 impl Term {
@@ -197,6 +243,9 @@ pub enum ShapeKind {
         lo: i64,
         /// The largest number.
         hi: i64,
+        /// The integer type the file gives the number, which every result computed from it
+        /// must stay inside. `None` in TypeScript.
+        ty: Option<IntType>,
     },
     /// `m.enum([...])`, `m.oneOf([...])` or a Rust enum. Each choice is a [`TermKind::Text`], a
     /// [`TermKind::Int`] or a [`TermKind::Bool`], all of one kind.
@@ -352,15 +401,20 @@ pub struct ViewDraft {
     pub colors: Vec<(String, String)>,
 }
 
-/// A helper function a model file defines at its top level.
+/// A helper function a model file defines: a function at its top level, or in Rust a method
+/// of the model that is no action, rule or end.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HelperDraft {
+    /// Whether it is a function of the file or a method of the model. A call finds the helper
+    /// with its own kind and name.
+    pub kind: HelperKind,
     /// The name it is called by.
     pub name: String,
-    /// The parameter names in order.
+    /// The parameter names in order. A method's first parameter is the state.
     pub parameters: Vec<String>,
     /// The expression it gives back, with statements folded into [`TermKind::Bind`] and
-    /// [`TermKind::Choose`].
+    /// [`TermKind::Choose`]. Where the file writes the type of a parameter or of the result,
+    /// the body binds the parameter again as a [`TermKind::Declared`] value and is itself one.
     pub body: Term,
 }
 
@@ -371,6 +425,8 @@ pub struct Draft {
     pub name: String,
     /// The path of the file it was read from, used in every problem.
     pub file: String,
+    /// The language the file is written in.
+    pub language: Language,
     /// Where the model is declared.
     pub place: Place,
     /// The state fields in declaration order. That order is the order of every printed state.

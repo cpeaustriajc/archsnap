@@ -15,7 +15,12 @@ holds
 
 `Limits` bounds the states and the time, picks one rule, and sets the worker threads. A level of
 512 states or more is split among the workers, and the outcome is the same for any number of
-them.
+them. When a limit stops the search, the states it has counted and not gone on from still have
+their rules judged before the outcome is given, so "N states so far" never counts a state whose
+rules nobody looked at. No action is tried from them.
+
+A state is stuck only when the guard of every action is false and every end is false. A guard
+or an end that can't be evaluated is a fault in that state, and the state is not called stuck.
 
 The split of a level into one slice per worker is `cut_points` in `src/cut.rs`. Verus proves
 that the cut points start at 0, end at the level's size, strictly increase, and are never further

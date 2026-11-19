@@ -2,7 +2,7 @@ use crate::helper::Helper;
 use crate::kind::Kind;
 use crate::names::Names;
 use earnest_ir::{Expr, MapOp, Math, Op, Order, SeqOp, SetOp, Shelf, Sweep};
-use earnest_value::{Domain, Sym, Symbols, Value};
+use earnest_value::{Domain, IntType, Sym, Symbols, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) const NULL: &str = "<<>>";
@@ -523,6 +523,7 @@ fn alone(op: Op, on: &Written) -> Option<Written> {
             Kind::optional(on.kind.clone()),
         ),
         Op::Unwrap => Written::new(format!("{text}[1]"), on.kind.present()),
+        Op::Fit(_) => Written::new(text.clone(), Kind::Int),
         Op::Set(SetOp::Size) => Written::new(format!("Cardinality({text})"), Kind::Int),
         Op::Map(MapOp::Size) => Written::new(format!("Cardinality(DOMAIN {text})"), Kind::Int),
         Op::Map(MapOp::Keys) => Written::new(format!("(DOMAIN {text})"), Kind::set(on.kind.key())),
@@ -642,11 +643,23 @@ fn on_seq(op: SeqOp, first: &Written, second: &Written) -> Written {
 fn has_a_value(op: Op, given: &[Written]) -> Option<String> {
     match (op, given) {
         (Op::Unwrap, [on, ..]) => Some(format!("({} # {NULL})", on.text)),
+        (Op::Fit(ty), [on, ..]) => inside(ty, &on.text),
         (Op::Math(Math::Remainder), [left, right, ..]) => Some(format!(
             "(({} >= 0) {AND} ({} >= 1))",
             left.text, right.text
         )),
         _ => None,
+    }
+}
+
+fn inside(ty: IntType, text: &str) -> Option<String> {
+    let lowest = Some(ty.lowest()).filter(|bound| *bound > i64::from(i32::MIN));
+    let highest = Some(ty.highest()).filter(|bound| *bound < i64::from(i32::MAX));
+    match (lowest, highest) {
+        (Some(lo), Some(hi)) => Some(format!("({text} \\in {}..{})", number(lo), number(hi))),
+        (Some(lo), None) => Some(format!("({text} >= {})", number(lo))),
+        (None, Some(hi)) => Some(format!("({text} <= {})", number(hi))),
+        (None, None) => None,
     }
 }
 

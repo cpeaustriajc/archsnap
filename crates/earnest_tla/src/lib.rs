@@ -35,6 +35,34 @@ use names::{EVERY_VARIABLE, IN_RANGE, Names, STARTS, STEPS, STOP};
 use scribe::{Scope, Scribe, Variable, Written, names_written, set_of};
 use std::collections::BTreeSet;
 
+/// The invariants one rule is exported as.
+///
+/// TLC's verdict for the rule is broken when a state breaks `holds`; otherwise unknown when a
+/// state breaks `judged`, because the rule has no value there; otherwise it holds. The module
+/// defines both and [`Files::config`] names only `holds`: [`Files::config_judging`] gives the
+/// configuration that checks the two.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Invariants {
+    /// The rule's id in the model.
+    pub rule: String,
+    /// The invariant a state breaks when the rule is false in it: `Rule_` followed by the
+    /// rule's id, respelled or numbered as [`write`] says. It is true in a state where the
+    /// rule has no value.
+    pub holds: String,
+    /// The invariant a state breaks when the rule has no value in it, such as a read of a
+    /// field of `null`: `Judged_` followed by the rule's id. `None` for a rule that has a
+    /// value in every state.
+    pub judged: Option<String>,
+}
+
+impl Invariants {
+    /// The names of the rule's invariants as the module defines them: `holds`, then `judged`
+    /// when the rule has one.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.holds.as_str()).chain(self.judged.as_deref())
+    }
+}
+
 /// The text of the two files TLC reads to check one model.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Files {
@@ -44,8 +72,12 @@ pub struct Files {
     /// The text of `<name>.tla`.
     pub module: String,
     /// The text of `<name>.cfg`. It names one invariant per rule, in the order of the model's
-    /// rules: `Rule_` followed by the rule's id, respelled or numbered as [`write`] says.
+    /// rules: the `holds` invariant of each entry of `rules`. A rule that has no value in a
+    /// state is true there, so this configuration never stops TLC on such a rule and never
+    /// reports it either.
     pub config: String,
+    /// The invariants each rule is exported as, in the order of the model's rules.
+    pub rules: Vec<Invariants>,
 }
 
 const INVARIANT: &str = "INVARIANT ";
@@ -64,8 +96,8 @@ impl Files {
     /// else as in `config`.
     ///
     /// TLC reports one broken invariant per state, so a run that checks one rule alone is how
-    /// to learn that rule's verdict whatever the other rules do. An empty `kept` gives a run
-    /// that only counts the states. A name `config` does not have is ignored.
+    /// to learn whether that rule is broken whatever the other rules do. An empty `kept` gives
+    /// a run that only counts the states. A name `config` does not have is ignored.
     #[must_use]
     pub fn config_checking(&self, kept: &[&str]) -> String {
         self.config
@@ -82,6 +114,25 @@ impl Files {
     }
 }
 
+impl Files {
+    /// The text of a configuration that checks one rule alone and also says where the rule
+    /// has no value: its `holds` invariant, then its `judged` invariant when it has one, with
+    /// everything else as in `config`.
+    ///
+    /// A state breaks at most one of the two, so one run of TLC with `-continue` gives the
+    /// rule's verdict as [`Invariants`] describes it.
+    #[must_use]
+    pub fn config_judging(&self, rule: &Invariants) -> String {
+        let mut text = self.config_checking(&[]);
+        for invariant in rule.names() {
+            text.push_str(INVARIANT);
+            text.push_str(invariant);
+            text.push('\n');
+        }
+        text
+    }
+}
+
 const INDENT: &str = "    ";
 const EXTENDED: &str = "EXTENDS Integers, Sequences, FiniteSets, TLC";
 const FILLER: &str = "nothing";
@@ -95,8 +146,13 @@ const FILLER: &str = "nothing";
 /// - In one state TLC reports only the first invariant it finds broken. A rule that breaks only
 ///   where an earlier rule breaks too is then not reported, so give such a rule a run of its
 ///   own.
-/// - A rule that faults in the search is an error in TLC, which then stops whatever the flags.
-///   So is a construct this writer does not know, which it writes as a call of `Fault`.
+/// - A rule that has no value in a state, which the search reports as a fault, is true there
+///   in its `Rule_` invariant, so TLC goes on and counts every state. Such a state breaks the
+///   rule's `Judged_` invariant, which the module defines and the configuration does not
+///   name: check it with [`Files::config_judging`].
+/// - A construct this writer does not know is written as a call of `Fault`, which is an error
+///   in TLC, and TLC then stops whatever the flags. So is a number beyond 32 bits, which TLC
+///   can't hold.
 ///
 /// A field, input, action, rule or end keeps its name when TLA+ can spell it and nothing else
 /// has it; otherwise letters TLA+ lacks become `_` and a taken name gets `_2`, `_3` and so on.
@@ -154,13 +210,34 @@ pub fn write(model: &Model) -> Files {
     }
     blocks.push(stop(&ends));
     blocks.push(steps(&actions));
-    for (rule, defined) in model.rules.iter().zip(&rules) {
-        let holds = writer.condition(&rule.holds).text;
-        blocks.push(definition(defined, &[format!("{IN_RANGE} => {holds}")]));
+    let mut exported = Vec::with_capacity(model.rules.len());
+    for (rule, defined) in model.rules.iter().zip(rules) {
+        let holds = writer.condition(&rule.holds);
+        let judged = holds.sound.map(|sound| {
+            let judged = writer.names.claim(&format!("Judged_{}", rule.id));
+            (judged, sound)
+        });
+        let judged_or_holds = match &judged {
+            Some((_, sound)) => format!("((~{sound}) \\/ {})", holds.text),
+            None => holds.text,
+        };
+        blocks.push(definition(
+            &defined,
+            &[format!("{IN_RANGE} => {judged_or_holds}")],
+        ));
+        if let Some((name, sound)) = &judged {
+            blocks.push(definition(name, &[format!("{IN_RANGE} => {sound}")]));
+        }
+        exported.push(Invariants {
+            rule: rule.id.clone(),
+            holds: defined,
+            judged: judged.map(|(name, _)| name),
+        });
     }
     Files {
         module: writer.module(&name, &blocks),
-        config: config(&rules),
+        config: config(&exported),
+        rules: exported,
         name,
     }
 }
@@ -325,11 +402,11 @@ fn steps(actions: &[String]) -> String {
     definition(STEPS, &lines)
 }
 
-fn config(rules: &[String]) -> String {
+fn config(rules: &[Invariants]) -> String {
     let mut text = format!("INIT {STARTS}\nNEXT {STEPS}\nCHECK_DEADLOCK FALSE\n");
     for rule in rules {
         text.push_str(INVARIANT);
-        text.push_str(rule);
+        text.push_str(&rule.holds);
         text.push('\n');
     }
     text

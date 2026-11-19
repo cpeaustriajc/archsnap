@@ -121,7 +121,62 @@ fn the_same_graph_gives_the_same_chart_on_every_call() {
 }
 
 #[test]
-fn a_second_route_that_does_not_fit_is_left_out_whole() {
+fn a_route_longer_than_the_limit_keeps_its_first_arrows_and_the_note_says_what_lies_beyond() {
+    let mut far = chain(25);
+    far.nodes[25].broken = vec!["far".to_owned()];
+    let drawn = read(&chart(&far));
+    assert_eq!(drawn.arrows.len(), 20, "the limit");
+    assert_eq!(
+        pairs(&drawn.arrows).first(),
+        Some(&("s0", "s1")),
+        "the route starts at the start state"
+    );
+    assert_eq!(
+        pairs(&drawn.arrows).last(),
+        Some(&("s19", "s20")),
+        "and goes on for twenty arrows"
+    );
+    assert_eq!(drawn.label_of("s25"), None, "the broken state is not drawn");
+    assert!(drawn.members("broken").is_empty(), "so nothing is marked");
+    assert_eq!(
+        drawn.note.as_deref(),
+        Some(
+            "Not shown: 5 of 26 states and 5 of 25 arrows. A broken state lies beyond what is \
+             shown."
+        )
+    );
+}
+
+#[test]
+fn two_broken_states_beyond_the_limit_are_both_counted_in_the_note() {
+    let mut far = chain(25);
+    far.nodes[22].broken = vec!["far".to_owned()];
+    far.nodes[25].outside = vec!["n".to_owned()];
+    let drawn = read(&chart(&far));
+    assert_eq!(drawn.arrows.len(), 20, "the limit");
+    assert_eq!(
+        drawn.note.as_deref(),
+        Some(
+            "Not shown: 5 of 26 states and 5 of 25 arrows. 2 broken states lie beyond what is \
+             shown."
+        )
+    );
+}
+
+#[test]
+fn a_broken_state_exactly_at_the_limit_is_drawn_and_nothing_lies_beyond() {
+    let mut near = chain(21);
+    near.nodes[20].broken = vec!["near".to_owned()];
+    let drawn = read(&chart(&near));
+    assert_eq!(drawn.members("broken"), ["s20"]);
+    assert_eq!(
+        drawn.note.as_deref(),
+        Some("Not shown: 1 of 22 states and 1 of 21 arrows.")
+    );
+}
+
+#[test]
+fn a_second_route_that_does_not_fit_keeps_its_first_arrows() {
     let mut nodes = vec![start("start")];
     let mut edges = Vec::new();
     for (name, first) in [("a", 1), ("b", 16)] {
@@ -145,7 +200,10 @@ fn a_second_route_that_does_not_fit_is_left_out_whole() {
     assert_eq!(drawn.label_of("s30"), None);
     assert_eq!(
         drawn.note.as_deref(),
-        Some("Not shown: 10 of 31 states and 10 of 30 arrows.")
+        Some(
+            "Not shown: 10 of 31 states and 10 of 30 arrows. A broken state lies beyond what is \
+             shown."
+        )
     );
 }
 

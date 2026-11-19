@@ -1,7 +1,7 @@
 use crate::build::{Sketch, apply, below, counter, int, is, plus, steps, texts, yes};
 use earnest_check::{Finding, FindingKind, Outcome, Status, Verdict};
 use earnest_ir::{Expr, Math, Op, Order, SeqOp};
-use earnest_value::{Domain, Value};
+use earnest_value::{Domain, IntType, Value};
 
 const STUCK: &str = "no action can happen here, and the model does not mark it as an end";
 
@@ -234,6 +234,31 @@ fn a_remainder_of_a_negative_number_is_a_fault_with_the_path_to_it() {
          state"
     );
     assert_eq!(steps(&finding.path), ["dec  n: 1 -> 0", "drop  n: 0 -> -1"]);
+}
+
+#[test]
+fn a_number_outside_its_integer_type_is_a_fault_that_names_the_type() {
+    let (mut sketch, n) = counter(3);
+    sketch.end("full", is(&n, 3));
+    let one_below = Expr::Apply(Op::Fit(IntType::U8), vec![plus(&n, -1)]);
+    sketch.rule(
+        "below",
+        apply(Op::Order(Order::LessOrEqual), &one_below, int(2)),
+    );
+    let outcome = sketch.explored();
+    assert_eq!(outcome.states, 4, "the count goes 0, 1, 2, 3");
+    let finding = the_finding(&outcome);
+    assert_eq!(finding.kind, FindingKind::Fault);
+    assert_eq!(
+        finding.message,
+        "the rule `below` computes a number outside `u8` in this state"
+    );
+    assert!(finding.path.steps.is_empty(), "0 - 1 in the start state");
+    assert_eq!(
+        outcome.rules[0].verdict,
+        Verdict::Unknown,
+        "the rule holds at 1, 2 and 3 and has no value at 0"
+    );
 }
 
 #[test]

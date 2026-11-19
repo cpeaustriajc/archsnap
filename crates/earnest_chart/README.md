@@ -45,11 +45,14 @@ A chart draws at most `ARROW_LIMIT` arrows, not counting the `[*]` arrows.
    taking states and arrows in the graph's order. Following those arrows back from a state gives a
    shortest route to it.
 2. For each broken state, in the graph's order, the arrows of its route are kept when all of them
-   still fit. A route that does not fit is left out whole.
+   still fit. Of a route that does not fit, the arrows nearest the start are kept as far as the
+   limit allows, and the broken state itself is not drawn.
 3. The rest is filled one arrow at a time: the first arrow in the graph's order that is not kept
    and leaves a state the chart already reaches from a start.
 4. A state is drawn when a kept arrow touches it, when it is a broken state whose route was kept,
    or when it is a start state with no arrow leaving it.
 
 When a state or an arrow is left out, the block is followed by one line such as
-`Not shown: 15 of 36 states and 40 of 60 arrows.` The same graph always gives the same chart.
+`Not shown: 15 of 36 states and 40 of 60 arrows.` When a broken state is among them because its
+route did not fit, the line says so: `Not shown: 5 of 26 states and 5 of 25 arrows. A broken
+state lies beyond what is shown.` The same graph always gives the same chart.

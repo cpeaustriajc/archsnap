@@ -1,7 +1,7 @@
 use crate::Reader;
 use crate::names::{DECLARATIONS, snake, why_outside};
 use crate::shapes::WRITTEN_TWICE;
-use earnest_ast::{Binary, Reach, TemplatePiece, Term, TermKind, Unary};
+use earnest_ast::{Binary, HelperKind, Reach, TemplatePiece, Term, TermKind, Unary};
 use oxc_ast::ast::{
     Argument, BinaryExpression, CallExpression, Expression, LogicalExpression, ObjectExpression,
     ObjectPropertyKind, StaticMemberExpression, TemplateLiteral, UnaryExpression,
@@ -341,6 +341,7 @@ impl Reader<'_> {
                     return self.refused(start, name, why_outside(name, None));
                 }
                 TermKind::Helper {
+                    kind: HelperKind::Function,
                     name: name.to_owned(),
                     arguments: self.arguments(call),
                 }
