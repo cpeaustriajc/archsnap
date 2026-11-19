@@ -1,0 +1,112 @@
+id: no-lint-attributes
+valid:
+  - "#[derive(Debug)] struct S;"
+  - "#[test] fn t() {}"
+  - "#[cfg(test)] mod m {}"
+  - "#[cfg_attr(test, derive(Debug))] struct S;"
+  - "#![cfg_attr(docsrs, feature(doc_cfg))]"
+  - "#[cfg_attr(feature = \"deny\", derive(Debug))] struct S;"
+  - "#![forbid_nothing]"
+  - "let s = \"#[allow(dead_code)]\";"
+  - "let s = r#\"#![deny(warnings)]\"#;"
+  - "fn allow() {} fn f() { allow(); }"
+  - "let allow = 1;"
+  - "#[clippy::cognitive_complexity = \"10\"] fn f() {}"
+  - "let v = vec![allow(1)];"
+  - "m!(deny(x));"
+  - "m! { #[derive(Debug)] struct S; }"
+  - "m! { #[cfg_attr(test, derive(Debug))] struct S; }"
+  - "#[doc = \"allow\"] fn f() {}"
+  - "#[cfg(feature = \"deny\")] fn f() {}"
+  - "#[cfg(allow)] fn f() {}"
+  - "#[allow_internal_unstable] fn f() {}"
+  - "struct S { allow: i32, warn: i32 }"
+  - "use foo::allow;"
+  - "fn f() { x.deny(); foo::expect(1); }"
+  - "let a = b[allow(1)];"
+  - "// #[allow(dead_code)]"
+  - "/* #![deny(warnings)] */"
+  - "/// #[allow(dead_code)]"
+  - "m!(foo[allow(x)]);"
+  - "m!(#[doc = \"allow\"] fn f() {});"
+  - "m! { #[cfg_attr(test, derive(Debug))] fn f() { allow(x); } }"
+  - "m!(#[cfg_attr(test, derive(Debug))] fn f() { deny(1) });"
+  - "#[cfg_attr(test, derive(Debug))] fn f() { allow(1); }"
+  - "#[cfg_attr(allow, derive(Debug))] struct S;"
+  - "macro_rules! m { ($(#[$meta:meta])* $v:vis fn $n:ident) => { $(#[$meta])* $v fn $n() {} }; }"
+  - "#[derive(Debug)] struct allow;"
+invalid:
+  - "#[core::allow(dead_code)] fn f() {}"
+  - "#[::core::prelude::v1::deny(dead_code)] fn f() {}"
+  - "#[r#allow(dead_code)] fn f() {}"
+  - "m! { #[allow(unused)] fn a() {} }"
+  - "m!(#![deny(warnings)]);"
+  - "macro_rules! m { () => { #[expect(dead_code)] fn b() {} }; }"
+  - "m! { #[cfg_attr(test, warn(unused))] fn a() {} }"
+  - "#[allow(dead_code)] fn f() {}"
+  - "#[expect(dead_code)] fn f() {}"
+  - "#[warn(dead_code)] fn f() {}"
+  - "#[deny(dead_code)] fn f() {}"
+  - "#[forbid(dead_code)] fn f() {}"
+  - "#![allow(dead_code)]"
+  - "#![expect(dead_code)]"
+  - "#![warn(dead_code)]"
+  - "#![deny(dead_code)]"
+  - "#![forbid(unsafe_code)]"
+  - "#![deny(warnings)]"
+  - "#[allow(clippy::too_many_arguments)] fn f() {}"
+  - "#[allow(clippy::all, dead_code)] fn f() {}"
+  - "#[cfg_attr(test, allow(dead_code))] fn f() {}"
+  - "#![cfg_attr(test, deny(unused))]"
+  - "#[cfg_attr(feature = \"x\", cfg_attr(test, expect(unused)))] fn f() {}"
+  - "#[cfg_attr(test, derive(Debug), warn(unused))] struct S;"
+  - |
+    #[derive(Debug)]
+    #[allow(dead_code)]
+    struct S;
+  - |
+    fn f() {
+        #[allow(unused_variables)]
+        let x = 1;
+    }
+  - |
+    impl S {
+        #[expect(dead_code)]
+        fn g(&self) {}
+    }
+  - "# [ allow ( dead_code ) ] fn f() {}"
+  - "#[ /* c */ allow(dead_code) ] fn f() {}"
+  - |
+    #[cfg_attr(
+        test,
+        // comment
+        allow(dead_code),
+    )]
+    fn f() {}
+  - "mod m { #![allow(dead_code)] }"
+  - "fn f(#[allow(unused)] x: i32) {}"
+  - "struct S { #[allow(dead_code)] a: i32 }"
+  - "enum E { #[allow(dead_code)] A }"
+  - "fn f(x: i32) { match x { #[allow(unreachable_patterns)] _ => {} } }"
+  - "extern \"C\" { #[allow(improper_ctypes)] fn f(); }"
+  - "#[allow(unused_imports)] use std::fmt;"
+  - "fn f() { #[allow(unused_parens)] foo(); }"
+  - "fn f() { #[allow(unused_braces)] { 1 } }"
+  - "fn f() { let s = S { #[allow(dead_code)] a: 1 }; }"
+  - "fn f() { g(#[allow(unused)] 1); }"
+  - "fn f() { let v = [#[allow(unused)] 1]; }"
+  - "fn f() { #[allow(unused)] let a = 1; }"
+  - "m![#[allow(x)] fn f() {}];"
+  - "m!(#[allow(x)] fn f() {});"
+  - "m!(n! { #[allow(x)] fn f() {} });"
+  - "m! { # [ deny ( x ) ] fn f() {} }"
+  - "macro_rules! m { ($x:ident) => { #[allow(unused)] fn $x() {} }; }"
+  - "m! { #[cfg_attr(test, cfg_attr(feature = \"x\", deny(y)))] fn f() {} }"
+  - "#[cfg_attr(test, core::allow(dead_code))] fn f() {}"
+  - "#[cfg_attr(test, ::core::prelude::v1::deny(dead_code))] fn f() {}"
+  - "m! { #[cfg_attr(test, ::core::forbid(x))] fn f() {} }"
+  - "#[cfg_attr(test, r#allow(dead_code))] fn f() {}"
+  - "#[cfg_attr(test, expect(dead_code, reason = \"x\"))] fn f() {}"
+  - "#[allow(dead_code, reason = \"x\")] fn f() {}"
+  - "m! { #![cfg_attr(test, allow(x))] }"
+  - "#[r#cfg_attr(test, allow(x))] fn f() {}"

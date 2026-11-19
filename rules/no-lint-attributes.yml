@@ -1,0 +1,41 @@
+id: no-lint-attributes
+language: rust
+severity: error
+message: Change the code instead of silencing the lint; do not use allow, expect, warn, deny or forbid.
+note: |
+  Lint-level attributes are forbidden everywhere, including inside cfg_attr and
+  inside macro bodies. Fix the cause the lint reports.
+utils:
+  attribute-tokens:
+    kind: token_tree
+    follows:
+      any:
+        - regex: '^#$'
+        - regex: '^!$'
+          follows:
+            regex: '^#$'
+rule:
+  kind: identifier
+  regex: ^(r#)?(allow|expect|warn|deny|forbid)$
+  any:
+    - inside:
+        kind: attribute
+    - inside:
+        kind: scoped_identifier
+        field: name
+        inside:
+          kind: attribute
+    - precedes:
+        kind: token_tree
+      inside:
+        stopBy: end
+        has:
+          kind: identifier
+          regex: ^(r#)?cfg_attr$
+        any:
+          - kind: attribute
+          - matches: attribute-tokens
+    - follows:
+        regex: '^\[$'
+      inside:
+        matches: attribute-tokens
