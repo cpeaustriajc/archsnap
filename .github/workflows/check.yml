@@ -53,6 +53,6 @@ jobs:
           path: |
             ~/.cargo/registry
             target
-          key: cargo-build-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-build-${{ runner.os }}-${{ env.RUST_VERSION }}-
+          key: cargo-build-${{ runner.os }}-${{ env.RUST_VERSION }}-verus-${{ env.VERUS_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-build-${{ runner.os }}-${{ env.RUST_VERSION }}-verus-${{ env.VERUS_VERSION }}-
       - run: just check
