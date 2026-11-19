@@ -10,18 +10,13 @@
       "Edit(.deny.toml)",
       "Edit([Jj][Uu][Ss][Tt][Ff][Ii][Ll][Ee])",
       "Edit(.[Jj][Uu][Ss][Tt][Ff][Ii][Ll][Ee])",
-      "Edit(sgconfig.yml)",
-      "Edit(sgconfig.yaml)",
-      "Edit(.ignore)",
-      "Edit(.gitignore)",
       "Edit(rust-toolchain)",
       "Edit(rust-toolchain.toml)",
       "Edit(.cargo/**)",
       "Edit(/.githooks/**)",
-      "Edit(/rules/**)",
-      "Edit(/rule-tests/**)",
       "Edit(/tests/behavior/**)",
       "Edit(/tests/behavior.rs)",
+      "Edit(/CLAUDE.md)",
       "Edit(/.claude/settings.json)"
     ]
   }
