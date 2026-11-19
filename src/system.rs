@@ -1,58 +1,59 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::diag::{Source, Warning};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct System {
-    pub nodes: Vec<SysNode>,
-    pub edges: Vec<SysEdge>,
+pub(crate) struct System {
+    pub(crate) nodes: Vec<SysNode>,
+    pub(crate) edges: Vec<SysEdge>,
     #[serde(default)]
-    pub routes: Vec<Route>,
+    pub(crate) routes: Vec<Route>,
     #[serde(default)]
-    pub route_calls: Vec<RouteCall>,
+    pub(crate) route_calls: Vec<RouteCall>,
     #[serde(default)]
-    pub handlers: Vec<Handler>,
+    pub(crate) handlers: Vec<Handler>,
 }
 
 /// An endpoint a service answers, with its mount prefix applied.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Route {
-    pub method: String,
-    pub path: String,
-    pub file: String,
-    pub service: String,
+pub(crate) struct Route {
+    pub(crate) method: String,
+    pub(crate) path: String,
+    pub(crate) file: String,
+    pub(crate) service: String,
 }
 
 /// A place in client code that requests one of the routes above.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct RouteCall {
-    pub from: String,
-    pub file: String,
-    pub method: String,
-    pub path: String,
+pub(crate) struct RouteCall {
+    pub(crate) from: String,
+    pub(crate) file: String,
+    pub(crate) method: String,
+    pub(crate) path: String,
 }
 
 /// A Worker entry point other than fetch: `scheduled` (cron) or `queue` (consumer).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Handler {
-    pub kind: String,
-    pub file: String,
-    pub service: String,
+pub(crate) struct Handler {
+    pub(crate) kind: String,
+    pub(crate) file: String,
+    pub(crate) service: String,
 }
 
 /// What one source file says about HTTP: routes it defines, routers it mounts, paths it requests.
 #[derive(Debug, Clone, Default)]
-pub struct CodeFacts {
+pub(crate) struct CodeFacts {
     /// (method, path, router variable)
-    pub routes: Vec<(String, String, Option<String>)>,
+    pub(crate) routes: Vec<(String, String, Option<String>)>,
     /// (parent router, prefix, child router variable)
-    pub mounts: Vec<(Option<String>, String, String)>,
+    pub(crate) mounts: Vec<(Option<String>, String, String)>,
     /// (path pattern with `*` for interpolations, method if known)
-    pub paths: Vec<(String, Option<String>)>,
-    pub handlers: Vec<String>,
-    pub exports: Vec<String>,
+    pub(crate) paths: Vec<(String, Option<String>)>,
+    pub(crate) handlers: Vec<String>,
+    pub(crate) exports: Vec<String>,
 }
 
 fn segments(path: &str) -> Vec<&str> {
@@ -86,86 +87,96 @@ fn join_route(prefix: &str, path: &str) -> String {
 
 /// Next.js file routes: `app/api/links/[id]/route.ts` -> `/api/links/:id`, `pages/api/x.ts` -> `/api/x`.
 fn next_route(file: &str, package_dir: &str) -> Option<String> {
-    let rest = if package_dir.is_empty() {
+    let in_package = if package_dir.is_empty() {
         file
     } else {
         file.strip_prefix(&format!("{package_dir}/"))?
     };
-    let rest = rest.strip_prefix("src/").unwrap_or(rest);
-    let (dir, name) = rest.rsplit_once('/')?;
-    let segs: Vec<String> = if let Some(app) = dir
+    let relative = in_package.strip_prefix("src/").unwrap_or(in_package);
+    let (dir, name) = relative.rsplit_once('/')?;
+    let raw_segments = match dir
         .strip_prefix("app")
         .filter(|_| name.starts_with("route."))
     {
-        app.split('/')
-            .filter(|s| !s.is_empty())
-            .filter(|s| !(s.starts_with('(') && s.ends_with(')')))
-            .map(str::to_string)
-            .collect()
-    } else {
-        let api = dir.strip_prefix("pages/api").map(|d| format!("api{d}"))?;
-        let stem = name.split('.').next()?;
-        let mut s: Vec<String> = api
-            .split('/')
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .collect();
-        if stem != "index" {
-            s.push(stem.to_string());
-        }
-        s
+        Some(app_dir) => app_router_segments(app_dir),
+        None => pages_api_segments(dir, name)?,
     };
-    let segs: Vec<String> = segs
-        .into_iter()
-        .map(
-            |s| match s.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-                Some(p) => format!(":{}", p.trim_start_matches("...")),
-                None => s,
-            },
-        )
+    let route_segments: Vec<String> = raw_segments.into_iter().map(route_param).collect();
+    Some(format!("/{}", route_segments.join("/")))
+}
+
+fn app_router_segments(app_dir: &str) -> Vec<String> {
+    app_dir
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .filter(|s| !(s.starts_with('(') && s.ends_with(')')))
+        .map(str::to_string)
+        .collect()
+}
+
+fn pages_api_segments(dir: &str, name: &str) -> Option<Vec<String>> {
+    let api_dir = dir
+        .strip_prefix("pages/api")
+        .map(|rest| format!("api{rest}"))?;
+    let stem = name.split('.').next()?;
+    let mut found: Vec<String> = api_dir
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
         .collect();
-    Some(format!("/{}", segs.join("/")))
+    if stem != "index" {
+        found.push(stem.to_string());
+    }
+    Some(found)
+}
+
+fn route_param(segment: String) -> String {
+    match segment
+        .strip_prefix('[')
+        .and_then(|inner| inner.strip_suffix(']'))
+    {
+        Some(param) => format!(":{}", param.trim_start_matches("...")),
+        None => segment,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SysNode {
-    pub id: String,
+pub(crate) struct SysNode {
+    pub(crate) id: String,
     /// One of: client, web, mobile, service, library, datastore, queue, schedule, external, feature.
     /// report.html switches on these strings.
-    pub kind: String,
-    pub label: String,
-    pub detail: String,
+    pub(crate) kind: String,
+    pub(crate) label: String,
+    pub(crate) detail: String,
     /// For a feature: the service or web app it lives in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent: Option<String>,
+    pub(crate) parent: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SysEdge {
-    pub from: String,
-    pub to: String,
-    pub label: String,
+pub(crate) struct SysEdge {
+    pub(crate) from: String,
+    pub(crate) to: String,
+    pub(crate) label: String,
 }
 
 #[derive(Debug, Clone)]
-pub struct Package {
-    pub name: String,
-    pub dir: String,
-    pub main: Option<String>,
-    pub deps: BTreeSet<String>,
+pub(crate) struct Package {
+    pub(crate) name: String,
+    pub(crate) dir: String,
+    pub(crate) main: Option<String>,
+    pub(crate) deps: BTreeSet<String>,
 }
 
-pub fn parse_package(path: &str, text: &str, warnings: &mut Vec<Warning>) -> Option<Package> {
-    let json: serde_json::Value = match serde_json::from_str(text) {
-        Ok(v) => v,
-        Err(e) => {
-            warnings.push(config_warning(
-                path,
-                text,
-                e.line(),
-                e.column(),
-                &e.to_string(),
-            ));
+pub(crate) fn parse_package(
+    path: &str,
+    text: &str,
+    warnings: &mut Vec<Warning>,
+) -> Option<Package> {
+    let json = match parse_json(text) {
+        Ok(value) => value,
+        Err(failure) => {
+            warnings.push(config_warning(path, text, &failure));
             return None;
         }
     };
@@ -196,25 +207,29 @@ pub fn parse_package(path: &str, text: &str, warnings: &mut Vec<Warning>) -> Opt
 }
 
 /// The package whose folder holds `path`; the root package has dir "".
-pub fn package_of<'a>(packages: &'a [Package], path: &str) -> Option<&'a Package> {
+pub(crate) fn package_of<'a>(packages: &'a [Package], path: &str) -> Option<&'a Package> {
     packages
         .iter()
         .filter(|p| p.dir.is_empty() || path.starts_with(&format!("{}/", p.dir)))
         .max_by_key(|p| p.dir.len())
 }
 
-pub struct Inputs<'a> {
-    pub packages: &'a [Package],
+fn package_of_dir<'a>(packages: &'a [Package], dir: &str) -> Option<&'a Package> {
+    package_of(packages, &format!("{dir}/x"))
+}
+
+pub(crate) struct Inputs<'a> {
+    pub(crate) packages: &'a [Package],
     /// (path, text) of each wrangler.toml / wrangler.json / wrangler.jsonc.
-    pub wranglers: Vec<(String, String)>,
+    pub(crate) wranglers: Vec<(String, String)>,
     /// (dir, name) of each Xcode project.
-    pub xcode: Vec<(String, String)>,
+    pub(crate) xcode: Vec<(String, String)>,
     /// (file, host) of each outside URL found in string literals.
-    pub urls: Vec<(String, String)>,
+    pub(crate) urls: Vec<(String, String)>,
     /// (area, package dir) of every code area, and the area each file belongs to.
-    pub areas: Vec<(String, String)>,
-    pub area_of: &'a dyn Fn(&str) -> String,
-    pub code: Vec<(String, CodeFacts)>,
+    pub(crate) areas: Vec<(String, String)>,
+    pub(crate) area_of: &'a dyn Fn(&str) -> String,
+    pub(crate) code: Vec<(String, CodeFacts)>,
 }
 
 const GENERIC_FOLDERS: &[&str] = &[
@@ -311,6 +326,15 @@ const WEB_FRAMEWORKS: &[(&str, &str)] = &[
     ("vite", "Vite"),
 ];
 const MOBILE_FRAMEWORKS: &[(&str, &str)] = &[("react-native", "React Native"), ("expo", "Expo")];
+const META_FRAMEWORKS: &[&str] = &["Next.js", "Nuxt", "Remix", "Astro", "SvelteKit"];
+const CONFIG_PACKAGE_SUFFIXES: &[&str] = &[
+    "tsconfig",
+    "eslint-config",
+    "prettier-config",
+    "tailwind-config",
+    "typescript-config",
+    "biome-config",
+];
 
 /// SDK label -> the domain its API lives on, so URL hosts merge into the SDK's box.
 const SDK_DOMAINS: &[(&str, &str)] = &[
@@ -420,7 +444,59 @@ const IGNORED_HOSTS: &[&str] = &[
     "www.example.com",
 ];
 
-pub fn host_of(url: &str) -> Option<String> {
+struct StorageBinding {
+    pointer: &'static str,
+    name_fields: &'static [&'static str],
+    id_prefix: &'static str,
+    label_prefix: &'static str,
+    detail: &'static str,
+}
+
+const STORAGE_BINDINGS: &[StorageBinding] = &[
+    StorageBinding {
+        pointer: "/d1_databases",
+        name_fields: &["database_name", "binding"],
+        id_prefix: "d1",
+        label_prefix: "D1",
+        detail: "Cloudflare D1 database",
+    },
+    StorageBinding {
+        pointer: "/kv_namespaces",
+        name_fields: &["binding"],
+        id_prefix: "kv",
+        label_prefix: "KV",
+        detail: "Cloudflare KV namespace",
+    },
+    StorageBinding {
+        pointer: "/r2_buckets",
+        name_fields: &["bucket_name", "binding"],
+        id_prefix: "r2",
+        label_prefix: "R2",
+        detail: "Cloudflare R2 bucket",
+    },
+    StorageBinding {
+        pointer: "/durable_objects/bindings",
+        name_fields: &["class_name", "name"],
+        id_prefix: "do",
+        label_prefix: "Durable Object",
+        detail: "Cloudflare Durable Object",
+    },
+];
+
+const HTTP_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE"];
+const TEST_MARKERS: &[&str] = &[
+    "tests/",
+    "test/",
+    "__tests__/",
+    "e2e/",
+    ".test.",
+    ".spec.",
+    "tests.swift",
+    "test.swift",
+];
+const MOUNT_PASSES: usize = 4;
+
+pub(crate) fn host_of(url: &str) -> Option<String> {
     let rest = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))?;
@@ -455,6 +531,11 @@ fn private_ip(host: &str) -> bool {
     ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
 }
 
+fn has_extension(path: &str, extension: &str) -> bool {
+    path.rsplit_once('.')
+        .is_some_and(|(_, found)| found == extension)
+}
+
 #[derive(Default)]
 struct Builder {
     nodes: BTreeMap<String, SysNode>,
@@ -482,10 +563,30 @@ impl Builder {
             });
         }
     }
+
+    fn has(&self, id: &str) -> bool {
+        self.nodes.contains_key(id)
+    }
+
+    fn kind_of(&self, id: &str) -> &str {
+        self.nodes.get(id).map_or("", |n| n.kind.as_str())
+    }
 }
 
-fn pkg_id(p: &Package) -> String {
-    format!("pkg:{}", if p.dir.is_empty() { "." } else { &p.dir })
+fn package_id(dir: &str) -> String {
+    format!("pkg:{}", if dir.is_empty() { "." } else { dir })
+}
+
+fn pkg_id(package: &Package) -> String {
+    package_id(&package.dir)
+}
+
+fn xcode_id(dir: &str, name: &str) -> String {
+    format!("xcode:{dir}/{name}")
+}
+
+fn location(dir: &str) -> &str {
+    if dir.is_empty() { "repo root" } else { dir }
 }
 
 fn found<'a>(deps: &BTreeSet<String>, table: &'a [(&str, &str)]) -> Vec<&'a str> {
@@ -496,620 +597,757 @@ fn found<'a>(deps: &BTreeSet<String>, table: &'a [(&str, &str)]) -> Vec<&'a str>
         .collect()
 }
 
-pub fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
-    let mut b = Builder::default();
-    let pkgs = inputs.packages;
-    let names: BTreeSet<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
-    let monorepo = pkgs.len() > 1;
+#[derive(Default)]
+struct Workers {
+    by_name: BTreeMap<String, String>,
+    by_domain: BTreeMap<String, String>,
+    mains: Vec<(String, String)>,
+}
 
-    for p in pkgs {
-        let server = found(&p.deps, SERVER_FRAMEWORKS);
-        let web = found(&p.deps, WEB_FRAMEWORKS);
-        let mobile = found(&p.deps, MOBILE_FRAMEWORKS);
-        let is_workspace_root = monorepo && p.dir.is_empty() && server.is_empty() && web.is_empty();
-        let config_only = [
-            "tsconfig",
-            "eslint-config",
-            "prettier-config",
-            "tailwind-config",
-            "typescript-config",
-            "biome-config",
-        ]
-        .iter()
-        .any(|c| p.name.ends_with(c));
-        if is_workspace_root || config_only {
-            continue;
-        }
-        let shared = monorepo && (p.dir.starts_with("packages/") || p.dir.starts_with("libs/"));
-        let web = match web
-            .iter()
-            .position(|w| ["Next.js", "Nuxt", "Remix", "Astro", "SvelteKit"].contains(w))
-        {
-            Some(i) => vec![web[i]],
-            None => web,
-        };
-        let (kind, stack) = if !mobile.is_empty() {
-            ("mobile", mobile)
-        } else if shared {
-            ("library", vec![])
-        } else if !server.is_empty() {
-            ("service", server)
-        } else if !web.is_empty() {
-            ("web", web)
-        } else if p.dir.starts_with("apps/") || p.dir.starts_with("services/") || !monorepo {
-            ("service", vec![])
-        } else {
-            ("library", vec![])
-        };
-        let where_ = if p.dir.is_empty() {
-            "repo root".to_string()
-        } else {
-            p.dir.clone()
-        };
-        let detail = if stack.is_empty() {
-            where_
-        } else {
-            format!("{}, {where_}", stack.join(" + "))
-        };
-        b.node(&pkg_id(p), kind, &p.name, &detail);
-    }
-
-    for p in pkgs {
-        let id = pkg_id(p);
-        if !b.nodes.contains_key(&id) {
-            continue;
-        }
-        for dep in &p.deps {
-            if names.contains(dep.as_str())
-                && let Some(target) = pkgs.iter().find(|q| &q.name == dep)
-                && b.nodes.contains_key(&pkg_id(target))
-            {
-                b.edge(&id, &pkg_id(target), "uses code from");
-            }
-            for (prefix, kind, label) in SDKS {
-                let hit = if prefix.ends_with('/') {
-                    dep.starts_with(prefix)
-                } else {
-                    dep == prefix
-                };
-                if hit {
-                    let target = b.node(
-                        &format!("sdk:{label}"),
-                        kind,
-                        label,
-                        "found in package.json",
-                    );
-                    b.edge(
-                        &id,
-                        &target,
-                        if *kind == "datastore" {
-                            "reads and writes"
-                        } else {
-                            "calls"
-                        },
-                    );
-                }
-            }
-        }
-    }
-
-    let mut workers: BTreeMap<String, String> = BTreeMap::new();
-    let mut mains: Vec<(String, String)> = Vec::new();
-    let mut domains: BTreeMap<String, String> = BTreeMap::new();
-    for (path, text) in &inputs.wranglers {
-        let dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
-        let Some(cfg) = parse_wrangler(path, text, warnings) else {
-            continue;
-        };
-        let owner = package_of(pkgs, &format!("{dir}/x"))
-            .map(pkg_id)
-            .unwrap_or_else(|| format!("pkg:{dir}"));
-        let name = cfg
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or(dir)
-            .to_string();
-        let detail = match b.nodes.get(&owner) {
-            Some(n) => format!("Cloudflare Worker \"{name}\", {}", n.detail),
-            None => format!("Cloudflare Worker \"{name}\""),
-        };
-        let label = b
-            .nodes
-            .get(&owner)
-            .map(|n| n.label.clone())
-            .unwrap_or_else(|| name.clone());
-        b.nodes.insert(
-            owner.clone(),
-            SysNode {
-                id: owner.clone(),
-                kind: "service".into(),
-                label,
-                detail,
-                parent: None,
-            },
-        );
-        workers.insert(name.clone(), owner.clone());
-        if let Some(main) = cfg
-            .get("main")
-            .and_then(|v| v.as_str())
-            .and_then(|m| crate::scan::join(dir, m))
-        {
-            mains.push((owner.clone(), main));
-        }
-        let routes = cfg
-            .get("routes")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-        for r in routes.iter().chain(cfg.get("route")) {
-            let pattern = r
-                .as_str()
-                .or_else(|| r.get("pattern").and_then(|p| p.as_str()))
-                .unwrap_or("");
-            let host = pattern
-                .split('/')
-                .next()
-                .unwrap_or("")
-                .trim_start_matches("*.")
-                .trim_start_matches('*');
-            if !host.is_empty() {
-                domains.insert(host.to_string(), owner.clone());
-            }
-        }
-
-        let list = |key: &str| {
-            cfg.get(key)
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default()
-        };
-        let field =
-            |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
-        for db in list("d1_databases") {
-            if let Some(n) = field(&db, "database_name").or_else(|| field(&db, "binding")) {
-                let t = b.node(
-                    &format!("d1:{n}"),
-                    "datastore",
-                    &format!("D1 {n}"),
-                    "Cloudflare D1 database",
-                );
-                b.edge(&owner, &t, "reads and writes");
-            }
-        }
-        for kv in list("kv_namespaces") {
-            if let Some(n) = field(&kv, "binding") {
-                let t = b.node(
-                    &format!("kv:{n}"),
-                    "datastore",
-                    &format!("KV {n}"),
-                    "Cloudflare KV namespace",
-                );
-                b.edge(&owner, &t, "reads and writes");
-            }
-        }
-        for r2 in list("r2_buckets") {
-            if let Some(n) = field(&r2, "bucket_name").or_else(|| field(&r2, "binding")) {
-                let t = b.node(
-                    &format!("r2:{n}"),
-                    "datastore",
-                    &format!("R2 {n}"),
-                    "Cloudflare R2 bucket",
-                );
-                b.edge(&owner, &t, "reads and writes");
-            }
-        }
-        if let Some(dobj) = cfg
-            .get("durable_objects")
-            .and_then(|d| d.get("bindings"))
-            .and_then(|v| v.as_array())
-        {
-            for d in dobj {
-                if let Some(n) = field(d, "class_name").or_else(|| field(d, "name")) {
-                    let t = b.node(
-                        &format!("do:{n}"),
-                        "datastore",
-                        &format!("Durable Object {n}"),
-                        "Cloudflare Durable Object",
-                    );
-                    b.edge(&owner, &t, "reads and writes");
-                }
-            }
-        }
-        if let Some(q) = cfg.get("queues") {
-            let queues = |k: &str| {
-                q.get(k)
-                    .and_then(|v| v.as_array())
-                    .cloned()
-                    .unwrap_or_default()
-            };
-            for p in queues("producers") {
-                if let Some(n) = field(&p, "queue") {
-                    let t = b.node(
-                        &format!("queue:{n}"),
-                        "queue",
-                        &format!("queue {n}"),
-                        "Cloudflare Queue",
-                    );
-                    b.edge(&owner, &t, "sends to");
-                }
-            }
-            for c in queues("consumers") {
-                if let Some(n) = field(&c, "queue") {
-                    let t = b.node(
-                        &format!("queue:{n}"),
-                        "queue",
-                        &format!("queue {n}"),
-                        "Cloudflare Queue",
-                    );
-                    b.edge(&t, &owner, "delivers to");
-                }
-            }
-        }
-        if let Some(crons) = cfg
-            .get("triggers")
-            .and_then(|t| t.get("crons"))
-            .and_then(|v| v.as_array())
-        {
-            for c in crons.iter().filter_map(|c| c.as_str()) {
-                let t = b.node(
-                    &format!("cron:{name}:{c}"),
-                    "schedule",
-                    &describe_cron(c),
-                    &format!("cron {c}"),
-                );
-                b.edge(&t, &owner, "runs");
-            }
-        }
-        if let Some(assets) = cfg
-            .get("assets")
-            .and_then(|a| a.get("directory"))
-            .and_then(|v| v.as_str())
-            && let Some(target) = crate::scan::join(dir, assets)
-            && let Some(web) = package_of(pkgs, &format!("{target}/x"))
-                .filter(|p| !p.dir.is_empty() || target.is_empty())
-        {
-            let web_id = pkg_id(web);
-            if web_id != owner && b.nodes.contains_key(&web_id) {
-                b.edge(&owner, &web_id, "serves");
-                b.edge(&web_id, &owner, "calls (same origin)");
-            }
-        }
-        for s in list("services") {
-            if let Some(n) = field(&s, "service") {
-                let t = workers.get(&n).cloned().unwrap_or_else(|| {
-                    b.node(
-                        &format!("worker:{n}"),
-                        "service",
-                        &n,
-                        "Cloudflare Worker (not in this repo)",
-                    )
-                });
-                b.edge(&owner, &t, "calls");
-            }
-        }
-    }
-
-    for (dir, name) in &inputs.xcode {
-        b.node(
-            &format!("xcode:{dir}/{name}"),
-            "mobile",
-            name,
-            &format!(
-                "Apple app (Xcode), {}",
-                if dir.is_empty() { "repo root" } else { dir }
-            ),
-        );
-    }
-
-    let mut features: BTreeMap<String, String> = BTreeMap::new();
-    for (area, dir) in &inputs.areas {
-        let parent = format!("pkg:{}", if dir.is_empty() { "." } else { dir });
-        let hosts_features = b
-            .nodes
-            .get(&parent)
-            .is_some_and(|p| p.kind == "service" || p.kind == "web");
-        if let (true, Some(label)) = (hosts_features, feature_name(area, dir)) {
-            let id = format!("feat:{area}");
-            let node = SysNode {
-                id: id.clone(),
-                kind: "feature".into(),
-                label,
-                detail: area.clone(),
-                parent: Some(parent),
-            };
-            b.nodes.insert(id.clone(), node);
-            features.insert(area.clone(), id);
-        }
-    }
-
-    let mut mirrors: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for (file, host) in &inputs.urls {
-        let owner = if file.ends_with(".swift") {
-            inputs
-                .xcode
-                .iter()
-                .filter(|(d, _)| d.is_empty() || file.starts_with(&format!("{d}/")))
-                .max_by_key(|(d, _)| d.len())
-                .or(inputs.xcode.first())
-                .map(|(d, n)| format!("xcode:{d}/{n}"))
-        } else {
-            package_of(pkgs, file)
-                .map(pkg_id)
-                .filter(|id| b.nodes.contains_key(id))
-        };
-        let Some(owner) = owner else { continue };
-        let worker = host
-            .strip_suffix(".workers.dev")
+impl Workers {
+    fn serving(&self, host: &str) -> Option<String> {
+        host.strip_suffix(".workers.dev")
             .and_then(|h| h.split('.').next())
-            .and_then(|w| workers.get(w).cloned())
-            .or_else(|| domains.get(host.as_str()).cloned());
-        let target = match worker {
-            Some(w) => w,
-            None => {
-                let key = service_key(host);
-                let sdk = SDK_DOMAINS
-                    .iter()
-                    .find(|(_, d)| *d == key)
-                    .map(|(label, _)| format!("sdk:{label}"));
-                match sdk.filter(|id| b.nodes.contains_key(id)) {
-                    Some(id) => id,
-                    None => {
-                        mirrors.entry(key.clone()).or_default().insert(host.clone());
-                        b.node(&format!("host:{key}"), "external", &key, "")
-                    }
-                }
-            }
-        };
-        b.edge(&owner, &target, "calls");
-        if let Some(feature) = features.get(&(inputs.area_of)(file)) {
-            b.edge(feature, &target, "calls");
-        }
+            .and_then(|worker| self.by_name.get(worker))
+            .or_else(|| self.by_domain.get(host))
+            .cloned()
     }
-    for (key, hosts) in mirrors {
-        if let Some(n) = b.nodes.get_mut(&format!("host:{key}")) {
-            n.detail = hosts.into_iter().collect::<Vec<_>>().join(", ");
-        }
-    }
+}
 
-    if b.nodes.values().any(|n| n.kind == "web") {
-        let browser = b.node(
-            "client:browser",
-            "client",
-            "Browser",
-            "people using the web app",
-        );
-        let webs: Vec<String> = b
-            .nodes
-            .values()
-            .filter(|n| n.kind == "web")
-            .map(|n| n.id.clone())
-            .collect();
-        for w in webs {
-            b.edge(&browser, &w, "opens");
-        }
-    }
-
-    let (routes, route_calls, handlers) = http(&inputs, pkgs, &b, &mains);
+pub(crate) fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
+    let Inputs {
+        packages,
+        wranglers,
+        xcode,
+        urls,
+        areas,
+        area_of,
+        code,
+    } = inputs;
+    let mut graph = Builder::default();
+    add_package_nodes(&mut graph, packages);
+    add_package_edges(&mut graph, packages);
+    let workers = add_workers(&mut graph, packages, &wranglers, warnings);
+    add_xcode_apps(&mut graph, &xcode);
+    let features = add_features(&mut graph, &areas);
+    let url_sources = UrlSources {
+        packages,
+        xcode: &xcode,
+        workers: &workers,
+        features: &features,
+        area_of,
+    };
+    add_url_calls(&mut graph, &url_sources, &urls);
+    add_browser(&mut graph);
+    let (routes, route_calls, handlers) = http(&graph, packages, &xcode, &code, &workers.mains);
     System {
-        nodes: b.nodes.into_values().collect(),
-        edges: b.edges.into_iter().collect(),
+        nodes: graph.nodes.into_values().collect(),
+        edges: graph.edges.into_iter().collect(),
         routes,
         route_calls,
         handlers,
     }
 }
 
-fn http(
-    inputs: &Inputs,
-    pkgs: &[Package],
-    b: &Builder,
-    mains: &[(String, String)],
-) -> (Vec<Route>, Vec<RouteCall>, Vec<Handler>) {
-    let owner_of = |file: &str| -> Option<String> {
-        if file.ends_with(".swift") {
-            return inputs.xcode.first().map(|(d, n)| format!("xcode:{d}/{n}"));
-        }
-        package_of(pkgs, file)
-            .map(pkg_id)
-            .filter(|id| b.nodes.contains_key(id))
-    };
-    let kind_of = |id: &str| b.nodes.get(id).map(|n| n.kind.as_str()).unwrap_or("");
-
-    // Router variables are matched by name within a package: `app.route("/api/x", xRoutes)`.
-    let mut prefix_of: BTreeMap<(String, String), String> = BTreeMap::new();
-    for _ in 0..4 {
-        for (file, facts) in &inputs.code {
-            let Some(owner) = owner_of(file) else {
-                continue;
-            };
-            for (parent, prefix, child) in &facts.mounts {
-                let base = parent
-                    .as_ref()
-                    .and_then(|p| prefix_of.get(&(owner.clone(), p.clone())))
-                    .cloned()
-                    .unwrap_or_default();
-                prefix_of.insert((owner.clone(), child.clone()), join_route(&base, prefix));
-            }
+fn add_package_nodes(graph: &mut Builder, packages: &[Package]) {
+    let monorepo = packages.len() > 1;
+    for package in packages {
+        if let Some((kind, stack)) = classify(package, monorepo) {
+            let detail = package_detail(&stack, &package.dir);
+            graph.node(&pkg_id(package), kind, &package.name, &detail);
         }
     }
-
-    let mut routes: Vec<Route> = Vec::new();
-    for (file, facts) in &inputs.code {
-        let Some(owner) = owner_of(file) else {
-            continue;
-        };
-        let pkg_dir = package_of(pkgs, file).map(|p| p.dir.as_str()).unwrap_or("");
-        let kind = kind_of(&owner);
-        if kind == "service" {
-            for (method, path, router) in &facts.routes {
-                let base = router
-                    .as_ref()
-                    .and_then(|r| prefix_of.get(&(owner.clone(), r.clone())))
-                    .cloned()
-                    .unwrap_or_default();
-                routes.push(Route {
-                    method: method.clone(),
-                    path: join_route(&base, path),
-                    file: file.clone(),
-                    service: owner.clone(),
-                });
-            }
-        }
-        if (kind == "service" || kind == "web")
-            && let Some(path) = next_route(file, pkg_dir)
-        {
-            let methods: Vec<&String> = facts
-                .exports
-                .iter()
-                .filter(|e| ["GET", "POST", "PUT", "PATCH", "DELETE"].contains(&e.as_str()))
-                .collect();
-            if file.contains("/pages/api/") || file.starts_with("pages/api/") {
-                routes.push(Route {
-                    method: "ANY".into(),
-                    path: path.clone(),
-                    file: file.clone(),
-                    service: owner.clone(),
-                });
-            }
-            for m in methods {
-                routes.push(Route {
-                    method: m.clone(),
-                    path: path.clone(),
-                    file: file.clone(),
-                    service: owner.clone(),
-                });
-            }
-        }
-    }
-    routes.sort_by(|a, b| (&a.path, &a.method).cmp(&(&b.path, &b.method)));
-    routes.dedup_by(|a, b| a.path == b.path && a.method == b.method && a.service == b.service);
-
-    let is_test = |f: &str| {
-        let l = f.to_ascii_lowercase();
-        [
-            "tests/",
-            "test/",
-            "__tests__/",
-            "e2e/",
-            ".test.",
-            ".spec.",
-            "tests.swift",
-            "test.swift",
-        ]
-        .iter()
-        .any(|t| l.contains(t))
-    };
-    let mut calls: Vec<RouteCall> = Vec::new();
-    for (file, facts) in &inputs.code {
-        if is_test(file) {
-            continue;
-        }
-        let Some(owner) = owner_of(file) else {
-            continue;
-        };
-        for (path, method) in &facts.paths {
-            let hit = routes
-                .iter()
-                .filter(|r| &r.file != file && path_matches(path, &r.path))
-                .find(|r| {
-                    method
-                        .as_ref()
-                        .is_none_or(|m| m == &r.method || r.method == "ANY")
-                });
-            if let Some(r) = hit {
-                let call = RouteCall {
-                    from: owner.clone(),
-                    file: file.clone(),
-                    method: r.method.clone(),
-                    path: r.path.clone(),
-                };
-                if !calls.contains(&call) {
-                    calls.push(call);
-                }
-            }
-        }
-    }
-
-    let mut handlers = Vec::new();
-    for (owner, main) in mains {
-        let stem = main.rsplit_once('.').map(|(s, _)| s).unwrap_or(main);
-        let facts = inputs
-            .code
-            .iter()
-            .find(|(f, _)| f == main || f.rsplit_once('.').map(|(s, _)| s) == Some(stem));
-        if let Some((file, facts)) = facts {
-            for kind in &facts.handlers {
-                handlers.push(Handler {
-                    kind: kind.clone(),
-                    file: file.clone(),
-                    service: owner.clone(),
-                });
-            }
-        }
-    }
-    (routes, calls, handlers)
 }
 
-/// Cloudflare crons run in UTC. Uncommon patterns fall back to the raw expression.
-fn describe_cron(c: &str) -> String {
-    let f: Vec<&str> = c.split_whitespace().collect();
-    if f.len() != 5 {
-        return format!("Schedule {c}");
+fn package_detail(stack: &[&str], dir: &str) -> String {
+    let place = location(dir);
+    if stack.is_empty() {
+        place.to_string()
+    } else {
+        format!("{}, {place}", stack.join(" + "))
     }
-    let num = |s: &str| s.parse::<u32>().ok();
-    let at = |m: u32, h: u32| format!("{h:02}:{m:02} UTC");
-    const DAYS: [&str; 7] = [
-        "Sunday",
-        "Monday",
-        "Tuesday",
-        "Wednesday",
-        "Thursday",
-        "Friday",
-        "Saturday",
-    ];
-    let day = |s: &str| {
-        num(s)
-            .and_then(|d| DAYS.get(d as usize % 7).map(|d| d.to_string()))
-            .or_else(|| {
-                DAYS.iter()
-                    .find(|d| d[..3].eq_ignore_ascii_case(s))
-                    .map(|d| d.to_string())
-            })
+}
+
+fn classify(package: &Package, monorepo: bool) -> Option<(&'static str, Vec<&'static str>)> {
+    let server = found(&package.deps, SERVER_FRAMEWORKS);
+    let web = web_stack(found(&package.deps, WEB_FRAMEWORKS));
+    let mobile = found(&package.deps, MOBILE_FRAMEWORKS);
+    let workspace_root = monorepo && package.dir.is_empty() && server.is_empty() && web.is_empty();
+    let config_only = CONFIG_PACKAGE_SUFFIXES
+        .iter()
+        .any(|suffix| package.name.ends_with(suffix));
+    if workspace_root || config_only {
+        return None;
+    }
+    let shared =
+        monorepo && (package.dir.starts_with("packages/") || package.dir.starts_with("libs/"));
+    let app_folder = package.dir.starts_with("apps/") || package.dir.starts_with("services/");
+    let classified = if !mobile.is_empty() {
+        ("mobile", mobile)
+    } else if shared {
+        ("library", vec![])
+    } else if !server.is_empty() {
+        ("service", server)
+    } else if !web.is_empty() {
+        ("web", web)
+    } else if app_folder || !monorepo {
+        ("service", vec![])
+    } else {
+        ("library", vec![])
     };
-    match (f[0], f[1], f[2], f[3], f[4]) {
-        ("*", "*", "*", "*", "*") => "Every minute".into(),
-        (m, "*", "*", "*", "*") if m.starts_with("*/") => format!("Every {} minutes", &m[2..]),
-        (m, "*", "*", "*", "*") if num(m).is_some() => format!("Hourly at :{:02}", num(m).unwrap()),
-        (m, h, "*", "*", "*") if num(m).is_some() && num(h).is_some() => {
-            format!("Daily at {}", at(num(m).unwrap(), num(h).unwrap()))
-        }
-        (m, h, "*", "*", d) if num(m).is_some() && num(h).is_some() && day(d).is_some() => {
-            format!(
-                "Weekly on {} at {}",
-                day(d).unwrap(),
-                at(num(m).unwrap(), num(h).unwrap())
-            )
-        }
-        (m, h, dom, "*", "*") if num(m).is_some() && num(h).is_some() && num(dom).is_some() => {
-            format!(
-                "Monthly on day {dom} at {}",
-                at(num(m).unwrap(), num(h).unwrap())
-            )
-        }
-        _ => format!("Schedule {c}"),
+    Some(classified)
+}
+
+fn web_stack(web: Vec<&'static str>) -> Vec<&'static str> {
+    match web.iter().find(|w| META_FRAMEWORKS.contains(w)) {
+        Some(meta) => vec![*meta],
+        None => web,
     }
+}
+
+fn add_package_edges(graph: &mut Builder, packages: &[Package]) {
+    for package in packages {
+        let id = pkg_id(package);
+        if !graph.has(&id) {
+            continue;
+        }
+        for dep in &package.deps {
+            link_dependency(graph, packages, &id, dep);
+        }
+    }
+}
+
+fn link_dependency(graph: &mut Builder, packages: &[Package], id: &str, dep: &str) {
+    if let Some(target) = packages
+        .iter()
+        .find(|other| other.name == dep)
+        .map(pkg_id)
+        .filter(|target| graph.has(target))
+    {
+        graph.edge(id, &target, "uses code from");
+    }
+    for (_, kind, label) in SDKS.iter().filter(|(prefix, ..)| sdk_matches(prefix, dep)) {
+        let target = graph.node(
+            &format!("sdk:{label}"),
+            kind,
+            label,
+            "found in package.json",
+        );
+        let verb = if *kind == "datastore" {
+            "reads and writes"
+        } else {
+            "calls"
+        };
+        graph.edge(id, &target, verb);
+    }
+}
+
+fn sdk_matches(prefix: &str, dep: &str) -> bool {
+    if prefix.ends_with('/') {
+        dep.starts_with(prefix)
+    } else {
+        dep == prefix
+    }
+}
+
+fn add_workers(
+    graph: &mut Builder,
+    packages: &[Package],
+    wranglers: &[(String, String)],
+    warnings: &mut Vec<Warning>,
+) -> Workers {
+    let mut workers = Workers::default();
+    for (path, text) in wranglers {
+        if let Some(config) = parse_wrangler(path, text, warnings) {
+            add_worker(graph, packages, &mut workers, path, &config);
+        }
+    }
+    workers
+}
+
+fn add_worker(
+    graph: &mut Builder,
+    packages: &[Package],
+    workers: &mut Workers,
+    path: &str,
+    config: &Value,
+) {
+    let dir = path.rsplit_once('/').map_or("", |(d, _)| d);
+    let owner = package_of_dir(packages, dir).map_or_else(|| format!("pkg:{dir}"), pkg_id);
+    let name = config
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or(dir)
+        .to_string();
+    let package_node = graph.nodes.get(&owner);
+    let detail = package_node.map_or_else(
+        || format!("Cloudflare Worker \"{name}\""),
+        |n| format!("Cloudflare Worker \"{name}\", {}", n.detail),
+    );
+    let label = package_node.map_or_else(|| name.clone(), |n| n.label.clone());
+    graph.nodes.insert(
+        owner.clone(),
+        SysNode {
+            id: owner.clone(),
+            kind: "service".into(),
+            label,
+            detail,
+            parent: None,
+        },
+    );
+    workers.by_name.insert(name.clone(), owner.clone());
+    if let Some(main) = config
+        .get("main")
+        .and_then(Value::as_str)
+        .and_then(|m| crate::scan::join(dir, m))
+    {
+        workers.mains.push((owner.clone(), main));
+    }
+    let routes = array_at(config, "/routes")
+        .iter()
+        .chain(config.get("route"));
+    for host in routes.filter_map(route_host) {
+        workers.by_domain.insert(host.to_string(), owner.clone());
+    }
+    add_storage(graph, &owner, config);
+    add_queues(graph, &owner, config);
+    add_crons(graph, &owner, &name, config);
+    add_static_assets(graph, packages, &owner, dir, config);
+    add_service_calls(graph, &workers.by_name, &owner, config);
+}
+
+fn array_at<'a>(config: &'a Value, pointer: &str) -> &'a [Value] {
+    config
+        .pointer(pointer)
+        .and_then(Value::as_array)
+        .map_or(&[], Vec::as_slice)
+}
+
+fn binding_names<'a>(
+    config: &'a Value,
+    pointer: &str,
+    name_fields: &'static [&'static str],
+) -> impl Iterator<Item = &'a str> + use<'a> {
+    array_at(config, pointer).iter().filter_map(move |binding| {
+        name_fields
+            .iter()
+            .find_map(|field| binding.get(field).and_then(Value::as_str))
+    })
+}
+
+fn route_host(route: &Value) -> Option<&str> {
+    let pattern = route
+        .as_str()
+        .or_else(|| route.get("pattern").and_then(Value::as_str))?;
+    let host = pattern
+        .split('/')
+        .next()?
+        .trim_start_matches("*.")
+        .trim_start_matches('*');
+    (!host.is_empty()).then_some(host)
+}
+
+fn add_storage(graph: &mut Builder, owner: &str, config: &Value) {
+    for binding in STORAGE_BINDINGS {
+        for name in binding_names(config, binding.pointer, binding.name_fields) {
+            let store = graph.node(
+                &format!("{}:{name}", binding.id_prefix),
+                "datastore",
+                &format!("{} {name}", binding.label_prefix),
+                binding.detail,
+            );
+            graph.edge(owner, &store, "reads and writes");
+        }
+    }
+}
+
+fn add_queues(graph: &mut Builder, owner: &str, config: &Value) {
+    for name in binding_names(config, "/queues/producers", &["queue"]) {
+        let queue = queue_node(graph, name);
+        graph.edge(owner, &queue, "sends to");
+    }
+    for name in binding_names(config, "/queues/consumers", &["queue"]) {
+        let queue = queue_node(graph, name);
+        graph.edge(&queue, owner, "delivers to");
+    }
+}
+
+fn queue_node(graph: &mut Builder, name: &str) -> String {
+    graph.node(
+        &format!("queue:{name}"),
+        "queue",
+        &format!("queue {name}"),
+        "Cloudflare Queue",
+    )
+}
+
+fn add_crons(graph: &mut Builder, owner: &str, worker: &str, config: &Value) {
+    let crons = array_at(config, "/triggers/crons")
+        .iter()
+        .filter_map(Value::as_str);
+    for cron in crons {
+        let schedule = graph.node(
+            &format!("cron:{worker}:{cron}"),
+            "schedule",
+            &describe_cron(cron),
+            &format!("cron {cron}"),
+        );
+        graph.edge(&schedule, owner, "runs");
+    }
+}
+
+fn add_static_assets(
+    graph: &mut Builder,
+    packages: &[Package],
+    owner: &str,
+    dir: &str,
+    config: &Value,
+) {
+    let Some(web_id) = served_package(packages, dir, config) else {
+        return;
+    };
+    if web_id != owner && graph.has(&web_id) {
+        graph.edge(owner, &web_id, "serves");
+        graph.edge(&web_id, owner, "calls (same origin)");
+    }
+}
+
+fn served_package(packages: &[Package], dir: &str, config: &Value) -> Option<String> {
+    let assets = config
+        .pointer("/assets/directory")
+        .and_then(Value::as_str)?;
+    let target = crate::scan::join(dir, assets)?;
+    package_of_dir(packages, &target)
+        .filter(|p| !p.dir.is_empty() || target.is_empty())
+        .map(pkg_id)
+}
+
+fn add_service_calls(
+    graph: &mut Builder,
+    workers: &BTreeMap<String, String>,
+    owner: &str,
+    config: &Value,
+) {
+    for service in binding_names(config, "/services", &["service"]) {
+        let target = workers.get(service).cloned().unwrap_or_else(|| {
+            graph.node(
+                &format!("worker:{service}"),
+                "service",
+                service,
+                "Cloudflare Worker (not in this repo)",
+            )
+        });
+        graph.edge(owner, &target, "calls");
+    }
+}
+
+fn add_xcode_apps(graph: &mut Builder, xcode: &[(String, String)]) {
+    for (dir, name) in xcode {
+        graph.node(
+            &xcode_id(dir, name),
+            "mobile",
+            name,
+            &format!("Apple app (Xcode), {}", location(dir)),
+        );
+    }
+}
+
+fn add_features(graph: &mut Builder, areas: &[(String, String)]) -> BTreeMap<String, String> {
+    let mut features = BTreeMap::new();
+    for (area, dir) in areas {
+        let parent = package_id(dir);
+        let hosts_features = matches!(graph.kind_of(&parent), "service" | "web");
+        if !hosts_features {
+            continue;
+        }
+        let Some(label) = feature_name(area, dir) else {
+            continue;
+        };
+        let id = format!("feat:{area}");
+        let node = SysNode {
+            id: id.clone(),
+            kind: "feature".into(),
+            label,
+            detail: area.clone(),
+            parent: Some(parent),
+        };
+        graph.nodes.insert(id.clone(), node);
+        features.insert(area.clone(), id);
+    }
+    features
+}
+
+struct UrlSources<'a> {
+    packages: &'a [Package],
+    xcode: &'a [(String, String)],
+    workers: &'a Workers,
+    features: &'a BTreeMap<String, String>,
+    area_of: &'a dyn Fn(&str) -> String,
+}
+
+fn add_url_calls(graph: &mut Builder, sources: &UrlSources, urls: &[(String, String)]) {
+    let mut mirrors: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (file, host) in urls {
+        let Some(owner) = url_owner(graph, sources, file) else {
+            continue;
+        };
+        let target = url_target(graph, sources.workers, &mut mirrors, host);
+        graph.edge(&owner, &target, "calls");
+        if let Some(feature) = sources.features.get(&(sources.area_of)(file)) {
+            graph.edge(feature, &target, "calls");
+        }
+    }
+    for (key, hosts) in mirrors {
+        if let Some(node) = graph.nodes.get_mut(&format!("host:{key}")) {
+            node.detail = hosts.into_iter().collect::<Vec<_>>().join(", ");
+        }
+    }
+}
+
+fn url_owner(graph: &Builder, sources: &UrlSources, file: &str) -> Option<String> {
+    if !has_extension(file, "swift") {
+        return package_owner(graph, sources.packages, file);
+    }
+    sources
+        .xcode
+        .iter()
+        .filter(|(dir, _)| dir.is_empty() || file.starts_with(&format!("{dir}/")))
+        .max_by_key(|(dir, _)| dir.len())
+        .or(sources.xcode.first())
+        .map(|(dir, name)| xcode_id(dir, name))
+}
+
+fn package_owner(graph: &Builder, packages: &[Package], file: &str) -> Option<String> {
+    package_of(packages, file)
+        .map(pkg_id)
+        .filter(|id| graph.has(id))
+}
+
+fn url_target(
+    graph: &mut Builder,
+    workers: &Workers,
+    mirrors: &mut BTreeMap<String, BTreeSet<String>>,
+    host: &str,
+) -> String {
+    if let Some(worker) = workers.serving(host) {
+        return worker;
+    }
+    let key = service_key(host);
+    let sdk = SDK_DOMAINS
+        .iter()
+        .find(|(_, domain)| *domain == key)
+        .map(|(label, _)| format!("sdk:{label}"));
+    if let Some(id) = sdk.filter(|id| graph.has(id)) {
+        return id;
+    }
+    mirrors
+        .entry(key.clone())
+        .or_default()
+        .insert(host.to_string());
+    graph.node(&format!("host:{key}"), "external", &key, "")
+}
+
+fn add_browser(graph: &mut Builder) {
+    let webs: Vec<String> = graph
+        .nodes
+        .values()
+        .filter(|n| n.kind == "web")
+        .map(|n| n.id.clone())
+        .collect();
+    if webs.is_empty() {
+        return;
+    }
+    let browser = graph.node(
+        "client:browser",
+        "client",
+        "Browser",
+        "people using the web app",
+    );
+    for web in webs {
+        graph.edge(&browser, &web, "opens");
+    }
+}
+
+struct OwnedCode<'a> {
+    file: &'a str,
+    facts: &'a CodeFacts,
+    owner: String,
+}
+
+impl OwnedCode<'_> {
+    fn route(&self, method: &str, path: String) -> Route {
+        Route {
+            method: method.to_string(),
+            path,
+            file: self.file.to_string(),
+            service: self.owner.clone(),
+        }
+    }
+}
+
+type RouterPrefixes = BTreeMap<(String, String), String>;
+
+fn http(
+    graph: &Builder,
+    packages: &[Package],
+    xcode: &[(String, String)],
+    code: &[(String, CodeFacts)],
+    mains: &[(String, String)],
+) -> (Vec<Route>, Vec<RouteCall>, Vec<Handler>) {
+    let owned: Vec<OwnedCode> = code
+        .iter()
+        .filter_map(|(file, facts)| {
+            Some(OwnedCode {
+                file,
+                facts,
+                owner: code_owner(graph, packages, xcode, file)?,
+            })
+        })
+        .collect();
+    let prefixes = mount_prefixes(&owned);
+    let routes = server_routes(graph, packages, &owned, &prefixes);
+    let calls = route_calls(&owned, &routes);
+    (routes, calls, worker_handlers(code, mains))
+}
+
+fn code_owner(
+    graph: &Builder,
+    packages: &[Package],
+    xcode: &[(String, String)],
+    file: &str,
+) -> Option<String> {
+    if has_extension(file, "swift") {
+        return xcode.first().map(|(dir, name)| xcode_id(dir, name));
+    }
+    package_owner(graph, packages, file)
+}
+
+fn mount_prefixes(code: &[OwnedCode]) -> RouterPrefixes {
+    let mut prefixes = RouterPrefixes::new();
+    for _ in 0..MOUNT_PASSES {
+        let mounts = code
+            .iter()
+            .flat_map(|unit| unit.facts.mounts.iter().map(|mount| (&unit.owner, mount)));
+        for (owner, (parent, prefix, child)) in mounts {
+            let base = router_prefix(&prefixes, owner, parent.as_deref());
+            prefixes.insert((owner.clone(), child.clone()), join_route(&base, prefix));
+        }
+    }
+    prefixes
+}
+
+fn router_prefix(prefixes: &RouterPrefixes, owner: &str, router: Option<&str>) -> String {
+    router
+        .and_then(|r| prefixes.get(&(owner.to_string(), r.to_string())))
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn server_routes(
+    graph: &Builder,
+    packages: &[Package],
+    code: &[OwnedCode],
+    prefixes: &RouterPrefixes,
+) -> Vec<Route> {
+    let mut routes: Vec<Route> = Vec::new();
+    for unit in code {
+        let kind = graph.kind_of(&unit.owner);
+        if kind == "service" {
+            routes.extend(router_routes(unit, prefixes));
+        }
+        if kind == "service" || kind == "web" {
+            routes.extend(file_routes(unit, packages));
+        }
+    }
+    routes.sort_by(|left, right| (&left.path, &left.method).cmp(&(&right.path, &right.method)));
+    routes.dedup_by(|later, earlier| {
+        later.path == earlier.path
+            && later.method == earlier.method
+            && later.service == earlier.service
+    });
+    routes
+}
+
+fn router_routes(unit: &OwnedCode, prefixes: &RouterPrefixes) -> Vec<Route> {
+    unit.facts
+        .routes
+        .iter()
+        .map(|(method, path, router)| {
+            let base = router_prefix(prefixes, &unit.owner, router.as_deref());
+            unit.route(method, join_route(&base, path))
+        })
+        .collect()
+}
+
+fn file_routes(unit: &OwnedCode, packages: &[Package]) -> Vec<Route> {
+    let package_dir = package_of(packages, unit.file).map_or("", |p| p.dir.as_str());
+    let Some(path) = next_route(unit.file, package_dir) else {
+        return Vec::new();
+    };
+    let pages_api = unit.file.contains("/pages/api/") || unit.file.starts_with("pages/api/");
+    let exported = unit
+        .facts
+        .exports
+        .iter()
+        .map(String::as_str)
+        .filter(|export| HTTP_METHODS.contains(export));
+    pages_api
+        .then_some("ANY")
+        .into_iter()
+        .chain(exported)
+        .map(|method| unit.route(method, path.clone()))
+        .collect()
+}
+
+fn is_test_file(file: &str) -> bool {
+    let lower = file.to_ascii_lowercase();
+    TEST_MARKERS.iter().any(|marker| lower.contains(marker))
+}
+
+fn route_calls(code: &[OwnedCode], routes: &[Route]) -> Vec<RouteCall> {
+    let mut calls: Vec<RouteCall> = Vec::new();
+    let found_calls = code
+        .iter()
+        .filter(|unit| !is_test_file(unit.file))
+        .flat_map(|unit| calls_from(unit, routes));
+    for call in found_calls {
+        if !calls.contains(&call) {
+            calls.push(call);
+        }
+    }
+    calls
+}
+
+fn calls_from<'a>(unit: &'a OwnedCode, routes: &'a [Route]) -> impl Iterator<Item = RouteCall> {
+    unit.facts.paths.iter().filter_map(move |(path, method)| {
+        let route = routes
+            .iter()
+            .filter(|r| r.file != unit.file && path_matches(path, &r.path))
+            .find(|r| {
+                method
+                    .as_ref()
+                    .is_none_or(|m| *m == r.method || r.method == "ANY")
+            })?;
+        Some(RouteCall {
+            from: unit.owner.clone(),
+            file: unit.file.to_string(),
+            method: route.method.clone(),
+            path: route.path.clone(),
+        })
+    })
+}
+
+fn worker_handlers(code: &[(String, CodeFacts)], mains: &[(String, String)]) -> Vec<Handler> {
+    let mut handlers = Vec::new();
+    for (owner, main) in mains {
+        let Some((file, facts)) = entry_point(code, main) else {
+            continue;
+        };
+        handlers.extend(facts.handlers.iter().map(|kind| Handler {
+            kind: kind.clone(),
+            file: file.clone(),
+            service: owner.clone(),
+        }));
+    }
+    handlers
+}
+
+fn entry_point<'a>(code: &'a [(String, CodeFacts)], main: &str) -> Option<&'a (String, CodeFacts)> {
+    let stem = main.rsplit_once('.').map_or(main, |(s, _)| s);
+    code.iter().find(|(file, _)| {
+        file == main
+            || file
+                .rsplit_once('.')
+                .is_some_and(|(file_stem, _)| file_stem == stem)
+    })
+}
+
+const WEEKDAYS: [(&str, &str); 7] = [
+    ("Sun", "Sunday"),
+    ("Mon", "Monday"),
+    ("Tue", "Tuesday"),
+    ("Wed", "Wednesday"),
+    ("Thu", "Thursday"),
+    ("Fri", "Friday"),
+    ("Sat", "Saturday"),
+];
+const DAYS_IN_WEEK: u32 = 7;
+
+/// Cloudflare crons run in UTC. Uncommon patterns fall back to the raw expression.
+fn describe_cron(expression: &str) -> String {
+    describe_schedule(expression).unwrap_or_else(|| format!("Schedule {expression}"))
+}
+
+fn describe_schedule(expression: &str) -> Option<String> {
+    let fields: Vec<&str> = expression.split_whitespace().collect();
+    let &[minute, hour, day_of_month, month, weekday] = fields.as_slice() else {
+        return None;
+    };
+    if month != "*" {
+        return None;
+    }
+    match (minute, hour, day_of_month, weekday) {
+        ("*", "*", "*", "*") => Some("Every minute".to_string()),
+        (_, "*", "*", "*") => every_minutes_or_hourly(minute),
+        (_, _, "*", "*") => Some(format!("Daily at {}", clock_time(minute, hour)?)),
+        (_, _, "*", _) => Some(format!(
+            "Weekly on {} at {}",
+            weekday_name(weekday)?,
+            clock_time(minute, hour)?
+        )),
+        (_, _, _, "*") if cron_number(day_of_month).is_some() => Some(format!(
+            "Monthly on day {day_of_month} at {}",
+            clock_time(minute, hour)?
+        )),
+        _ => None,
+    }
+}
+
+fn cron_number(field: &str) -> Option<u32> {
+    field.parse().ok()
+}
+
+fn every_minutes_or_hourly(minute: &str) -> Option<String> {
+    if let Some(step) = minute.strip_prefix("*/") {
+        return Some(format!("Every {step} minutes"));
+    }
+    cron_number(minute).map(|at| format!("Hourly at :{at:02}"))
+}
+
+fn clock_time(minute: &str, hour: &str) -> Option<String> {
+    let minutes = cron_number(minute)?;
+    let hours = cron_number(hour)?;
+    Some(format!("{hours:02}:{minutes:02} UTC"))
+}
+
+fn weekday_name(field: &str) -> Option<&'static str> {
+    if let Some(number) = cron_number(field) {
+        let index = usize::try_from(number % DAYS_IN_WEEK).ok()?;
+        return WEEKDAYS.get(index).map(|(_, name)| *name);
+    }
+    WEEKDAYS
+        .iter()
+        .find(|(abbreviation, _)| abbreviation.eq_ignore_ascii_case(field))
+        .map(|(_, name)| *name)
 }
 
 /// The registrable domain: api.stripe.com -> stripe.com, www.bdo.com.ph -> bdo.com.ph.
-pub fn site_of(host: &str) -> String {
-    let parts: Vec<&str> = host.split('.').collect();
-    let n = parts.len();
-    if n <= 2 || host.parse::<std::net::Ipv4Addr>().is_ok() {
+pub(crate) fn site_of(host: &str) -> String {
+    if host.parse::<std::net::Ipv4Addr>().is_ok() {
         return host.to_string();
     }
-    let country_second_level = parts[n - 1].len() == 2
-        && ["co", "com", "org", "net", "gov", "edu", "ac"].contains(&parts[n - 2]);
-    parts[n - if country_second_level { 3 } else { 2 }..].join(".")
+    let labels: Vec<&str> = host.rsplit('.').collect();
+    match labels.as_slice() {
+        [top, second, third, ..] if is_country_second_level(top, second) => {
+            format!("{third}.{second}.{top}")
+        }
+        [top, second, _, ..] => format!("{second}.{top}"),
+        _ => host.to_string(),
+    }
+}
+
+fn is_country_second_level(top: &str, second: &str) -> bool {
+    top.len() == 2 && ["co", "com", "org", "net", "gov", "edu", "ac"].contains(&second)
 }
 
 fn service_key(host: &str) -> String {
@@ -1124,196 +1362,235 @@ fn service_key(host: &str) -> String {
 /// query1.finance.yahoo.com and query2.finance.yahoo.com are one service.
 fn mirror_key(host: &str) -> String {
     let (first, rest) = host.split_once('.').unwrap_or((host, ""));
-    let trimmed = first.trim_end_matches(|c: char| c.is_ascii_digit());
-    let first = if trimmed.is_empty() || trimmed.ends_with('-') && trimmed.len() < 2 {
+    let without_digits = first.trim_end_matches(|c: char| c.is_ascii_digit());
+    let name = if matches!(without_digits, "" | "-") {
         first
     } else {
-        trimmed
+        without_digits
     };
     if rest.is_empty() {
-        first.to_string()
+        name.to_string()
     } else {
-        format!("{first}.{rest}")
+        format!("{name}.{rest}")
     }
 }
 
-fn parse_wrangler(
-    path: &str,
-    text: &str,
-    warnings: &mut Vec<Warning>,
-) -> Option<serde_json::Value> {
-    if path.ends_with(".toml") {
-        return match toml::from_str::<serde_json::Value>(text) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                let (line, col) = e.span().map(|s| line_col(text, s.start)).unwrap_or((1, 1));
-                warnings.push(config_warning(path, text, line, col, e.message()));
-                None
-            }
-        };
-    }
-    match serde_json::from_str(&strip_json_comments(text)) {
-        Ok(v) => Some(v),
-        Err(e) => {
-            warnings.push(config_warning(
-                path,
-                text,
-                e.line(),
-                e.column(),
-                &e.to_string(),
-            ));
+fn parse_wrangler(path: &str, text: &str, warnings: &mut Vec<Warning>) -> Option<Value> {
+    let parsed = if has_extension(path, "toml") {
+        parse_toml(text)
+    } else {
+        parse_json(&strip_json_comments(text))
+    };
+    match parsed {
+        Ok(config) => Some(config),
+        Err(failure) => {
+            warnings.push(config_warning(path, text, &failure));
             None
         }
     }
 }
 
-fn line_col(text: &str, offset: usize) -> (usize, usize) {
-    let before = &text[..offset.min(text.len())];
-    let line = before.matches('\n').count() + 1;
-    let col = before
-        .rsplit('\n')
-        .next()
-        .map(|l| l.chars().count() + 1)
-        .unwrap_or(1);
-    (line, col)
+struct ParseFailure {
+    position: TextPosition,
+    message: String,
 }
 
-fn config_warning(path: &str, text: &str, line: usize, col: usize, msg: &str) -> Warning {
-    let offset: usize = text
+fn parse_json(text: &str) -> Result<Value, ParseFailure> {
+    serde_json::from_str(text).map_err(|e| ParseFailure {
+        position: json_error_position(&e),
+        message: e.to_string(),
+    })
+}
+
+fn parse_toml(text: &str) -> Result<Value, ParseFailure> {
+    toml::from_str(text).map_err(|e| ParseFailure {
+        position: e.span().map_or_else(TextPosition::default, |span| {
+            position_before(text, span.start)
+        }),
+        message: e.message().to_string(),
+    })
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct TextPosition {
+    line_index: usize,
+    char_column: usize,
+}
+
+fn json_error_position(error: &serde_json::Error) -> TextPosition {
+    TextPosition {
+        line_index: error.line().saturating_sub(1),
+        char_column: error.column().saturating_sub(1),
+    }
+}
+
+fn position_before(text: &str, offset: usize) -> TextPosition {
+    let (before, _) = text.split_at(text.floor_char_boundary(offset));
+    let current_line = before.rsplit_once('\n').map_or(before, |(_, line)| line);
+    TextPosition {
+        line_index: before.matches('\n').count(),
+        char_column: current_line.chars().count(),
+    }
+}
+
+fn byte_offset(text: &str, position: TextPosition) -> usize {
+    let line_start: usize = text
         .split_inclusive('\n')
-        .take(line.saturating_sub(1))
+        .take(position.line_index)
         .map(str::len)
-        .sum::<usize>()
-        + col.saturating_sub(1);
-    let offset = offset.min(text.len().saturating_sub(1)) as u32;
+        .sum();
+    line_start
+        .saturating_add(position.char_column)
+        .min(text.len().saturating_sub(1))
+}
+
+fn error_label(offset: usize, message: &str) -> Option<(u32, u32, Option<String>)> {
+    let start = u32::try_from(offset).ok()?;
+    let end = start.checked_add(1)?;
+    Some((start, end, Some(message.to_string())))
+}
+
+fn config_warning(path: &str, text: &str, failure: &ParseFailure) -> Warning {
+    let message = &failure.message;
+    let labels = error_label(byte_offset(text, failure.position), message)
+        .into_iter()
+        .collect();
     Warning::new(
         "config_unreadable",
-        format!("can't read {path}: {msg}"),
+        format!("can't read {path}: {message}"),
         "the system map leaves out what this file would add; fix it and re-run",
     )
     .in_file(
         path,
         Source {
             text: text.to_string(),
-            labels: vec![(offset, offset + 1, Some(msg.to_string()))],
+            labels,
         },
     )
 }
 
 /// Drops `//` and `/* */` comments and trailing commas outside strings (wrangler.jsonc).
 fn strip_json_comments(text: &str) -> String {
+    remove_trailing_commas(&remove_comments(text))
+}
+
+fn remove_comments(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
-    let mut in_str = false;
     while let Some(c) = chars.next() {
-        if in_str {
-            out.push(c);
-            if c == '\\' {
-                if let Some(n) = chars.next() {
-                    out.push(n);
-                }
-            } else if c == '"' {
-                in_str = false;
-            }
-            continue;
-        }
         match (c, chars.peek()) {
-            ('"', _) => {
-                in_str = true;
-                out.push(c);
-            }
-            ('/', Some('/')) => {
-                for n in chars.by_ref() {
-                    if n == '\n' {
-                        out.push('\n');
-                        break;
-                    }
-                }
-            }
-            ('/', Some('*')) => {
-                chars.next();
-                let mut prev = ' ';
-                for n in chars.by_ref() {
-                    if prev == '*' && n == '/' {
-                        break;
-                    }
-                    prev = n;
-                }
-            }
+            ('"', _) => copy_string(&mut chars, &mut out),
+            ('/', Some('/')) => skip_line_comment(&mut chars, &mut out),
+            ('/', Some('*')) => skip_block_comment(&mut chars),
             _ => out.push(c),
         }
     }
-    let mut cleaned = String::with_capacity(out.len());
-    let bytes: Vec<char> = out.chars().collect();
-    for (i, c) in bytes.iter().enumerate() {
-        if *c == ','
-            && bytes[i + 1..]
-                .iter()
-                .find(|n| !n.is_whitespace())
-                .is_some_and(|n| *n == '}' || *n == ']')
-        {
-            continue;
-        }
-        cleaned.push(*c);
-    }
-    cleaned
+    out
 }
 
-pub fn diff_lines(before: &System, after: &System) -> Vec<String> {
-    let label = |s: &System, id: &str| {
-        s.nodes
-            .iter()
-            .find(|n| n.id == id)
-            .map(|n| n.label.clone())
-            .unwrap_or_else(|| id.to_string())
-    };
-    let describe = |n: &SysNode| match n.kind.as_str() {
-        "datastore" | "queue" => n.label.clone(),
-        "schedule" => format!("schedule ({})", n.label.to_lowercase()),
-        "external" => format!("outside service {}", n.label),
-        "library" => format!("shared package {}", n.label),
-        "feature" => format!("feature {} ({})", n.label, n.detail),
-        "mobile" => format!("app {}", n.label),
-        _ => format!(
-            "{} {}",
-            if n.kind == "web" {
-                "web app"
-            } else {
-                "service"
-            },
-            n.label
-        ),
-    };
+fn copy_string(chars: &mut impl Iterator<Item = char>, out: &mut String) {
+    out.push('"');
+    while let Some(c) = chars.next() {
+        out.push(c);
+        if c == '\\' {
+            out.extend(chars.next());
+        } else if c == '"' {
+            return;
+        }
+    }
+}
+
+fn skip_line_comment(chars: &mut impl Iterator<Item = char>, out: &mut String) {
+    if chars.any(|c| c == '\n') {
+        out.push('\n');
+    }
+}
+
+fn skip_block_comment(chars: &mut impl Iterator<Item = char>) {
+    chars.next();
+    let mut previous = ' ';
+    for c in chars {
+        if previous == '*' && c == '/' {
+            return;
+        }
+        previous = c;
+    }
+}
+
+fn remove_trailing_commas(text: &str) -> String {
+    text.char_indices()
+        .filter(|&(at, c)| !(c == ',' && closes_after_comma(text.split_at(at).1)))
+        .map(|(_, c)| c)
+        .collect()
+}
+
+fn closes_after_comma(from_comma: &str) -> bool {
+    from_comma
+        .chars()
+        .skip(1)
+        .find(|c| !c.is_whitespace())
+        .is_some_and(|c| c == '}' || c == ']')
+}
+
+pub(crate) fn diff_lines(before: &System, after: &System) -> Vec<String> {
     let old: BTreeSet<&str> = before.nodes.iter().map(|n| n.id.as_str()).collect();
     let new: BTreeSet<&str> = after.nodes.iter().map(|n| n.id.as_str()).collect();
-    let mut lines = Vec::new();
-    for n in after.nodes.iter().filter(|n| !old.contains(n.id.as_str())) {
-        lines.push(format!("Added {}.", describe(n)));
+    let old_edges: BTreeSet<&SysEdge> = before.edges.iter().collect();
+    let new_edges: BTreeSet<&SysEdge> = after.edges.iter().collect();
+    let added_nodes = after
+        .nodes
+        .iter()
+        .filter(|n| !old.contains(n.id.as_str()))
+        .map(|n| format!("Added {}.", describe_node(n)));
+    let removed_nodes = before
+        .nodes
+        .iter()
+        .filter(|n| !new.contains(n.id.as_str()))
+        .map(|n| format!("Removed {}.", describe_node(n)));
+    let added_edges = after
+        .edges
+        .iter()
+        .filter(|e| !old_edges.contains(e) && connects(&old, e))
+        .map(|e| {
+            let (from, to) = (node_label(after, &e.from), node_label(after, &e.to));
+            format!("{from} now {} {to}.", e.label)
+        });
+    let removed_edges = before
+        .edges
+        .iter()
+        .filter(|e| !new_edges.contains(e) && connects(&new, e))
+        .map(|e| {
+            let (from, to) = (node_label(before, &e.from), node_label(before, &e.to));
+            format!("{from} no longer {} {to}.", e.label)
+        });
+    added_nodes
+        .chain(removed_nodes)
+        .chain(added_edges)
+        .chain(removed_edges)
+        .collect()
+}
+
+fn connects(ids: &BTreeSet<&str>, edge: &SysEdge) -> bool {
+    ids.contains(edge.from.as_str()) && ids.contains(edge.to.as_str())
+}
+
+fn node_label(system: &System, id: &str) -> String {
+    system
+        .nodes
+        .iter()
+        .find(|n| n.id == id)
+        .map_or_else(|| id.to_string(), |n| n.label.clone())
+}
+
+fn describe_node(node: &SysNode) -> String {
+    match node.kind.as_str() {
+        "datastore" | "queue" => node.label.clone(),
+        "schedule" => format!("schedule ({})", node.label.to_lowercase()),
+        "external" => format!("outside service {}", node.label),
+        "library" => format!("shared package {}", node.label),
+        "feature" => format!("feature {} ({})", node.label, node.detail),
+        "mobile" => format!("app {}", node.label),
+        "web" => format!("web app {}", node.label),
+        _ => format!("service {}", node.label),
     }
-    for n in before.nodes.iter().filter(|n| !new.contains(n.id.as_str())) {
-        lines.push(format!("Removed {}.", describe(n)));
-    }
-    let old_e: BTreeSet<_> = before.edges.iter().collect();
-    let new_e: BTreeSet<_> = after.edges.iter().collect();
-    for e in after.edges.iter().filter(|e| !old_e.contains(e)) {
-        if old.contains(e.from.as_str()) && old.contains(e.to.as_str()) {
-            lines.push(format!(
-                "{} now {} {}.",
-                label(after, &e.from),
-                e.label,
-                label(after, &e.to)
-            ));
-        }
-    }
-    for e in before.edges.iter().filter(|e| !new_e.contains(e)) {
-        if new.contains(e.from.as_str()) && new.contains(e.to.as_str()) {
-            lines.push(format!(
-                "{} no longer {} {}.",
-                label(before, &e.from),
-                e.label,
-                label(before, &e.to)
-            ));
-        }
-    }
-    lines
 }
