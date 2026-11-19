@@ -1,0 +1,46 @@
+name: check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: 1.97.0
+  JUST_VERSION: 1.59.0
+  AST_GREP_VERSION: 0.51.3
+  CARGO_DENY_VERSION: 0.21.0
+  CARGO_MACHETE_VERSION: 0.9.1
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt,clippy --no-self-update
+      - run: rustup default "$RUST_VERSION"
+      - run: sudo npm install --global "rust-just@$JUST_VERSION" "@ast-grep/cli@$AST_GREP_VERSION"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: cargo-bin-${{ runner.os }}-${{ env.RUST_VERSION }}-deny-${{ env.CARGO_DENY_VERSION }}-machete-${{ env.CARGO_MACHETE_VERSION }}
+      - run: cargo install --locked "cargo-deny@$CARGO_DENY_VERSION" "cargo-machete@$CARGO_MACHETE_VERSION"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: cargo-build-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-build-${{ runner.os }}-${{ env.RUST_VERSION }}-
+      - run: just check

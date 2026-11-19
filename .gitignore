@@ -1,3 +1,4 @@
 /target
 /.earnest
 /.claude/worktrees/
+/mutants.out
