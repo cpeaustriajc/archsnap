@@ -1,0 +1,46 @@
+id: no-lint-attributes
+language: rust
+severity: error
+message: Change the code instead of silencing the lint; do not use allow, expect, warn, deny or forbid.
+note: |
+  Lint-level attributes are forbidden everywhere, including inside cfg_attr and
+  inside macro bodies. Fix the cause the lint reports.
+utils:
+  # Inside macros, `#[...]` and `#![...]` are not parsed as attributes: they are
+  # flat tokens, so the bracket group is a token_tree that follows `#` or `#!`.
+  attribute-tokens:
+    kind: token_tree
+    follows:
+      any:
+        - regex: '^#$'
+        - regex: '^!$'
+          follows:
+            regex: '^#$'
+rule:
+  kind: identifier
+  regex: ^(r#)?(allow|expect|warn|deny|forbid)$
+  any:
+    # #[allow(x)], #![deny(x)], #[core::allow(x)]
+    - inside:
+        kind: attribute
+    - inside:
+        kind: scoped_identifier
+        field: name
+        inside:
+          kind: attribute
+    # #[cfg_attr(cond, allow(x))], at any nesting depth
+    - precedes:
+        kind: token_tree
+      inside:
+        stopBy: end
+        has:
+          kind: identifier
+          regex: ^(r#)?cfg_attr$
+        any:
+          - kind: attribute
+          - matches: attribute-tokens
+    # m! { #[allow(x)] fn f() {} }
+    - follows:
+        regex: '^\[$'
+      inside:
+        matches: attribute-tokens
