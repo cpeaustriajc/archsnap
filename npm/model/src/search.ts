@@ -33,7 +33,10 @@ export interface Path {
 	readonly steps: readonly Step[];
 }
 
-/** `unknown` means the search stopped early and had not seen the rule broken. */
+/**
+ * `unknown` means the rule was not seen broken, but the search stopped early or the rule could
+ * not be evaluated in a state it reached.
+ */
 export type Verdict = "holds" | "broken" | "unknown";
 
 /** One rule's result. `path` is the shortest path to a state that breaks it, or `null`. */
@@ -192,6 +195,7 @@ interface Successor {
 interface Expanded {
 	readonly outside: string | null;
 	readonly broken: RuleRunner[];
+	readonly unjudged: RuleRunner[];
 	readonly successors: Successor[];
 	trouble: string | null;
 	isEnabled: boolean;
@@ -208,6 +212,7 @@ class Search {
 	readonly #maxStates: number;
 	readonly #seen = new Set<string>();
 	readonly #firstBroken = new Map<RuleRunner, Visited>();
+	readonly #unjudged = new Set<RuleRunner>();
 	#stuck: Visited | null = null;
 	#outside: { readonly at: Visited; readonly field: string } | null = null;
 	#trouble: { readonly at: Visited; readonly message: string } | null = null;
@@ -265,6 +270,7 @@ class Search {
 		const found: Expanded = {
 			outside: outside === undefined ? null : outside[0],
 			broken: [],
+			unjudged: [],
 			successors: [],
 			trouble: null,
 			isEnabled: false,
@@ -277,6 +283,7 @@ class Search {
 			const held = attempt(() => rule.holds(state));
 			if (held.fault !== null) {
 				found.trouble ??= `the rule \`${this.#name(rule.part, rule.says)}\` ${held.fault}`;
+				found.unjudged.push(rule);
 			} else if (!held.value) {
 				found.broken.push(rule);
 			}
@@ -321,6 +328,9 @@ class Search {
 			if (!this.#firstBroken.has(rule)) {
 				this.#firstBroken.set(rule, at);
 			}
+		}
+		for (const rule of expanded.unjudged) {
+			this.#unjudged.add(rule);
 		}
 		if (expanded.trouble !== null) {
 			this.#trouble ??= { at, message: `${expanded.trouble} in this state` };
@@ -390,7 +400,8 @@ class Search {
 	#outcome(): Exploration {
 		const rules = this.#parts.rules.map((rule): RuleResult => {
 			const first = this.#firstBroken.get(rule);
-			const unbroken = this.#reason === null ? "holds" : "unknown";
+			const isJudged = this.#reason === null && !this.#unjudged.has(rule);
+			const unbroken = isJudged ? "holds" : "unknown";
 			return {
 				id: this.#name(rule.part, rule.says),
 				says: rule.says,

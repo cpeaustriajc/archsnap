@@ -2,7 +2,8 @@ use crate::Reader;
 use crate::bodies::body_span;
 use crate::terms::bare;
 use earnest_ast::{
-    ActionDraft, Draft, EndDraft, LabelDraft, RuleDraft, Shape, Term, TermKind, ViewDraft,
+    ActionBody, ActionDraft, Draft, EndDraft, LabelDraft, RuleDraft, Shape, Term, TermKind,
+    ViewDraft, condition_text,
 };
 use oxc_ast::ast::{
     Argument, ArrowFunctionExpression, BindingPattern, CallExpression, Expression, ObjectPattern,
@@ -158,43 +159,13 @@ impl Reader<'_> {
         let then = self
             .needed(&entries, "then", call)
             .and_then(|written| self.arrow(written));
-        let when_parameters = when.map(|arrow| self.action_parameters(arrow));
-        let then_parameters = then.map(|arrow| self.action_parameters(arrow));
-        let both = [when_parameters.as_ref(), then_parameters.as_ref()];
-        let state_name = both
-            .iter()
-            .flatten()
-            .find_map(|parameters| parameters.state.clone());
-        let input_name = both
-            .iter()
-            .flatten()
-            .find_map(|parameters| parameters.whole_input.clone());
-        let shared = (state_name.as_deref(), input_name.as_deref());
-        for (input, _) in &inputs {
-            if [shared.0, shared.1].contains(&Some(input.as_str())) {
-                self.refuse(
-                    call.span.start,
-                    input,
-                    "an input can't have the name the action's functions give the state or \
-                     the whole input",
-                );
-            }
-        }
-        let guard = match (when, &when_parameters) {
-            (Some(arrow), Some(parameters)) => Some(self.action_body(arrow, parameters, shared)),
-            _ => None,
-        };
-        let change = match (then, &then_parameters) {
-            (Some(arrow), Some(parameters)) => self.action_body(arrow, parameters, shared),
-            _ => return None,
-        };
+        let guard = when.map(|arrow| self.action_body(arrow));
+        let change = then.map(|arrow| self.action_body(arrow))?;
         Some(ActionDraft {
             id,
             label,
             place: self.place(start),
             inputs,
-            state_name,
-            input_name,
             guard,
             change,
         })
@@ -257,23 +228,28 @@ impl Reader<'_> {
         picked
     }
 
-    fn action_body(
-        &mut self,
-        arrow: &ArrowFunctionExpression<'_>,
-        parameters: &ActionParameters,
-        (state_name, input_name): (Option<&str>, Option<&str>),
-    ) -> Term {
+    fn action_body(&mut self, arrow: &ArrowFunctionExpression<'_>) -> ActionBody {
+        let parameters = self.action_parameters(arrow);
         let mark = self.locals.len();
-        if let (Some(own), Some(shared)) = (&parameters.state, state_name) {
-            self.locals.push((own.clone(), shared.to_owned()));
-        }
-        if let (Some(own), Some(shared)) = (&parameters.whole_input, input_name) {
-            self.locals.push((own.clone(), shared.to_owned()));
+        for own in [&parameters.state, &parameters.whole_input]
+            .into_iter()
+            .flatten()
+        {
+            self.locals.push((own.clone(), own.clone()));
         }
         self.locals.extend(parameters.picked_inputs.iter().cloned());
-        let body = self.body(arrow);
+        let term = self.body(arrow);
         self.locals.truncate(mark);
-        body
+        ActionBody {
+            state_name: parameters.state,
+            input_name: parameters.whole_input,
+            taken: parameters
+                .picked_inputs
+                .into_iter()
+                .map(|(_, input)| input)
+                .collect(),
+            term,
+        }
     }
 
     fn state_function(&mut self, wrapped: &Expression<'_>) -> Option<StateFunction> {
@@ -289,7 +265,7 @@ impl Reader<'_> {
         Some(StateFunction {
             state_name: parameters.into_iter().next(),
             term,
-            text: self.text(body_span(arrow)).to_owned(),
+            text: condition_text(self.text(body_span(arrow))),
         })
     }
 
@@ -372,6 +348,8 @@ mod tests {
         const Press = m.enum([\"key\", \"mouse\"]);\n\
         export const M = m.model(\"M\", { n: m.int(0, 3), last: Press.optional() });\n";
 
+    const NO_NAMES: [&str; 0] = [];
+
     fn draft(rest: &str) -> Draft {
         let reading = read("m.model.ts", &format!("{HEAD}{rest}"));
         assert_eq!(reading.problems, [], "no problem in: {rest}");
@@ -398,10 +376,15 @@ mod tests {
         assert_eq!(found.label, "the user acts", "the sentence");
         assert_eq!(found.place, Place { line: 4, column: 1 }, "the `export`");
         assert_eq!(found.inputs, [], "no input");
-        assert_eq!(found.state_name.as_deref(), Some("s"), "the state's name");
-        assert_eq!(found.input_name, None, "no input name");
         assert_eq!(found.guard, None, "no guard");
-        assert_eq!(show(&found.change), "{n: (+ s.n 1)}", "the change");
+        assert_eq!(
+            found.change.state_name.as_deref(),
+            Some("s"),
+            "the state's name"
+        );
+        assert_eq!(found.change.input_name, None, "no input name");
+        assert_eq!(found.change.taken, NO_NAMES, "no input is taken");
+        assert_eq!(show(&found.change.term), "{n: (+ s.n 1)}", "the change");
     }
 
     #[test]
@@ -420,18 +403,26 @@ mod tests {
             [("by", "enum(\"key\", \"mouse\")".to_owned())],
             "the input"
         );
+        let guard = found.guard.expect("a guard");
         assert_eq!(
-            found.state_name.as_deref(),
+            guard.state_name.as_deref(),
             Some("s"),
-            "the name `when` uses"
+            "the state in `when`"
         );
-        assert_eq!(found.input_name, None, "the input is read by its own name");
+        assert_eq!(guard.input_name, None, "the input is read by its own name");
+        assert_eq!(guard.taken, ["by"], "`when` takes the input");
         assert_eq!(
-            found.guard.as_ref().map(show).as_deref(),
-            Some("(&& (< s.n 3) (=== by \"key\"))"),
+            show(&guard.term),
+            "(&& (< s.n 3) (=== by \"key\"))",
             "the guard"
         );
-        assert_eq!(show(&found.change), "{last: by}", "the change");
+        assert_eq!(
+            found.change.state_name.as_deref(),
+            Some("_"),
+            "the state in `then`"
+        );
+        assert_eq!(found.change.taken, ["by"], "`then` takes the input");
+        assert_eq!(show(&found.change.term), "{last: by}", "the change");
     }
 
     #[test]
@@ -440,33 +431,42 @@ mod tests {
             "{ input: { by: Press }, when: (s, input) => input.by === \"key\", \
              then: (state, given) => ({ last: given.by, n: state.n }) }",
         );
+        let guard = found.guard.expect("a guard");
         assert_eq!(
-            found.state_name.as_deref(),
+            guard.state_name.as_deref(),
             Some("s"),
-            "the name `when` uses"
+            "the state in `when`"
         );
         assert_eq!(
-            found.input_name.as_deref(),
+            guard.input_name.as_deref(),
             Some("input"),
-            "the name `when` uses"
+            "the input in `when`"
+        );
+        assert_eq!(guard.taken, NO_NAMES, "no input is picked out");
+        assert_eq!(show(&guard.term), "(=== input.by \"key\")", "the guard");
+        assert_eq!(
+            found.change.state_name.as_deref(),
+            Some("state"),
+            "the state in `then`"
         );
         assert_eq!(
-            found.guard.as_ref().map(show).as_deref(),
-            Some("(=== input.by \"key\")"),
-            "the guard"
+            found.change.input_name.as_deref(),
+            Some("given"),
+            "the input in `then`"
         );
         assert_eq!(
-            show(&found.change),
-            "{last: input.by, n: s.n}",
-            "`then` reads through the names `when` chose"
+            show(&found.change.term),
+            "{last: given.by, n: state.n}",
+            "`then` reads through its own names"
         );
     }
 
     #[test]
     fn a_picked_input_may_be_renamed() {
         let found = action("{ input: { by: Press }, then: (s, { by: who }) => ({ last: who }) }");
+        assert_eq!(found.change.taken, ["by"], "the input that is taken");
         assert_eq!(
-            show(&found.change),
+            show(&found.change.term),
             "{last: by}",
             "the input's own name reaches the tree"
         );
@@ -475,7 +475,7 @@ mod tests {
     #[test]
     fn an_action_without_parameters_has_no_state_name() {
         let found = action("{ then: () => ({ n: 0 }) }");
-        assert_eq!(found.state_name, None, "nothing is read");
+        assert_eq!(found.change.state_name, None, "nothing is read");
     }
 
     #[test]
@@ -485,7 +485,7 @@ mod tests {
              return { n: next }; } }",
         );
         assert_eq!(
-            show(&found.change),
+            show(&found.change.term),
             "(let next = (+ s.n 1) in (? (> next 3) {n: 0} {n: next}))",
             "a binding and an early return"
         );
@@ -506,7 +506,10 @@ mod tests {
             "(&& (<= s.n 2) (>= s.n 0))",
             "the condition"
         );
-        assert_eq!(rule.text, "s.n <= 2 &&\n\t\ts.n >= 0", "exactly as written");
+        assert_eq!(
+            rule.text, "s.n <= 2 && s.n >= 0",
+            "as written, with each run of white space as one space"
+        );
     }
 
     #[test]

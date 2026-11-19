@@ -1,5 +1,6 @@
 use crate::Reader;
-use crate::names::{DECLARATIONS, is_primitive_property, snake, why_outside};
+use crate::names::{DECLARATIONS, snake, why_outside};
+use crate::shapes::WRITTEN_TWICE;
 use earnest_ast::{Binary, Reach, TemplatePiece, Term, TermKind, Unary};
 use oxc_ast::ast::{
     Argument, BinaryExpression, CallExpression, Expression, LogicalExpression, ObjectExpression,
@@ -82,6 +83,14 @@ impl Reader<'_> {
             .iter()
             .skip(inner)
             .any(|(_, shared)| *shared == emitted);
+        if found.is_none() && self.models.iter().any(|model| model == written) {
+            return self.refused(
+                offset,
+                written,
+                "a model is not a value: its actions, rules, ends and view are made at the top \
+                 level by calling it directly, as in `export const name = Model.rule({ ... })`",
+            );
+        }
         if hidden {
             return self.refused(
                 offset,
@@ -268,6 +277,9 @@ impl Reader<'_> {
                     let plain = !written.computed && !written.method;
                     match name {
                         Some(key) if plain => {
+                            if fields.iter().any(|(earlier, _)| *earlier == key) {
+                                self.refuse(written.span.start, &key, WRITTEN_TWICE);
+                            }
                             fields.push((key.into_owned(), self.term(&written.value)));
                         }
                         _ => {
@@ -307,13 +319,7 @@ impl Reader<'_> {
                 );
             }
         }
-        let declared = self.field_names.iter().any(|known| known == property);
-        let name = if !declared && is_primitive_property(property) {
-            snake(property)
-        } else {
-            property.to_owned()
-        };
-        TermKind::Member(Box::new(self.term(&member.object)), name)
+        TermKind::Member(Box::new(self.term(&member.object)), property.to_owned())
     }
 
     fn call(&mut self, call: &CallExpression<'_>) -> TermKind {
@@ -609,7 +615,7 @@ mod tests {
     fn a_primitive_property_is_in_snake_case_unless_the_file_declares_the_name() {
         assert_eq!(
             holds("(s) => s.seen.isEmpty"),
-            "s.seen.is_empty",
+            "s.seen.isEmpty",
             "a primitive's"
         );
         assert_eq!(
@@ -702,11 +708,8 @@ mod tests {
         };
         assert_eq!(
             found,
-            [
-                ("`state`".to_owned(), sentence("s")),
-                ("`who`".to_owned(), sentence("by"))
-            ],
-            "the state under the name of a parameter, and an input under the name of one"
+            [("`who`".to_owned(), sentence("by"))],
+            "an input under the name of a parameter; `then` reads the state by its own name"
         );
     }
 

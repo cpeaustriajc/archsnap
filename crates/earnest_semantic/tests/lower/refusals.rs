@@ -1,8 +1,8 @@
 use crate::build::{
-    FILE, HERE, action, binary, boolean, call, choose, draft, equal, field, helper, helper_call,
-    here, int, ints, lambda, lock_shape, map_shape, name, not, one_of, optional, prop, queue_shape,
-    range, record, record_shape, refusal, refused, rule, seq_shape, set_shape, shape, spread,
-    starting, term, text, the_problem, verdict_of, with_rule, yes,
+    FILE, HERE, action, binary, boolean, call, choose, declare, draft, equal, field, helper,
+    helper_call, here, int, ints, lambda, lock_shape, map_shape, name, not, one_of, optional, prop,
+    queue_shape, range, record, record_shape, refusal, refused, rule, seq_shape, set_shape, shape,
+    spread, starting, take_whole_input, term, text, the_problem, verdict_of, with_rule, yes,
 };
 use earnest_ast::{Binary, Draft, Reach, Shape, ShapeKind, TemplatePiece, Term, TermKind};
 
@@ -260,8 +260,8 @@ fn the_whole_input_used_as_a_value_is_refused() {
     let mut source = draft(fields());
     let guard = equal(here(name("input")), int(1));
     let mut counted = action("count", Some(guard), record(vec![("n", int(1))]));
-    counted.inputs.push(("amount".to_owned(), range(0, 2)));
-    counted.input_name = Some("input".to_owned());
+    declare(&mut counted, "amount", range(0, 2));
+    take_whole_input(&mut counted, "input");
     source.actions.push(counted);
     assert_eq!(
         refused_draft_here(&source),
@@ -351,4 +351,22 @@ fn a_broken_rule_does_not_hide_a_broken_declaration() {
         features,
         ["a number range from 3 to 0", "`missing`", "`absent`",]
     );
+}
+
+#[test]
+fn a_constant_nothing_reads_is_still_checked() {
+    let mut source = draft(fields());
+    source
+        .constants
+        .push(("spare".to_owned(), here(name("missing"))));
+    assert_eq!(refused_draft_here(&source), "`missing`");
+}
+
+#[test]
+fn a_problem_in_a_constant_that_is_read_is_reported_once() {
+    let mut source = with_rule(fields(), equal(name("spare"), int(1)));
+    source
+        .constants
+        .push(("spare".to_owned(), here(name("missing"))));
+    assert_eq!(refused_draft_here(&source), "`missing`");
 }

@@ -337,6 +337,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "earnest_break_it"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "earnest_chart"
 version = "0.1.0"
 dependencies = [

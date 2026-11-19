@@ -1,7 +1,7 @@
 use crate::build::{steps, texts};
 use earnest_ast::{
-    ActionDraft, Binary, Draft, EndDraft, FieldDraft, RuleDraft, Shape, ShapeKind, Term, TermKind,
-    Unary, ViewDraft,
+    ActionBody, ActionDraft, Binary, Draft, EndDraft, FieldDraft, RuleDraft, Shape, ShapeKind,
+    Term, TermKind, Unary, ViewDraft,
 };
 use earnest_check::{FindingKind, Limits, Outcome, Status, Verdict, explore};
 use earnest_diagnostics::Place;
@@ -44,13 +44,20 @@ fn action(id: &str, label: &str, changed: &str, value: Term) -> ActionDraft {
         label: label.to_owned(),
         place: Place::default(),
         inputs: Vec::new(),
-        state_name: Some("s".to_owned()),
-        input_name: None,
-        guard: Some(binary(Binary::And, locked, not(field("paid")))),
-        change: term(TermKind::Record {
+        guard: Some(body(binary(Binary::And, locked, not(field("paid"))))),
+        change: body(term(TermKind::Record {
             base: None,
             fields: vec![(changed.to_owned(), value)],
-        }),
+        })),
+    }
+}
+
+fn body(term: Term) -> ActionBody {
+    ActionBody {
+        state_name: Some("s".to_owned()),
+        input_name: None,
+        taken: Vec::new(),
+        term,
     }
 }
 

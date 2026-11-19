@@ -10,6 +10,8 @@ mod print;
 mod reading;
 mod run;
 mod select;
+#[cfg(test)]
+mod sources;
 mod verify;
 mod workers;
 

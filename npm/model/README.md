@@ -91,8 +91,9 @@ const found = explore(turnstile.Turnstile, { exports: turnstile });
 `{ status, states, rules: [{ id, says, verdict, path }], findings: [{ kind, message, path }], reason }`
 with the words and the path shape of `earnest verify --json`: `pass`, `fail` or `unfinished`;
 `holds`, `broken` or `unknown`; `stuck`, `out-of-range` or `fault`. Each broken rule has the
-shortest path to a state that breaks it. `findings` has at most one of each kind. `reason` is
-`null`, or why the search is unfinished.
+shortest path to a state that breaks it. A rule is `unknown` when it was not seen broken but
+the search is unfinished or the rule could not be evaluated in a state. `findings` has at most
+one of each kind. `reason` is `null`, or why the search is unfinished.
 
 - The id of an action, a rule or an end is the name it is exported under, and a running program
   can't see that name, so pass the model file's exports as `exports`. A part that is not among

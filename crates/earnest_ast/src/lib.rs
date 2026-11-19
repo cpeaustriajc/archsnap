@@ -2,8 +2,10 @@
 //!
 //! A reader turns one model file into a [`Reading`]: a [`Draft`] for each model it found and a
 //! `Problem` for each thing it could not read. A draft holds untyped [`Term`]s and [`Shape`]s.
-//! Names of methods and properties are always `snake_case` here, so a TypeScript reader turns
-//! `isEmpty` into `is_empty` and a property read into a [`TermKind::Member`].
+//! The name of a called method is always `snake_case` here, so a TypeScript reader turns
+//! `isHeldBy(o)` into `is_held_by`. A read without arguments is a [`TermKind::Member`] with the
+//! name as the file writes it, because a reader can't tell a record's field from a primitive's
+//! property: the lowering decides by the kind of the value that is read.
 
 use earnest_diagnostics::{Place, Problem};
 
@@ -90,7 +92,8 @@ pub enum TermKind {
     Text(String),
     /// A name: a parameter, a `const` or `let` binding, an input, or a top-level constant.
     Name(String),
-    /// A read of a field or a property without arguments: `s.cart`, `queue.is_empty`.
+    /// A read of a field or a property without arguments, by the name as the file writes it:
+    /// `s.cart`, and `queue.isEmpty` from TypeScript.
     Member(Box<Term>, String),
     /// A primitive called on a value: `target.method(arguments)`.
     Call {
@@ -242,6 +245,25 @@ pub struct FieldDraft {
     pub shape: Shape,
 }
 
+/// One function of an action, with the names that function itself brings into scope.
+///
+/// The `when` and the `then` of one action may take different names. A name in `term` that
+/// none of these explains, and no binding inside `term` either, is a top-level constant, even
+/// when the action declares an input with that name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActionBody {
+    /// The name this function gives the state (`s`, `self`), when it takes it.
+    pub state_name: Option<String>,
+    /// The name this function gives the whole input object, when it takes it without picking
+    /// inputs out of it. An input is then read as a field of this name.
+    pub input_name: Option<String>,
+    /// The inputs this function takes by their own names. In `term` each is a
+    /// [`TermKind::Name`] with the name the action declares the input by.
+    pub taken: Vec<String>,
+    /// The function's result.
+    pub term: Term,
+}
+
 /// One action of a model.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActionDraft {
@@ -253,16 +275,11 @@ pub struct ActionDraft {
     pub place: Place,
     /// Each input's name and declaration. The checker tries every combination of their values.
     pub inputs: Vec<(String, Shape)>,
-    /// The name the functions give the state (`s`, `self`), when they take it.
-    pub state_name: Option<String>,
-    /// The name the functions give the whole input object, when it is not destructured. A
-    /// destructured or Rust input is read by its own name instead.
-    pub input_name: Option<String>,
     /// The `when` condition, with every `require!` joined in. `None` means always.
-    pub guard: Option<Term>,
-    /// The `then` result: a [`TermKind::Record`] of the fields that change, possibly inside
-    /// [`TermKind::Bind`], [`TermKind::Choose`] or [`TermKind::Wrap`].
-    pub change: Term,
+    pub guard: Option<ActionBody>,
+    /// The `then` result. Its term is a [`TermKind::Record`] of the fields that change,
+    /// possibly inside [`TermKind::Bind`], [`TermKind::Choose`] or [`TermKind::Wrap`].
+    pub change: ActionBody,
 }
 
 /// One rule of a model.
@@ -278,8 +295,22 @@ pub struct RuleDraft {
     pub state_name: Option<String>,
     /// The condition that must be true in every reachable state.
     pub holds: Term,
-    /// The condition's source text, kept to show a rule change in the report.
+    /// The condition's source text in the normal form of [`condition_text`], kept to show a
+    /// rule change in the report and to tell whether the condition was rewritten.
     pub text: String,
+}
+
+/// The normal form of a condition's source text, the same for every reader: each run of white
+/// space is one space and there is none at either end.
+///
+/// A reader passes the source of a rule's condition through this before it stores it in
+/// [`RuleDraft::text`], so an edit that only moves white space does not count as a change of
+/// the rule. White space inside a text literal is folded too, so two texts can be equal when
+/// the conditions are not.
+#[must_use]
+pub fn condition_text(source: &str) -> String {
+    let words: Vec<&str> = source.split_whitespace().collect();
+    words.join(" ")
 }
 
 /// One end of a model: states where stopping is correct.

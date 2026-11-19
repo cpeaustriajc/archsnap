@@ -1,6 +1,6 @@
 use earnest_ast::{
-    ActionDraft, Binary, Draft, FieldDraft, HelperDraft, RuleDraft, Shape, ShapeKind, Term,
-    TermKind, Unary, ViewDraft,
+    ActionBody, ActionDraft, Binary, Draft, FieldDraft, HelperDraft, RuleDraft, Shape, ShapeKind,
+    Term, TermKind, Unary, ViewDraft,
 };
 use earnest_diagnostics::{Place, Problem};
 use earnest_ir::{Fault, Frame, Model, eval, truth};
@@ -237,10 +237,41 @@ pub(crate) fn action(id: &str, guard: Option<Term>, change: Term) -> ActionDraft
             column: 1,
         },
         inputs: Vec::new(),
+        guard: guard.map(body),
+        change: body(change),
+    }
+}
+
+fn body(term: Term) -> ActionBody {
+    ActionBody {
         state_name: Some("s".to_owned()),
         input_name: None,
-        guard,
-        change,
+        taken: Vec::new(),
+        term,
+    }
+}
+
+fn bodies(action: &mut ActionDraft) -> impl Iterator<Item = &mut ActionBody> {
+    action
+        .guard
+        .iter_mut()
+        .chain(std::iter::once(&mut action.change))
+}
+
+pub(crate) fn declare(action: &mut ActionDraft, input: &str, shape: Shape) {
+    action.inputs.push((input.to_owned(), shape));
+}
+
+pub(crate) fn take(action: &mut ActionDraft, input: &str, shape: Shape) {
+    declare(action, input, shape);
+    for body in bodies(action) {
+        body.taken.push(input.to_owned());
+    }
+}
+
+pub(crate) fn take_whole_input(action: &mut ActionDraft, name: &str) {
+    for body in bodies(action) {
+        body.input_name = Some(name.to_owned());
     }
 }
 

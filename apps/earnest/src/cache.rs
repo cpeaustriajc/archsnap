@@ -10,7 +10,7 @@ const FOLDER: &str = ".earnest";
 const ENTRIES: &str = "cache";
 const IGNORE_FILE: &str = ".gitignore";
 const IGNORE_EVERYTHING: &str = "*\n";
-const ENGINE: &str = env!("CARGO_PKG_VERSION");
+const ENGINE: &str = env!("EARNEST_ENGINE");
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
@@ -111,9 +111,11 @@ impl Cache {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cache, Key, fingerprint};
+    use super::{Cache, ENGINE, Key, fingerprint};
     use crate::run::{Bounds, Checked, ModelResult, Status};
+    use crate::sources::engine;
     use std::fs;
+    use std::path::Path;
     use std::time::Duration;
 
     const FILE: &str = "src/counter.model.ts";
@@ -200,6 +202,30 @@ mod tests {
                 "a change of {what} checks the model again"
             );
         }
+    }
+
+    #[test]
+    fn the_engine_follows_the_sources_the_binary_was_built_from() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap();
+        let version = env!("CARGO_PKG_VERSION");
+        assert_eq!(
+            ENGINE,
+            engine(version, &repository).unwrap(),
+            "the engine in the key is the fingerprint of the sources as they are now"
+        );
+        let fingerprint = ENGINE.strip_prefix(&format!("{version}+")).unwrap();
+        assert_eq!(
+            fingerprint.len(),
+            16,
+            "the package version, then sixteen hexadecimal digits: {ENGINE}"
+        );
+        assert!(
+            fingerprint.chars().all(|digit| digit.is_ascii_hexdigit()),
+            "the package version, then sixteen hexadecimal digits: {ENGINE}"
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! A tree is plain data: built by hand, compared by value.
 
-use earnest_ast::{Reading, Term, TermKind, ViewDraft};
+use earnest_ast::{Reading, Term, TermKind, ViewDraft, condition_text};
 use earnest_diagnostics::Place;
 
 #[test]
@@ -33,4 +33,14 @@ fn a_model_without_a_view_has_no_title_labels_steps_or_colors() {
     assert_eq!(view.group, None);
     assert!(view.steps.is_empty());
     assert!(view.colors.is_empty());
+}
+
+#[test]
+fn the_text_of_a_condition_has_one_space_for_each_run_of_white_space() {
+    assert_eq!(
+        condition_text("  s.n <= 2 &&\n\t\ts.n   >= 0\r\n"),
+        "s.n <= 2 && s.n >= 0"
+    );
+    assert_eq!(condition_text("s.n<=2"), "s.n<=2");
+    assert_eq!(condition_text(" \n\t"), "");
 }

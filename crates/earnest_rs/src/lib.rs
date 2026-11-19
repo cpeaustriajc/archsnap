@@ -22,8 +22,13 @@ use earnest_ast::Reading;
 /// `"Locked"`; ids are method names; the state is named `self`; and a rule's `text` is the
 /// source of its body with each run of white space as one space. `x.clone()` and `&x` are
 /// read as `x`. Top-level constants, functions, and methods of the block without an
-/// attribute become the drafts' constants and helpers. Items marked `#[cfg(test)]` are
-/// skipped.
+/// attribute become the drafts' constants and helpers. An item marked `#[cfg(test)]` that is
+/// not part of a model (a module, a function, a constant, a plain `impl` block) is skipped.
+///
+/// Any other `#[cfg]` or `#[cfg_attr]`, on an item, a method, a field, an input, a statement
+/// or an expression, is a problem: the file is read once for every build, so a part kept in
+/// one build only would be checked wrongly in the other. So is `#[action]`, `#[rule]` or
+/// `#[end]` written with a path, which `#[model]` would not see.
 ///
 /// When anything in the file is outside the library and the allowed forms (a loop, a clock,
 /// a random number, input or output, `unsafe`, an unknown macro, a change in place, an item

@@ -53,6 +53,7 @@ impl Reader<'_> {
                 )
             }
             Stmt::Macro(called) => {
+                self.refuse_conditional(&called.attrs);
                 if !is_require(called) {
                     self.refuse_macro(&called.mac);
                 } else if body == Body::Value {
@@ -214,6 +215,7 @@ impl Reader<'_> {
     }
 
     fn binding(&mut self, local: &Local) -> (String, Term) {
+        self.refuse_conditional(&local.attrs);
         let pattern = match &local.pat {
             Pat::Type(typed) => typed.pat.as_ref(),
             other => other,

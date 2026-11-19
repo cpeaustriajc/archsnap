@@ -1,7 +1,7 @@
 use crate::build::{
     HERE, binary, boolean, call, choose, differ, equal, fails, field, here, holds, int, lambda,
-    name, no, null, one_of, optional, prop, range, record, record_shape, refusal, starting, text,
-    verdict, wrap, yes,
+    name, no, null, one_of, optional, prop, range, record, record_shape, refusal, spread, starting,
+    text, verdict, wrap, yes,
 };
 use earnest_ast::{Binary, Shape, Term};
 use earnest_ir::Fault;
@@ -162,4 +162,58 @@ fn an_optional_value_can_not_hold_another_optional_value() {
     );
     let wrapped_null = refusal(fields(), equal(field("maybe"), here(wrap(null()))));
     assert_eq!(wrapped_null.place(), HERE);
+}
+
+#[test]
+fn a_present_optional_record_is_spread_into_a_record() {
+    let moved = spread(Some(field("spot")), vec![("x", int(4))]);
+    assert!(is_true(equal(prop(moved, "x"), int(4))));
+    let copied = spread(Some(field("spot")), Vec::new());
+    assert!(is_true(equal(copied, record(vec![("x", int(1))]))));
+}
+
+#[test]
+fn a_spread_of_null_is_a_null_read() {
+    let moved = spread(Some(field("nowhere")), vec![("x", int(4))]);
+    let read = equal(prop(moved, "x"), int(4));
+    assert_eq!(verdict(fields(), read), Err(Fault::NullRead));
+}
+
+#[test]
+fn a_spread_of_an_optional_value_that_is_not_a_record_is_refused() {
+    let problem = refusal(
+        fields(),
+        equal(here(spread(Some(field("maybe")), Vec::new())), int(1)),
+    );
+    assert_eq!(problem.place(), HERE);
+    assert_eq!(problem.feature, "a spread of an optional value");
+}
+
+#[test]
+fn two_optional_values_have_no_order() {
+    let refused_order = |left: Term, right: Term| {
+        let problem = refusal(fields(), here(binary(Binary::Less, left, right)));
+        assert_eq!(problem.place(), HERE);
+        problem.feature
+    };
+    let feature = "two optional values compared by order";
+    assert_eq!(refused_order(field("none"), wrap(int(5))), feature);
+    assert_eq!(refused_order(wrap(int(1)), field("maybe")), feature);
+    assert_eq!(refused_order(field("maybe"), field("none")), feature);
+    assert_eq!(refused_order(field("maybe"), null()), feature);
+    for op in [Binary::LessOrEqual, Binary::Greater, Binary::GreaterOrEqual] {
+        let problem = refusal(fields(), binary(op, field("maybe"), wrap(int(5))));
+        assert_eq!(problem.feature, feature, "{op:?}");
+    }
+}
+
+#[test]
+fn a_number_and_an_optional_number_on_either_side_are_still_ordered() {
+    assert!(is_true(binary(Binary::Greater, int(3), field("maybe"))));
+    assert!(is_true(binary(
+        Binary::GreaterOrEqual,
+        field("maybe"),
+        field("n")
+    )));
+    assert!(is_false(binary(Binary::Less, field("maybe"), field("n"))));
 }

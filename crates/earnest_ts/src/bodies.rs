@@ -143,12 +143,29 @@ impl Reader<'_> {
         };
         match first {
             Statement::EmptyStatement(_) => self.rest(later, closing),
-            Statement::ReturnStatement(returned) => self.returned(returned),
+            Statement::ReturnStatement(returned) => {
+                let value = self.returned(returned);
+                self.refuse_after_return(later);
+                value
+            }
             Statement::VariableDeclaration(variables) => self.bound(variables, later, closing),
             Statement::IfStatement(branch) => self.branch(branch, later, closing),
             other => {
                 self.refuse_statement(other, ONLY_IN_A_BODY);
                 self.rest(later, closing)
+            }
+        }
+    }
+
+    fn refuse_after_return(&mut self, later: &[Statement<'_>]) {
+        for unreached in later {
+            if !matches!(unreached, Statement::EmptyStatement(_)) {
+                let written = self.quoted(unreached.span());
+                self.refuse(
+                    unreached.span().start,
+                    &written,
+                    "a function body ends at its `return`, so nothing may follow it",
+                );
             }
         }
     }
@@ -311,6 +328,8 @@ mod tests {
         read("m.model.ts", &format!("{HEAD}const helper = {helper};\n")).problems
     }
 
+    const NO_FEATURES: [&str; 0] = [];
+
     fn features(helper: &str) -> Vec<String> {
         problems(helper)
             .into_iter()
@@ -435,5 +454,29 @@ mod tests {
         let only = found.first().expect("one problem");
         assert_eq!(only.feature, "`return`", "the missing statement");
         assert_eq!((only.line, only.column), (5, 1), "the closing brace");
+    }
+
+    #[test]
+    fn a_statement_after_the_last_return_is_refused() {
+        assert_eq!(
+            features("(n: number) => { return n; n + 1; }"),
+            ["`n + 1;`"],
+            "an expression that is never reached"
+        );
+        assert_eq!(
+            features("(n: number) => { if (n > 1) { return 1; const a = 2; } return n; }"),
+            ["`const a = 2;`"],
+            "inside the block of an `if` too"
+        );
+        assert_eq!(
+            features("(n: number) => { return n; return 2; }"),
+            ["`return 2;`"],
+            "a second return"
+        );
+        assert_eq!(
+            features("(n: number) => { return n;; }"),
+            NO_FEATURES,
+            "an empty statement is nothing"
+        );
     }
 }

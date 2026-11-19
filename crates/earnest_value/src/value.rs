@@ -125,6 +125,10 @@ impl Symbols {
 
     /// `value` as the text report prints it: `"text"`, `12`, `true`, `null`, `{a, b}` for a set,
     /// `[a, b]` for a sequence or queue, `{k -> v}` for a map and `{name: value}` for a record.
+    ///
+    /// A text value stays on one line and can be read back: inside the quotes `"` is `\"`, `\`
+    /// is `\\`, a line feed is `\n`, a carriage return `\r`, a tab `\t`, and any other
+    /// control character or line separator is `\u{...}` with its code in hexadecimal.
     #[must_use]
     pub fn show(&self, value: &Value) -> String {
         let mut out = String::new();
@@ -153,11 +157,7 @@ impl Symbols {
             Value::Null => out.push_str("null"),
             Value::Bool(flag) => out.push_str(if *flag { "true" } else { "false" }),
             Value::Int(number) => out.push_str(&number.to_string()),
-            Value::Str(sym) => {
-                out.push('"');
-                out.push_str(self.name(*sym));
-                out.push('"');
-            }
+            Value::Str(sym) => write_quoted(self.name(*sym), out),
             Value::Record(fields) => {
                 let shown = fields
                     .iter()
@@ -204,6 +204,24 @@ impl Symbols {
             Value::Seq(items) => Json::Array(items.iter().map(|item| self.json(item)).collect()),
         }
     }
+}
+
+fn write_quoted(text: &str, out: &mut String) {
+    out.push('"');
+    for letter in text.chars() {
+        match letter {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            other if other.is_control() || matches!(other, '\u{2028}' | '\u{2029}') => {
+                out.extend(other.escape_unicode());
+            }
+            other => out.push(other),
+        }
+    }
+    out.push('"');
 }
 
 fn write_listed(out: &mut String, open: &str, items: impl Iterator<Item = String>, close: &str) {

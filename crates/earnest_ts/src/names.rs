@@ -5,22 +5,6 @@ pub(crate) const DECLARATIONS: [&str; 13] = [
     "request", "retry",
 ];
 
-const PRIMITIVE_PROPERTIES: [&str; 13] = [
-    "isEmpty",
-    "isFull",
-    "isFree",
-    "isHeld",
-    "isIdle",
-    "isRunning",
-    "hasFired",
-    "isPending",
-    "hasSucceeded",
-    "hasFailed",
-    "isSettled",
-    "canRetry",
-    "isExhausted",
-];
-
 pub(crate) fn snake(name: &str) -> String {
     let mut out = String::with_capacity(name.len() + 4);
     for letter in name.chars() {
@@ -32,10 +16,6 @@ pub(crate) fn snake(name: &str) -> String {
         }
     }
     out
-}
-
-pub(crate) fn is_primitive_property(name: &str) -> bool {
-    PRIMITIVE_PROPERTIES.contains(&name)
 }
 
 pub(crate) fn why_outside(root: &str, property: Option<&str>) -> &'static str {
@@ -56,19 +36,13 @@ pub(crate) fn why_outside(root: &str, property: Option<&str>) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_primitive_property, snake, why_outside};
+    use super::{snake, why_outside};
 
     #[test]
     fn camel_case_becomes_snake_case() {
         assert_eq!(snake("isEmpty"), "is_empty", "one capital");
         assert_eq!(snake("isHeldBy"), "is_held_by", "two capitals");
         assert_eq!(snake("size"), "size", "no capital");
-    }
-
-    #[test]
-    fn only_the_library_properties_are_primitive() {
-        assert!(is_primitive_property("hasFired"), "a timer property");
-        assert!(!is_primitive_property("unitPrice"), "a field of a record");
     }
 
     #[test]

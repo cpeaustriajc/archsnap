@@ -5,12 +5,10 @@ use earnest_ast::{Draft, RuleDraft};
 use earnest_chart::{ChangeKind, RuleChange, RuleText};
 use earnest_check::{Limits, Verdict, explore};
 use earnest_ir::{Expr, Model, Op, Rule};
-use earnest_semantic::lower;
+use earnest_semantic::lower_with_earlier;
 use serde::Serialize;
 use std::path::Path;
 use std::process::{Command, Stdio};
-
-const OLD_RULE_MARK: &str = " at the base";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -126,20 +124,6 @@ fn source_at(base: &str, file: &str) -> Option<String> {
     String::from_utf8(shown.stdout).ok()
 }
 
-fn holds_at_base(old: &RuleDraft) -> RuleDraft {
-    RuleDraft {
-        id: format!("{}{OLD_RULE_MARK}", old.id),
-        ..old.clone()
-    }
-}
-
-fn with_rules(draft: &Draft, rules: Vec<RuleDraft>) -> Draft {
-    Draft {
-        rules,
-        ..draft.clone()
-    }
-}
-
 fn implies(first: &Rule, second: &Rule, id: String) -> Rule {
     Rule {
         id,
@@ -162,63 +146,83 @@ fn tightens_id(id: &str) -> String {
     format!("{id} tightens")
 }
 
-fn comparison(model: &Model, ids: &[&str]) -> Model {
-    let rule = |id: &str| model.rules.iter().find(|rule| rule.id == id);
-    let rules = ids
-        .iter()
-        .filter_map(|id| {
-            let now = rule(id)?;
-            let was = rule(&format!("{id}{OLD_RULE_MARK}"))?;
-            Some([
-                implies(now, was, loosens_id(id)),
-                implies(was, now, tightens_id(id)),
-            ])
-        })
-        .flatten()
-        .collect();
-    Model {
-        rules,
-        ..model.clone()
+fn broken_rules(model: Model, rules: Vec<Rule>, bounds: Bounds) -> Vec<String> {
+    if rules.is_empty() {
+        return Vec::new();
+    }
+    let limits = Limits {
+        max_states: bounds.max_states,
+        time_limit: bounds.time_limit,
+        jobs: bounds.jobs,
+        keep_graph: false,
+        only_rule: None,
+    };
+    explore(&Model { rules, ..model }, &limits)
+        .rules
+        .into_iter()
+        .filter(|rule| rule.verdict == Verdict::Broken)
+        .map(|rule| rule.id)
+        .collect()
+}
+
+fn by_wording(was: &RuleDraft, now: &RuleDraft) -> Option<Kind> {
+    if was.text != now.text {
+        Some(Kind::Changed)
+    } else if was.says != now.says {
+        Some(Kind::Reworded)
+    } else {
+        None
     }
 }
 
-fn told_apart(draft: &Draft, pairs: &[(&RuleDraft, &RuleDraft)], bounds: Bounds) -> Vec<Kind> {
-    let readable: Vec<&(&RuleDraft, &RuleDraft)> = pairs
-        .iter()
-        .filter(|(was, _)| lower(&with_rules(draft, vec![holds_at_base(was)])).is_ok())
-        .collect();
-    let both: Vec<RuleDraft> = readable
-        .iter()
-        .flat_map(|(was, now)| [(*now).clone(), holds_at_base(was)])
-        .collect();
-    let ids: Vec<&str> = readable.iter().map(|(_, now)| now.id.as_str()).collect();
-    let broken: Vec<String> = match lower(&with_rules(draft, both)) {
-        Ok(model) if !ids.is_empty() => {
-            let limits = Limits {
-                max_states: bounds.max_states,
-                time_limit: bounds.time_limit,
-                jobs: bounds.jobs,
-                keep_graph: false,
-                only_rule: None,
-            };
-            explore(&comparison(&model, &ids), &limits)
-                .rules
-                .into_iter()
-                .filter(|rule| rule.verdict == Verdict::Broken)
-                .map(|rule| rule.id)
-                .collect()
-        }
-        Ok(_) | Err(_) => Vec::new(),
+fn told_apart(
+    old: &Draft,
+    new: &Draft,
+    pairs: &[(&RuleDraft, &RuleDraft)],
+    bounds: Bounds,
+) -> Vec<Option<Kind>> {
+    let Ok((model, at_base)) = lower_with_earlier(new, old) else {
+        return pairs
+            .iter()
+            .map(|(was, now)| by_wording(was, now))
+            .collect();
     };
+    let lowered: Vec<Option<(&Rule, &Rule)>> = pairs
+        .iter()
+        .map(|(was, now)| {
+            let position = old.rules.iter().position(|rule| rule.id == was.id)?;
+            let before = at_base.get(position)?.as_ref()?;
+            let after = model.rules.iter().find(|rule| rule.id == now.id)?;
+            Some((before, after))
+        })
+        .collect();
+    let compared: Vec<Rule> = lowered
+        .iter()
+        .flatten()
+        .filter(|(before, after)| before.holds != after.holds)
+        .flat_map(|(before, after)| {
+            [
+                implies(after, before, loosens_id(&after.id)),
+                implies(before, after, tightens_id(&after.id)),
+            ]
+        })
+        .collect();
+    let broken = broken_rules(model.clone(), compared, bounds);
     pairs
         .iter()
-        .map(|(_, now)| {
+        .zip(&lowered)
+        .map(|((was, now), rules)| {
+            let Some((before, after)) = rules else {
+                return Some(Kind::Changed);
+            };
             if broken.contains(&loosens_id(&now.id)) {
-                Kind::Loosened
+                Some(Kind::Loosened)
             } else if broken.contains(&tightens_id(&now.id)) {
-                Kind::Tightened
+                Some(Kind::Tightened)
+            } else if before.holds != after.holds {
+                Some(Kind::Changed)
             } else {
-                Kind::Changed
+                by_wording(was, now)
             }
         })
         .collect()
@@ -244,34 +248,31 @@ fn one_sided(model: &str, rule: &RuleDraft, change: Kind) -> Difference {
 pub(crate) fn model_changes(old: Option<&Draft>, new: &Draft, bounds: Bounds) -> Vec<Difference> {
     let old_rules: &[RuleDraft] = old.map_or(&[], |draft| &draft.rules);
     let was_of = |id: &str| old_rules.iter().find(|rule| rule.id == id);
-    let rewritten: Vec<(&RuleDraft, &RuleDraft)> = new
+    let kept: Vec<(&RuleDraft, &RuleDraft)> = new
         .rules
         .iter()
         .filter_map(|now| Some((was_of(&now.id)?, now)))
-        .filter(|(was, now)| was.text != now.text)
         .collect();
-    let mut kinds = told_apart(new, &rewritten, bounds).into_iter();
-    let mut changes = Vec::new();
-    for now in &new.rules {
-        let Some(was) = was_of(&now.id) else {
-            changes.push(one_sided(&new.name, now, Kind::Added));
-            continue;
-        };
-        let change = if was.text != now.text {
-            kinds.next().unwrap_or(Kind::Changed)
-        } else if was.says != now.says {
-            Kind::Reworded
-        } else {
-            continue;
-        };
-        changes.push(Difference {
-            model: new.name.clone(),
-            id: now.id.clone(),
-            change,
-            was: Some(Wording::of(was)),
-            now: Some(Wording::of(now)),
-        });
+    let kinds = old.map_or_else(Vec::new, |draft| told_apart(draft, new, &kept, bounds));
+    let mut changes: Vec<Difference> = new
+        .rules
+        .iter()
+        .filter(|now| was_of(&now.id).is_none())
+        .map(|now| one_sided(&new.name, now, Kind::Added))
+        .collect();
+    for ((was, now), kind) in kept.iter().zip(kinds) {
+        if let Some(change) = kind {
+            changes.push(Difference {
+                model: new.name.clone(),
+                id: now.id.clone(),
+                change,
+                was: Some(Wording::of(was)),
+                now: Some(Wording::of(now)),
+            });
+        }
     }
+    let position = |id: &str| new.rules.iter().position(|rule| rule.id == id);
+    changes.sort_by_key(|change| position(&change.id));
     changes.extend(
         old_rules
             .iter()
@@ -342,20 +343,24 @@ mod tests {
     use std::fmt::Write;
 
     const FILE: &str = "tank.model.ts";
+    const REST_OF_THE_TANK: &str = "const TOP = 3;\n\
+        export const Tank = m.model(\"Tank\", {\n\
+        \tlevel: m.int(0, 3).initial(0),\n\
+        \tvalve: m.enum([\"shut\", \"open\"]).optional().initial(null),\n\
+        });\n\
+        export const fill = Tank.action(\"the tank fills\", {\n\
+        \twhen: (s) => s.level < TOP,\n\
+        \tthen: (s) => ({ level: s.level + 1 }),\n\
+        });\n\
+        export const full = Tank.end({ says: \"full\", when: (s) => s.level === TOP });\n";
 
     fn tank(rules: &[(&str, &str, &str)]) -> Draft {
-        let mut source = String::from(
-            "import { m } from \"@earnest/model\";\n\
-             const TOP = 3;\n\
-             export const Tank = m.model(\"Tank\", {\n\
-             \tlevel: m.int(0, 3).initial(0),\n\
-             \tvalve: m.enum([\"shut\", \"open\"]).optional().initial(null),\n\
-             });\n\
-             export const fill = Tank.action(\"the tank fills\", {\n\
-             \twhen: (s) => s.level < TOP,\n\
-             \tthen: (s) => ({ level: s.level + 1 }),\n\
-             });\n\
-             export const full = Tank.end({ says: \"full\", when: (s) => s.level === TOP });\n",
+        tank_with("", rules)
+    }
+
+    fn tank_with(constants_and_helpers: &str, rules: &[(&str, &str, &str)]) -> Draft {
+        let mut source = format!(
+            "import {{ m }} from \"@earnest/model\";\n{constants_and_helpers}{REST_OF_THE_TANK}"
         );
         for (id, says, holds) in rules {
             writeln!(
@@ -592,6 +597,101 @@ mod tests {
                 "was": { "says": "one", "holds": "s.inFlight <= 1" },
                 "now": null,
             })
+        );
+    }
+
+    fn kinds_across(old_top: &str, new_top: &str, holds: &str) -> Vec<Kind> {
+        let rules = [("rule", "same", holds)];
+        let old = tank_with(old_top, &rules);
+        let new = tank_with(new_top, &rules);
+        model_changes(Some(&old), &new, bounds())
+            .into_iter()
+            .map(|change| change.change)
+            .collect()
+    }
+
+    #[test]
+    fn a_rule_with_the_same_text_is_judged_by_the_constants_of_each_file() {
+        let capped = "(s) => s.level <= MAX";
+        assert_eq!(
+            kinds_across("const MAX = 2;\n", "const MAX = 3;\n", capped),
+            [Kind::Loosened],
+            "level 3 passes with the new MAX and broke with the old one"
+        );
+        assert_eq!(
+            kinds_across("const MAX = 3;\n", "const MAX = 2;\n", capped),
+            [Kind::Tightened],
+            "level 3 breaks with the new MAX and passed with the old one"
+        );
+        assert_eq!(
+            kinds_across("const MAX = 5;\n", "const MAX = 7;\n", capped),
+            [Kind::Changed],
+            "the condition means something else, but no level from 0 to 3 tells them apart"
+        );
+        assert_eq!(
+            kinds_across("const MAX = 2;\n", "const MAX = 2;\n", capped),
+            [],
+            "nothing changed"
+        );
+    }
+
+    #[test]
+    fn a_rule_with_the_same_text_is_judged_by_the_helpers_of_each_file() {
+        let helper = |most: u8| format!("const allowed = (level: number) => level <= {most};\n");
+        assert_eq!(
+            kinds_across(&helper(2), &helper(3), "(s) => allowed(s.level)"),
+            [Kind::Loosened],
+            "level 3 passes the new helper and broke the old one"
+        );
+    }
+
+    #[test]
+    fn a_new_sentence_does_not_hide_a_rule_loosened_through_its_constant() {
+        let old = tank_with(
+            "const MAX = 2;\n",
+            &[("rule", "old words", "(s) => s.level <= MAX")],
+        );
+        let new = tank_with(
+            "const MAX = 3;\n",
+            &[("rule", "new words", "(s) => s.level <= MAX")],
+        );
+        let found = model_changes(Some(&old), &new, bounds());
+        assert_eq!(found.len(), 1, "one change: {found:?}");
+        assert_eq!(found[0].change, Kind::Loosened, "not only reworded");
+    }
+
+    #[test]
+    fn an_edit_of_white_space_alone_is_not_a_change() {
+        assert_eq!(
+            kinds(
+                &[("rule", "same", "(s) => s.level   <=\n\t\t3")],
+                &[("rule", "same", "(s) => s.level <= 3")]
+            ),
+            [],
+            "both readers store a condition with one space for each run of white space"
+        );
+    }
+
+    #[test]
+    fn changes_keep_the_order_of_the_new_file_s_rules() {
+        let found = kinds(
+            &[
+                ("second", "same", "(s) => s.level <= 2"),
+                ("third", "old words", "(s) => s.level < 4"),
+            ],
+            &[
+                ("first", "same", "(s) => s.level >= 0"),
+                ("second", "same", "(s) => s.level <= 3"),
+                ("third", "new words", "(s) => s.level < 4"),
+            ],
+        );
+        assert_eq!(
+            found,
+            [
+                ("first".to_owned(), Kind::Added),
+                ("second".to_owned(), Kind::Loosened),
+                ("third".to_owned(), Kind::Reworded)
+            ]
         );
     }
 }

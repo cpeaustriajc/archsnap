@@ -1,8 +1,8 @@
 use crate::bodies::Body;
 use crate::reader::{Reader, attribute, path_text, place_of, why_outside};
 use earnest_ast::{
-    ActionDraft, Draft, EndDraft, FieldDraft, HelperDraft, Reading, RuleDraft, Shape, Term,
-    ViewDraft,
+    ActionBody, ActionDraft, Draft, EndDraft, FieldDraft, HelperDraft, Reading, RuleDraft, Shape,
+    Term, ViewDraft, condition_text,
 };
 use proc_macro2::Span;
 use syn::punctuated::Punctuated;
@@ -50,6 +50,24 @@ fn is_test_only(attributes: &[Attribute]) -> bool {
                 .parse_args::<Path>()
                 .is_ok_and(|condition| condition.is_ident("test"))
     })
+}
+
+fn is_part_of_a_model(item: &Item) -> bool {
+    match item {
+        Item::Struct(found) => derives(&found.attrs, "Model") || derives(&found.attrs, "Domain"),
+        Item::Enum(found) => derives(&found.attrs, "Domain"),
+        Item::Impl(found) => marks_model(&found.attrs),
+        _ => false,
+    }
+}
+
+fn names_a_role(attribute: &Attribute) -> bool {
+    let path = attribute.path();
+    path.segments.len() > 1
+        && path
+            .segments
+            .last()
+            .is_some_and(|segment| ROLES.iter().any(|role| segment.ident == role))
 }
 
 fn marks_model(attributes: &[Attribute]) -> bool {
@@ -169,9 +187,11 @@ impl Reader<'_> {
     fn declare<'b>(&mut self, items: &'b [Item]) -> Found<'b> {
         let mut found = Found::default();
         for item in items {
-            if is_test_only(attributes_of(item)) {
+            let attributes = attributes_of(item);
+            if is_test_only(attributes) && !is_part_of_a_model(item) {
                 continue;
             }
+            self.refuse_conditional(attributes);
             match item {
                 Item::Use(import) => self.import(import),
                 Item::Enum(choices) => self.declare_enum(choices),
@@ -238,6 +258,7 @@ impl Reader<'_> {
         }
         let mut variants = Vec::with_capacity(choices.variants.len());
         for variant in &choices.variants {
+            self.refuse_conditional(&variant.attrs);
             if !matches!(variant.fields, Fields::Unit) {
                 self.refuse(
                     variant.span(),
@@ -263,6 +284,9 @@ impl Reader<'_> {
         self.plain(record);
         match &record.fields {
             Fields::Named(fields) => {
+                for field in &fields.named {
+                    self.refuse_conditional(&field.attrs);
+                }
                 self.records.insert(name, fields.clone());
             }
             other => self.refuse(
@@ -327,6 +351,7 @@ impl Reader<'_> {
 
     fn field(&mut self, field: &Field) -> Option<FieldDraft> {
         let name = field.ident.as_ref()?.to_string();
+        self.refuse_conditional(&field.attrs);
         let mut shape = self.shape(&field.ty, &field.attrs);
         if let Some(initial) = attribute(&field.attrs, "initial") {
             shape.initial = Some(match initial.parse_args::<Expr>() {
@@ -365,6 +390,16 @@ impl Reader<'_> {
         let signature = &method.sig;
         let id = signature.ident.to_string();
         let place = place_of(signature.fn_token.span);
+        self.refuse_conditional(&method.attrs);
+        for attribute in method.attrs.iter().filter(|found| names_a_role(found)) {
+            let feature = format!("#[{}]", path_text(attribute.path()));
+            self.refuse(
+                attribute.pound_token.span,
+                &feature,
+                "`#[model]` knows an action, a rule and an end only by the plain attribute: \
+                 write `#[action(\"...\")]`, `#[rule(\"...\")]` or `#[end(\"...\")]`",
+            );
+        }
         let inputs = self.inputs(signature);
         let Some((role, sentence)) = role_of(&method.attrs) else {
             let mut parameters = vec![STATE.to_owned()];
@@ -380,16 +415,21 @@ impl Reader<'_> {
         let says = self.sentence(role, sentence);
         if role == "action" {
             self.returns(signature, "Option<Self>", "an action");
-            let guard = self.guard(&method.block.stmts);
+            let taken: Vec<String> = inputs.iter().map(|(name, _)| name.clone()).collect();
+            let body = |term: Term| ActionBody {
+                state_name: Some(STATE.to_owned()),
+                input_name: None,
+                taken: taken.clone(),
+                term,
+            };
+            let guard = self.guard(&method.block.stmts).map(body);
             let close = method.block.brace_token.span.close();
-            let change = self.rest(&method.block.stmts, Body::Action, close);
+            let change = body(self.rest(&method.block.stmts, Body::Action, close));
             draft.actions.push(ActionDraft {
                 id,
                 label: says,
                 place,
                 inputs,
-                state_name: Some(STATE.to_owned()),
-                input_name: None,
                 guard,
                 change,
             });
@@ -428,13 +468,7 @@ impl Reader<'_> {
     fn body_text(&self, block: &Block) -> String {
         let open = block.brace_token.span.open().byte_range().end;
         let close = block.brace_token.span.close().byte_range().start;
-        let words: Vec<&str> = self
-            .source
-            .get(open..close)
-            .unwrap_or_default()
-            .split_whitespace()
-            .collect();
-        words.join(" ")
+        condition_text(self.source.get(open..close).unwrap_or_default())
     }
 
     fn sentence(&mut self, role: &str, attribute: &Attribute) -> String {
@@ -519,6 +553,7 @@ impl Reader<'_> {
                 "_".to_owned()
             }
         };
+        self.refuse_conditional(&typed.attrs);
         (name, self.shape(&typed.ty, &typed.attrs))
     }
 
@@ -545,6 +580,11 @@ impl Reader<'_> {
 
     fn function(&mut self, function: &ItemFn) -> HelperDraft {
         self.plain_function(&function.sig);
+        for input in &function.sig.inputs {
+            if let FnArg::Typed(typed) = input {
+                self.refuse_conditional(&typed.attrs);
+            }
+        }
         let mut parameters = Vec::with_capacity(function.sig.inputs.len());
         for input in &function.sig.inputs {
             match input {

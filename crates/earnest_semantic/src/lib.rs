@@ -10,7 +10,7 @@ mod terms;
 mod types;
 
 use earnest_ast::{
-    ActionDraft, Draft, EndDraft, FieldDraft, LabelDraft, RuleDraft, Shape, ShapeKind,
+    ActionBody, ActionDraft, Draft, EndDraft, FieldDraft, LabelDraft, RuleDraft, Shape, ShapeKind,
     TemplatePiece, Term, TermKind,
 };
 use earnest_diagnostics::{Place, Problem};
@@ -41,7 +41,8 @@ struct Shaped {
 ///
 /// Fields keep the draft's order, and so do actions, rules and ends. A field without a
 /// starting value starts at every value it declares, or empty, free, idle or at zero for a
-/// collection, lock, timer, request or retry.
+/// collection, lock, timer, request or retry. Every top-level constant is checked, also one
+/// that nothing reads.
 ///
 /// # Errors
 ///
@@ -49,58 +50,130 @@ struct Shaped {
 /// draft's file. With any problem there is no model: a partly understood model would be
 /// checked against the wrong rules.
 pub fn lower(draft: &Draft) -> Result<Model, Vec<Problem>> {
-    let mut lowerer = Lowerer {
-        draft,
-        symbols: Symbols::default(),
-        problems: Vec::new(),
-        fields: Vec::new(),
-        in_flight: Vec::new(),
-    };
-    let mut fields = Vec::with_capacity(draft.fields.len());
-    let mut types = Vec::with_capacity(draft.fields.len());
-    for field in &draft.fields {
-        if let Ok((lowered, ty)) = lowerer.field(field) {
-            types.push((lowered.name.clone(), ty));
-            fields.push(lowered);
-        }
-    }
-    lowerer.fields = types;
-    let actions: Vec<Action> = draft
-        .actions
-        .iter()
-        .filter_map(|action| lowerer.action(action).ok())
-        .collect();
-    let rules: Vec<Rule> = draft
-        .rules
-        .iter()
-        .filter_map(|rule| lowerer.rule(rule).ok())
-        .collect();
-    let ends: Vec<End> = draft
-        .ends
-        .iter()
-        .filter_map(|end| lowerer.end(end).ok())
-        .collect();
-    let view = View {
-        title: draft.view.title.clone(),
-        state: lowerer.label(draft.view.state.as_ref()),
-        group: lowerer.label(draft.view.group.as_ref()),
-        steps: draft.view.steps.clone(),
-        colors: draft.view.colors.clone(),
-    };
+    let mut lowerer = Lowerer::reading(draft);
+    let parts = lowerer.parts();
+    lowerer.finish(parts)
+}
+
+/// Lowers `draft` as [`lower`] does, and with it the rules of `earlier`, an older version of
+/// the same model, so that an old rule and a new one can be evaluated in the same state.
+///
+/// Each rule of `earlier` is read against the fields of `draft`, but with the constants and
+/// the helper functions of `earlier`: a rule whose text did not change still differs when a
+/// constant or a helper it uses did. The rules come back in the order of `earlier.rules`,
+/// with `None` for a rule that can't be read against the fields of `draft`. They share the
+/// model's symbols, so they are only meaningful together with the model returned here.
+///
+/// # Errors
+///
+/// The problems of `draft`, exactly as [`lower`] gives them. A problem in `earlier` is never
+/// an error.
+pub fn lower_with_earlier(
+    draft: &Draft,
+    earlier: &Draft,
+) -> Result<(Model, Vec<Option<Rule>>), Vec<Problem>> {
+    let mut lowerer = Lowerer::reading(draft);
+    let parts = lowerer.parts();
     if !lowerer.problems.is_empty() {
         return Err(lowerer.problems);
     }
-    Ok(Model {
-        name: draft.name.clone(),
-        file: draft.file.clone(),
-        line: draft.place.line,
-        symbols: lowerer.symbols,
-        fields,
-        actions,
-        rules,
-        ends,
-        view,
-    })
+    lowerer.draft = earlier;
+    let rules = earlier
+        .rules
+        .iter()
+        .map(|rule| lowerer.rule(rule).ok())
+        .collect();
+    lowerer.problems.clear();
+    lowerer.draft = draft;
+    Ok((lowerer.finish(parts)?, rules))
+}
+
+struct Parts {
+    fields: Vec<Field>,
+    actions: Vec<Action>,
+    rules: Vec<Rule>,
+    ends: Vec<End>,
+    view: View,
+}
+
+impl<'a> Lowerer<'a> {
+    fn reading(draft: &'a Draft) -> Self {
+        Self {
+            draft,
+            symbols: Symbols::default(),
+            problems: Vec::new(),
+            fields: Vec::new(),
+            in_flight: Vec::new(),
+        }
+    }
+
+    fn parts(&mut self) -> Parts {
+        let draft = self.draft;
+        let mut fields = Vec::with_capacity(draft.fields.len());
+        let mut types = Vec::with_capacity(draft.fields.len());
+        for field in &draft.fields {
+            if let Ok((lowered, ty)) = self.field(field) {
+                types.push((lowered.name.clone(), ty));
+                fields.push(lowered);
+            }
+        }
+        self.fields = types;
+        let actions: Vec<Action> = draft
+            .actions
+            .iter()
+            .filter_map(|action| self.action(action).ok())
+            .collect();
+        let rules: Vec<Rule> = draft
+            .rules
+            .iter()
+            .filter_map(|rule| self.rule(rule).ok())
+            .collect();
+        let ends: Vec<End> = draft
+            .ends
+            .iter()
+            .filter_map(|end| self.end(end).ok())
+            .collect();
+        let view = View {
+            title: draft.view.title.clone(),
+            state: self.label(draft.view.state.as_ref()),
+            group: self.label(draft.view.group.as_ref()),
+            steps: draft.view.steps.clone(),
+            colors: draft.view.colors.clone(),
+        };
+        for (_, constant) in &draft.constants {
+            let known = self.problems.len();
+            self.term(constant, &mut Scope::default()).ok();
+            for problem in self.problems.split_off(known) {
+                if !self.problems.contains(&problem) {
+                    self.problems.push(problem);
+                }
+            }
+        }
+        Parts {
+            fields,
+            actions,
+            rules,
+            ends,
+            view,
+        }
+    }
+
+    fn finish(self, parts: Parts) -> Result<Model, Vec<Problem>> {
+        if !self.problems.is_empty() {
+            return Err(self.problems);
+        }
+        Ok(Model {
+            name: self.draft.name.clone(),
+            file: self.draft.file.clone(),
+            line: self.draft.place.line,
+            symbols: self.symbols,
+            fields: parts.fields,
+            actions: parts.actions,
+            rules: parts.rules,
+            ends: parts.ends,
+            view: parts.view,
+        })
+    }
 }
 
 impl Lowerer<'_> {
@@ -165,10 +238,7 @@ impl Lowerer<'_> {
             let shaped = self.shape(shape)?;
             let values = self.all_values(&shaped.domain, shape.place)?;
             let slot = scope.slot();
-            scope.inputs.push((name.clone(), slot, shaped.ty.clone()));
-            scope
-                .names
-                .push((name.clone(), Binding::Local(slot, shaped.ty)));
+            scope.inputs.push((name.clone(), slot, shaped.ty));
             inputs.push(Input {
                 name: name.clone(),
                 slot,
@@ -176,15 +246,15 @@ impl Lowerer<'_> {
                 values,
             });
         }
-        bind_state(&mut scope, draft.state_name.as_ref());
-        if let Some(input) = &draft.input_name {
-            scope.names.push((input.clone(), Binding::Inputs));
-        }
         let guard = match &draft.guard {
-            Some(term) => self.truth(term, &mut scope)?,
+            Some(body) => {
+                self.enter(body, &mut scope)?;
+                self.truth(&body.term, &mut scope)?
+            }
             None => Expr::Const(Value::Bool(true)),
         };
-        let updates = self.changes(&draft.change, &mut scope)?;
+        self.enter(&draft.change, &mut scope)?;
+        let updates = self.changes(&draft.change.term, &mut scope)?;
         Ok(Action {
             id: draft.id.clone(),
             label: draft.label.clone(),
@@ -194,6 +264,25 @@ impl Lowerer<'_> {
             updates,
             slots: scope.slots,
         })
+    }
+
+    fn enter(&mut self, body: &ActionBody, scope: &mut Scope) -> Lowering<()> {
+        scope.names.clear();
+        bind_state(scope, body.state_name.as_ref());
+        if let Some(input) = &body.input_name {
+            scope.names.push((input.clone(), Binding::Inputs));
+        }
+        for name in &body.taken {
+            let Some((slot, ty)) = scope.input(name) else {
+                return Err(self.stop(
+                    body.term.place,
+                    &format!("the input `{name}`"),
+                    "the action declares no input with this name",
+                ));
+            };
+            scope.names.push((name.clone(), Binding::Local(slot, ty)));
+        }
+        Ok(())
     }
 
     fn changes(&mut self, term: &Term, scope: &mut Scope) -> Lowering<Vec<Option<Expr>>> {

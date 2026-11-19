@@ -9,6 +9,23 @@ pub(super) fn apply(op: Op, arguments: Vec<Expr>) -> Expr {
     Expr::Apply(op, arguments)
 }
 
+fn snake_case(name: &str) -> String {
+    let mut snake = String::with_capacity(name.len() + 2);
+    for letter in name.chars() {
+        if letter.is_ascii_uppercase() {
+            snake.push('_');
+            snake.push(letter.to_ascii_lowercase());
+        } else {
+            snake.push(letter);
+        }
+    }
+    snake
+}
+
+fn can_be_null(ty: &Type) -> bool {
+    matches!(ty, Type::Optional(_) | Type::Null)
+}
+
 impl Lowerer<'_> {
     pub(super) fn term(&mut self, term: &Term, scope: &mut Scope) -> Lowering<Typed> {
         let place = term.place;
@@ -212,10 +229,13 @@ impl Lowerer<'_> {
                 Type::Record(fields) => (apply(Op::Unwrap, vec![on.expr]), fields),
                 other => {
                     let unwrapped = Typed::new(on.expr, Type::optional(other));
-                    return self.method(unwrapped, name, &[], place, scope);
+                    return self.method(unwrapped, &snake_case(name), &[], place, scope);
                 }
             },
-            other => return self.method(Typed::new(on.expr, other), name, &[], place, scope),
+            other => {
+                let primitive = Typed::new(on.expr, other);
+                return self.method(primitive, &snake_case(name), &[], place, scope);
+            }
         };
         let Some((_, ty)) = fields.iter().find(|(known, _)| known == name) else {
             return Err(self.stop(
@@ -340,10 +360,14 @@ impl Lowerer<'_> {
                 };
                 return self.equality(op, first, second, place);
             }
-            Binary::Less => (Op::Order(Order::Less), Type::Bool),
-            Binary::LessOrEqual => (Op::Order(Order::LessOrEqual), Type::Bool),
-            Binary::Greater => (Op::Order(Order::Greater), Type::Bool),
-            Binary::GreaterOrEqual => (Op::Order(Order::GreaterOrEqual), Type::Bool),
+            Binary::Less => return self.order(Order::Less, left, right, place, scope),
+            Binary::LessOrEqual => {
+                return self.order(Order::LessOrEqual, left, right, place, scope);
+            }
+            Binary::Greater => return self.order(Order::Greater, left, right, place, scope),
+            Binary::GreaterOrEqual => {
+                return self.order(Order::GreaterOrEqual, left, right, place, scope);
+            }
             Binary::Add => (Op::Math(Math::Add), Type::Int),
             Binary::Subtract => (Op::Math(Math::Subtract), Type::Int),
             Binary::Multiply => (Op::Math(Math::Multiply), Type::Int),
@@ -353,6 +377,33 @@ impl Lowerer<'_> {
         let first = self.number(left, scope)?;
         let second = self.number(right, scope)?;
         Ok(Typed::new(apply(op, vec![first, second]), ty))
+    }
+
+    fn order(
+        &mut self,
+        order: Order,
+        left: &Term,
+        right: &Term,
+        place: Place,
+        scope: &mut Scope,
+    ) -> Lowering<Typed> {
+        let first = self.term(left, scope)?;
+        let second = self.term(right, scope)?;
+        if can_be_null(&first.ty) && can_be_null(&second.ty) {
+            return Err(self.stop(
+                place,
+                "two optional values compared by order",
+                "`<`, `<=`, `>` and `>=` compare numbers, and an optional value has no order: \
+                 test that it is present, then compare the number it holds with a number (in \
+                 Rust, `value.is_some_and(|number| number < 5)`)",
+            ));
+        }
+        let lower = self.coerce(first, &Type::Int, left.place)?;
+        let upper = self.coerce(second, &Type::Int, right.place)?;
+        Ok(Typed::new(
+            apply(Op::Order(order), vec![lower, upper]),
+            Type::Bool,
+        ))
     }
 
     pub(super) fn equality(
@@ -462,7 +513,13 @@ impl Lowerer<'_> {
             exprs.sort_by_key(|(sym, _)| *sym);
             return Ok(Typed::new(Expr::Record(exprs), Type::record(types)));
         };
-        let on = self.term(spread, scope)?;
+        let spread_in = self.term(spread, scope)?;
+        let on = match spread_in.ty {
+            Type::Optional(inner) if matches!(*inner, Type::Record(_)) => {
+                Typed::new(apply(Op::Unwrap, vec![spread_in.expr]), *inner)
+            }
+            other => Typed::new(spread_in.expr, other),
+        };
         let Type::Record(mut known) = on.ty else {
             return Err(self.stop(
                 place,

@@ -1,7 +1,7 @@
 use crate::build::{
-    FILE, HERE, action, after, binary, bind, boolean, choose, draft, equal, field, first_state,
-    here, int, lowered, name, no, null, one_of, optional, placed, prop, range, record, refused,
-    rule, spread, starting, text, the_problem, wrap,
+    FILE, HERE, action, after, binary, bind, boolean, choose, declare, draft, equal, field,
+    first_state, here, int, lowered, name, no, null, one_of, optional, placed, prop, range, record,
+    refused, rule, spread, starting, take, take_whole_input, text, the_problem, wrap,
 };
 use earnest_ast::{ActionDraft, Binary, Draft, EndDraft, Shape, Term};
 use earnest_diagnostics::{Place, Problem};
@@ -37,7 +37,7 @@ fn press_action() -> ActionDraft {
         ("keyboardAdd", equal(name("by"), text("keyboard"))),
     ]);
     let mut pressed = action("press", Some(guard), change);
-    pressed.inputs.push(("by".to_owned(), press()));
+    take(&mut pressed, "by", press());
     pressed
 }
 
@@ -138,8 +138,8 @@ fn an_input_is_also_read_through_the_name_of_the_whole_input() {
         Some(equal(prop(name("input"), "by"), text("mouse"))),
         record(vec![("pressBy", prop(name("input"), "by"))]),
     );
-    pressed.inputs.push(("by".to_owned(), press()));
-    pressed.input_name = Some("input".to_owned());
+    declare(&mut pressed, "by", press());
+    take_whole_input(&mut pressed, "input");
     let model = lowered(&with_action(pressed));
     assert!(enabled(&model, &[text_value(&model, "mouse")]));
     assert!(!enabled(&model, &[text_value(&model, "virtual")]));
@@ -229,8 +229,8 @@ fn an_input_the_action_does_not_declare_is_refused() {
         None,
         record(vec![("pressBy", here(prop(name("input"), "who")))]),
     );
-    pressed.inputs.push(("by".to_owned(), press()));
-    pressed.input_name = Some("input".to_owned());
+    declare(&mut pressed, "by", press());
+    take_whole_input(&mut pressed, "input");
     let problem = the_problem(&with_action(pressed));
     assert_eq!(problem.place(), HERE);
     assert_eq!(problem.feature, "the input `who`");
@@ -241,7 +241,7 @@ fn an_input_with_more_than_a_million_values_is_refused_at_its_declaration() {
     let mut counted = action("count", None, record(vec![("n", int(1))]));
     let mut wide = range(0, 1_000_000);
     wide.place = HERE;
-    counted.inputs.push(("amount".to_owned(), wide));
+    declare(&mut counted, "amount", wide);
     let problem = the_problem(&with_action(counted));
     assert_eq!(problem.place(), HERE);
     assert_eq!(
@@ -308,4 +308,86 @@ fn every_problem_in_a_draft_is_reported_and_no_model_is_given() {
     let places: Vec<Place> = problems.iter().map(Problem::place).collect();
     assert_eq!(places, [first, second]);
     assert!(problems.iter().all(|problem| problem.file == FILE));
+}
+
+fn below_limit() -> Term {
+    binary(Binary::Less, field("n"), name("limit"))
+}
+
+fn with_a_limit_of_five(added: ActionDraft) -> Draft {
+    let mut source = with_action(added);
+    source.constants.push(("limit".to_owned(), int(5)));
+    source
+}
+
+#[test]
+fn an_input_that_no_function_takes_does_not_hide_a_constant_of_its_name() {
+    let mut counted = action("count", Some(below_limit()), record(vec![("n", int(1))]));
+    declare(&mut counted, "limit", range(0, 2));
+    let model = lowered(&with_a_limit_of_five(counted));
+    assert!(
+        enabled(&model, &[Value::Int(0)]),
+        "0 is below the constant 5; it is not below the input 0"
+    );
+}
+
+#[test]
+fn an_input_only_the_change_takes_is_the_constant_in_the_guard() {
+    let change = record(vec![("n", name("limit"))]);
+    let mut counted = action("count", Some(below_limit()), change);
+    declare(&mut counted, "limit", range(0, 2));
+    counted.change.taken.push("limit".to_owned());
+    let model = lowered(&with_a_limit_of_five(counted));
+    assert!(
+        enabled(&model, &[Value::Int(0)]),
+        "the guard reads the constant 5"
+    );
+    let state = after(&model, 0, &[Value::Int(2)]);
+    assert_eq!(
+        shown(&model, &state)[3],
+        "2",
+        "the change reads the input 2"
+    );
+}
+
+#[test]
+fn a_constant_is_read_beside_a_field_of_the_whole_input_of_its_name() {
+    let asked = binary(Binary::GreaterOrEqual, prop(name("input"), "limit"), int(2));
+    let guard = binary(Binary::And, below_limit(), asked);
+    let mut counted = action("count", Some(guard), record(vec![("n", int(1))]));
+    declare(&mut counted, "limit", range(0, 2));
+    take_whole_input(&mut counted, "input");
+    let model = lowered(&with_a_limit_of_five(counted));
+    assert!(
+        enabled(&model, &[Value::Int(2)]),
+        "0 < 5 by the constant and 2 >= 2 by the input"
+    );
+    assert!(
+        !enabled(&model, &[Value::Int(1)]),
+        "0 < 5 by the constant, but the input 1 is below 2"
+    );
+}
+
+#[test]
+fn the_name_the_guard_gives_the_state_is_a_constant_in_a_change_that_takes_no_state() {
+    let guard = binary(Binary::Less, field("n"), int(3));
+    let mut counted = action("count", Some(guard), record(vec![("n", name("s"))]));
+    counted.change.state_name = None;
+    let mut source = with_action(counted);
+    source.constants.push(("s".to_owned(), int(3)));
+    let model = lowered(&source);
+    assert_eq!(
+        shown(&model, &after(&model, 0, &[]))[3],
+        "3",
+        "`s` is the state in the guard and the constant 3 in the change"
+    );
+}
+
+#[test]
+fn a_function_that_takes_an_input_the_action_does_not_declare_is_refused() {
+    let mut counted = action("count", None, here(record(vec![("n", int(1))])));
+    counted.change.taken.push("amount".to_owned());
+    let problem = the_problem(&with_action(counted));
+    assert_eq!(problem.place(), HERE);
+    assert_eq!(problem.feature, "the input `amount`");
 }

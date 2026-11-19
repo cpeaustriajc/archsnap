@@ -4,14 +4,17 @@ use crate::names::LIBRARY_MODULE;
 use crate::terms::bare;
 use earnest_ast::{Draft, HelperDraft, ViewDraft};
 use oxc_ast::ast::{
-    Argument, ArrowFunctionExpression, BindingPattern, CallExpression, Declaration, Expression,
-    ImportDeclaration, ImportDeclarationSpecifier, Program, Statement, VariableDeclaration,
-    VariableDeclarationKind,
+    Argument, ArrowFunctionExpression, BindingPattern, CallExpression, Declaration,
+    ExportNamedDeclaration, Expression, ImportDeclaration, ImportDeclarationSpecifier, Program,
+    Statement, VariableDeclaration, VariableDeclarationKind,
 };
 use oxc_span::GetSpan;
 
 const ONLY_AT_THE_TOP: &str =
     "a model file has only imports, `const` declarations, `type` and `interface`";
+const NOT_A_CONSTANT: &str = "a top-level `const` holds a model, an action, a rule, an end or a \
+    view made by calling the library or the model directly, a declaration, a helper function, \
+    or a number, text or boolean written out or computed from earlier constants";
 
 pub(crate) enum Pending<'p, 'a> {
     Helper {
@@ -20,6 +23,9 @@ pub(crate) enum Pending<'p, 'a> {
     },
     Constant {
         name: String,
+        value: &'p Expression<'a>,
+    },
+    Refused {
         value: &'p Expression<'a>,
     },
     Member {
@@ -67,6 +73,7 @@ impl Reader<'_> {
                     });
                 }
                 Pending::Constant { name, value } => constants.push((name, self.term(value))),
+                Pending::Refused { value } => self.refuse_constant(value),
                 Pending::Member {
                     model,
                     kind,
@@ -98,8 +105,8 @@ impl Reader<'_> {
             }
             Statement::TSTypeAliasDeclaration(_)
             | Statement::TSInterfaceDeclaration(_)
-            | Statement::EmptyStatement(_)
-            | Statement::ExportNamedDeclaration(_) => {}
+            | Statement::EmptyStatement(_) => {}
+            Statement::ExportNamedDeclaration(listed) => self.export_list(listed),
             Statement::ExportFromDeclaration(from) if from.export_kind.is_type() => {}
             Statement::ExportAllDeclaration(all) if all.export_kind.is_type() => {}
             Statement::ExportFromDeclaration(_) | Statement::ExportAllDeclaration(_) => {
@@ -257,13 +264,71 @@ impl Reader<'_> {
             self.shapes.push((name.to_owned(), shape));
             return;
         }
+        if !self.is_plain_value(value) {
+            top.pending.push(Pending::Refused { value: init });
+            return;
+        }
         if let Some(number) = self.whole_number(value) {
             self.numbers.push((name.to_owned(), number));
         }
+        self.plain_values.push(name.to_owned());
         top.pending.push(Pending::Constant {
             name: name.to_owned(),
             value: init,
         });
+    }
+
+    fn is_plain_value(&self, wrapped: &Expression<'_>) -> bool {
+        match bare(wrapped) {
+            Expression::BooleanLiteral(_)
+            | Expression::NumericLiteral(_)
+            | Expression::StringLiteral(_) => true,
+            Expression::TemplateLiteral(template) => template.expressions.is_empty(),
+            Expression::Identifier(name) => self
+                .plain_values
+                .iter()
+                .any(|known| known == name.name.as_str()),
+            Expression::UnaryExpression(unary) => self.is_plain_value(&unary.argument),
+            Expression::BinaryExpression(binary) => {
+                self.is_plain_value(&binary.left) && self.is_plain_value(&binary.right)
+            }
+            Expression::LogicalExpression(logical) => {
+                self.is_plain_value(&logical.left) && self.is_plain_value(&logical.right)
+            }
+            Expression::ConditionalExpression(choice) => {
+                self.is_plain_value(&choice.test)
+                    && self.is_plain_value(&choice.consequent)
+                    && self.is_plain_value(&choice.alternate)
+            }
+            _ => false,
+        }
+    }
+
+    fn refuse_constant(&mut self, value: &Expression<'_>) {
+        let before = self.problems.len();
+        self.term(value);
+        if self.problems.len() == before {
+            let written = self.quoted(value.span());
+            self.refuse(value.span().start, &written, NOT_A_CONSTANT);
+        }
+    }
+
+    fn export_list(&mut self, listed: &ExportNamedDeclaration<'_>) {
+        if listed.export_kind.is_type() {
+            return;
+        }
+        for specifier in &listed.specifiers {
+            if specifier.export_kind.is_value()
+                && specifier.local.name() != specifier.exported.name()
+            {
+                self.refuse(
+                    specifier.span.start,
+                    &self.quoted(specifier.span),
+                    "an id is the name of the constant, so a constant is exported under its \
+                     own name",
+                );
+            }
+        }
     }
 
     fn model(
@@ -299,6 +364,7 @@ impl Reader<'_> {
             constants: Vec::new(),
             helpers: Vec::new(),
         };
+        self.models.push(constant.to_owned());
         top.owners.push((constant.to_owned(), top.drafts.len()));
         top.drafts.push(draft);
     }
@@ -518,6 +584,188 @@ mod tests {
                 feature(6, "`M.check`")
             ],
             "four problems on four lines"
+        );
+    }
+
+    const CLIMB: &str = "export const Climb = m.model(\"Climb\", { n: m.int(0, 3) });\n";
+    const LOW: &str = "{ says: \"low\", holds: (s) => s.n <= 1 }";
+
+    fn climb_features(rest: &str) -> Vec<(u32, String)> {
+        features(&format!("{CLIMB}{}", rest.replace("LOW", LOW)))
+    }
+
+    #[test]
+    fn a_rule_made_any_other_way_than_by_calling_the_model_at_the_top_is_refused() {
+        let not_a_value = |line: u32| feature(line, "`Climb`");
+        assert_eq!(
+            climb_features("export const low = true && Climb.rule(LOW);\n"),
+            [not_a_value(3)],
+            "on the right of a logical and"
+        );
+        assert_eq!(
+            climb_features("export const low = true ? Climb.rule(LOW) : null;\n"),
+            [not_a_value(3)],
+            "in a branch of a choice"
+        );
+        assert_eq!(
+            climb_features("export const low = Climb.rule.call(Climb, LOW);\n"),
+            [not_a_value(3), not_a_value(3)],
+            "with `call` on the method: the model is named twice"
+        );
+        assert_eq!(
+            climb_features("export const all = { low: Climb.rule(LOW) };\n"),
+            [not_a_value(3)],
+            "inside a record"
+        );
+        assert_eq!(
+            climb_features(
+                "const same = <T>(part: T) => part;\nexport const low = same(Climb.rule(LOW));\n"
+            ),
+            [not_a_value(4)],
+            "passed through a helper function"
+        );
+        assert_eq!(
+            climb_features("const make = () => Climb.rule(LOW);\n"),
+            [not_a_value(3)],
+            "inside a helper function"
+        );
+        assert_eq!(
+            climb_features("export const low = [Climb.rule(LOW)];\n"),
+            [feature(3, "`[]`")],
+            "inside a list, which is refused before the model is read"
+        );
+    }
+
+    #[test]
+    fn a_rule_made_through_another_name_for_the_model_or_the_library_is_refused() {
+        let lines = |rest: &str| -> Vec<u32> {
+            climb_features(rest)
+                .into_iter()
+                .map(|(line, _)| line)
+                .collect()
+        };
+        assert_eq!(
+            lines("const Alias = Climb;\nexport const low = Alias.rule(LOW);\n"),
+            [3, 4],
+            "the other name, and the rule made through it"
+        );
+        assert_eq!(
+            climb_features("const lib = m;\n"),
+            [feature(3, "`m`")],
+            "another name for the library"
+        );
+    }
+
+    #[test]
+    fn a_constant_is_a_plain_value_written_out_or_computed_from_earlier_constants() {
+        let reading = read(
+            "m.model.ts",
+            "import { m } from \"@earnest/model\";\n\
+             const MAX = 3;\n\
+             const LOW = -MAX + 1;\n\
+             const NAME = `n`;\n\
+             const ON = !false && MAX > 2;\n\
+             const PICK = (ON ? MAX : LOW) as number;\n\
+             export const A = m.model(\"A\", { n: m.int(LOW, MAX) });\n",
+        );
+        assert_eq!(reading.problems, [], "every one is a plain value");
+        let draft = reading.drafts.first().expect("one model");
+        let constants: Vec<(&str, String)> = draft
+            .constants
+            .iter()
+            .map(|(name, term)| (name.as_str(), show(term)))
+            .collect();
+        assert_eq!(
+            constants,
+            [
+                ("MAX", "3".to_owned()),
+                ("LOW", "(+ (- MAX) 1)".to_owned()),
+                ("NAME", "\"n\"".to_owned()),
+                ("ON", "(&& (! false) (> MAX 2))".to_owned()),
+                ("PICK", "(? ON MAX LOW)".to_owned())
+            ],
+            "the constants of the file"
+        );
+    }
+
+    #[test]
+    fn a_constant_that_holds_anything_else_is_refused_even_when_nothing_reads_it() {
+        assert_eq!(
+            features("const LATE = AFTER + 1;\nconst AFTER = 1;\n"),
+            [feature(2, "`AFTER + 1`")],
+            "a constant declared later has no value yet"
+        );
+        assert_eq!(
+            features("const BOX = { n: 1 };\n"),
+            [feature(2, "`{ n: 1 }`")],
+            "a record"
+        );
+        assert_eq!(
+            features("const NOTHING = null;\n"),
+            [feature(2, "`null`")],
+            "null"
+        );
+        assert_eq!(
+            features("const twice = (n: number) => n * 2;\nconst FOUR = twice(2);\n"),
+            [feature(3, "`twice(2)`")],
+            "a call of a helper function"
+        );
+        assert_eq!(
+            features("const NOW = Date.now();\n"),
+            [feature(2, "`Date.now`")],
+            "what is outside the library keeps its own sentence"
+        );
+        assert_eq!(
+            features("const LOUD = `${1}!`;\n"),
+            [feature(2, "`'${1}!'`")],
+            "a template string with a hole"
+        );
+    }
+
+    #[test]
+    fn a_constant_is_exported_under_its_own_name() {
+        assert_eq!(
+            climb_features("const low = Climb.rule(LOW);\nexport { low as high };\n"),
+            [feature(4, "`low as high`")],
+            "the id would be `low` here and `high` for whoever imports the file"
+        );
+        assert_eq!(
+            climb_features("const low = Climb.rule(LOW);\nexport { low, Climb as Climb };\n"),
+            [],
+            "the same name on both sides"
+        );
+    }
+
+    #[test]
+    fn a_call_on_the_model_that_stands_alone_is_refused() {
+        let found = climb_features("Climb.rule(LOW);\n");
+        assert_eq!(found.len(), 1, "one problem: {found:?}");
+        assert_eq!(found[0].0, 3, "on the line of the statement");
+    }
+
+    #[test]
+    fn a_part_written_twice_is_refused_because_only_the_last_would_count() {
+        assert_eq!(
+            climb_features(
+                "export const low = Climb.rule({ says: \"low\", holds: (s) => s.n <= 1, \
+                 holds: () => true });\n"
+            ),
+            [feature(3, "`holds`")],
+            "the reader would check the first condition and the program would run the second"
+        );
+        assert_eq!(
+            climb_features(
+                "export const inc = Climb.action(\"inc\", { then: (s) => ({ n: 1, n: s.n }) });\n"
+            ),
+            [feature(3, "`n`")],
+            "a field of a record"
+        );
+        assert_eq!(
+            features(
+                "export const Twice = m.model(\"Twice\", { n: m.int(0, 1), n: m.boolean() });\n"
+            ),
+            [feature(2, "`n`")],
+            "a field of a model"
         );
     }
 }

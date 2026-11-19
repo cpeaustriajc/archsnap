@@ -131,3 +131,30 @@ fn a_record_gives_its_fields_by_name_and_other_values_give_none() {
     assert_eq!(Value::Null.field(name), None);
     assert_eq!(Value::Int(1).field(name), None);
 }
+
+#[test]
+fn a_text_value_prints_on_one_line_and_can_be_read_back() {
+    let mut symbols = Symbols::default();
+    let awkward = text(&mut symbols, "a\"b\\c\nd\re\tf\u{2028}g\u{0}h");
+    assert_eq!(
+        symbols.show(&awkward),
+        r#""a\"b\\c\nd\re\tf\u{2028}g\u{0}h""#
+    );
+    assert_eq!(
+        symbols.json(&awkward),
+        json!("a\"b\\c\nd\re\tf\u{2028}g\u{0}h")
+    );
+    assert_eq!(symbols.plain(&awkward), "a\"b\\c\nd\re\tf\u{2028}g\u{0}h");
+}
+
+#[test]
+fn one_text_with_a_quote_and_a_comma_does_not_print_as_two_texts() {
+    let mut symbols = Symbols::default();
+    let one = text(&mut symbols, "a\", \"b");
+    let a = text(&mut symbols, "a");
+    let b = text(&mut symbols, "b");
+    let single = Value::seq(vec![one]);
+    let pair = Value::seq(vec![a, b]);
+    assert_eq!(symbols.show(&single), r#"["a\", \"b"]"#);
+    assert_eq!(symbols.show(&pair), r#"["a", "b"]"#);
+}

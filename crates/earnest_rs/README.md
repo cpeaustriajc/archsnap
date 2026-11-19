@@ -18,11 +18,13 @@ What it reads:
 | A method of the block without an attribute, a top-level `fn` | A helper, called as `self.name(..)` or `name(..)` |
 | A top-level `const` | A constant, also usable as a bound in `#[range]` and as a `MAX` or `CAPACITY` |
 | `x.clone()`, `&x` | `x` |
-| An item marked `#[cfg(test)]` | Skipped |
+| An item marked `#[cfg(test)]` that is not part of a model: a module, a function, a constant, a plain `impl` block | Skipped |
 
 Anything else is a problem with its 1-based line and column, the construct in backticks and a
 sentence: a loop, `match`, `if let`, a clock, a random number, input or output, `unsafe`, an
 unknown macro or method, a change in place (`let mut`, `=`, `+=`, `&mut self`), a cast, text in
-quotes, an import from outside `earnest`, and any other top-level item. Every problem in the file
-is reported, and a file with a problem gives no drafts. Names and kinds are not checked here:
+quotes, an import from outside `earnest`, any other top-level item, any other `#[cfg]` or
+`#[cfg_attr]` (a part of a model kept in one build only can't be checked for every build), and
+`#[action]`, `#[rule]` or `#[end]` written with a path, which `#[model]` would not see. Every
+problem in the file is reported, and a file with a problem gives no drafts. Names and kinds are not checked here:
 `earnest_semantic` does that when it lowers a draft.

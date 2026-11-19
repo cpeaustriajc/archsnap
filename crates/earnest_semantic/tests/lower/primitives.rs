@@ -459,3 +459,40 @@ fn a_helper_called_twice_keeps_each_call_s_arguments_apart() {
     source.rules.push(rule("apart", both));
     assert_eq!(verdict_of(&source), Ok(true));
 }
+
+fn named_like_properties() -> Vec<(&'static str, Shape)> {
+    let tray = record_shape(vec![("isEmpty", boolean())]);
+    vec![
+        ("isFull", starting(boolean(), yes())),
+        ("inbox", queue_shape(range(0, 9), 1)),
+        ("tray", starting(tray, record(vec![("isEmpty", no())]))),
+    ]
+}
+
+#[test]
+fn a_primitive_property_is_read_by_either_spelling_of_its_name() {
+    let reads = |property: &str| prop(field("inbox"), property);
+    assert!(holds(named_like_properties(), reads("isEmpty")));
+    assert!(holds(named_like_properties(), reads("is_empty")));
+    assert!(fails(named_like_properties(), reads("isFull")));
+    assert!(fails(named_like_properties(), reads("is_full")));
+}
+
+#[test]
+fn a_field_named_like_a_primitive_property_is_still_the_field() {
+    assert!(
+        holds(named_like_properties(), field("isFull")),
+        "the state field, which starts true"
+    );
+    assert!(
+        fails(named_like_properties(), prop(field("tray"), "isEmpty")),
+        "the record's own field, which is false"
+    );
+    assert!(
+        holds(
+            named_like_properties(),
+            differ(field("isFull"), prop(field("inbox"), "isFull"))
+        ),
+        "the field is true while the empty queue is not full"
+    );
+}

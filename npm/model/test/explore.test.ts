@@ -339,7 +339,7 @@ const People = () =>
 			.initial(null),
 	});
 
-test("a rule that reads a field of null is a fault, and the rule is not called broken", () => {
+test("a rule that reads a field of null is a fault, and the rule is unknown, not broken", () => {
 	const Model = People();
 	const adult = Model.rule({
 		says: "Whoever is there is an adult",
@@ -350,7 +350,7 @@ test("a rule that reads a field of null is a fault, and the rule is not called b
 	assert.equal(found.states, 1);
 	assert.equal(found.status, "fail");
 	assert.deepEqual(found.rules, [
-		{ id: "adult", says: "Whoever is there is an adult", verdict: "holds", path: null },
+		{ id: "adult", says: "Whoever is there is an adult", verdict: "unknown", path: null },
 	]);
 	assert.deepEqual(found.findings, [
 		{
@@ -359,6 +359,48 @@ test("a rule that reads a field of null is a fault, and the rule is not called b
 			path: { start: [{ name: "who", value: null }], steps: [] },
 		},
 	]);
+});
+
+test("only a rule that could not be evaluated somewhere and was not seen broken is unknown", () => {
+	const Model = m.model("Guest", {
+		who: m
+			.record({ age: m.int(0, 1) })
+			.optional()
+			.initial({ age: 0 }),
+	});
+	const grow = Model.action("the guest grows up", {
+		when: (s) => s.who !== null && s.who.age === 0,
+		then: () => ({ who: { age: 1 } }),
+	});
+	const leave = Model.action("the guest leaves", {
+		when: (s) => s.who !== null && s.who.age === 1,
+		then: () => ({ who: null }),
+	});
+	const known = Model.rule({
+		says: "The guest has an age",
+		holds: (s) => assumedPresent(s.who) && s.who.age >= 0,
+	});
+	const young = Model.rule({
+		says: "The guest is young",
+		holds: (s) => assumedPresent(s.who) && s.who.age === 0,
+	});
+	const small = Model.rule({
+		says: "Nobody is older than one",
+		holds: (s) => s.who === null || s.who.age <= 1,
+	});
+	const gone = Model.end({ says: "The guest left", when: (s) => s.who === null });
+	const found = explore(Model, { exports: { grow, leave, known, young, small, gone } });
+	assert.equal(found.states, 3);
+	assert.deepEqual(
+		found.rules.map((rule) => [rule.id, rule.verdict, rule.path?.steps.length ?? null]),
+		[
+			["known", "unknown", null],
+			["young", "broken", 1],
+			["small", "holds", null],
+		],
+	);
+	assert.deepEqual(kinds(found), ["fault"]);
+	assert.equal(only(found).path.steps.length, 2);
 });
 
 test("a when that faults leaves the action unable to happen", () => {

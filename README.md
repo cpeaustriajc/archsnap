@@ -65,7 +65,9 @@ unreadable  src/clock.model.ts
 
 - The status word is `pass`, `fail`, `unfinished` or `unreadable`.
 - A model line has the status, the model name, `<n> states` (`<n> states so far` when unfinished)
-  and `<n> ms`. An unchanged model served from the cache ends with `(cached)`.
+  and `<n> ms`. An unchanged model served from the cache ends with `(cached)`. A cached result
+  is served only by a build of the checker made from the same sources as the build that stored
+  it.
 - `broken` names the rule's id and its sentence, and is followed by the shortest path to the first
   state that breaks it: a `start` line with every field, then one numbered line per action with
   the action's id, its input as `name = value` when it has one, and each field that changed as
@@ -80,7 +82,10 @@ unreadable  src/clock.model.ts
   `pass`, `fail` and `unfinished`, and adds `<n> unreadable` only when there are unreadable
   files. In JSON, `summary.models` counts models only and `summary.unreadable` counts files.
 - Values print as `"text"`, `12`, `true`, `null`, `{a, b}` for a set, `[a, b]` for a sequence or
-  queue, `{k -> v}` for a map and `{name: value}` for a record.
+  queue, `{k -> v}` for a map and `{name: value}` for a record. Inside the quotes of a text, `"`
+  prints as `\"`, `\` as `\\`, a line feed as `\n`, a carriage return as `\r`, a tab as `\t` and
+  any other control character or line separator as `\u{...}` with its code in hexadecimal, so a
+  value is always on one line and reads only one way.
 
 ### Exit codes
 
@@ -166,6 +171,13 @@ but no reachable state tells the two apart or the old condition can't be read ag
 model, and `reworded` when only its sentence differs. A rule whose sentence and condition are
 unchanged is not listed.
 
+Every rule the two commits share is compared, not only those whose text was edited. The old
+condition is read with the constants and helper functions of the file at the base commit, so a
+rule is `loosened` when only a constant or a helper it uses changed. A condition differs when its
+text does, or when it means something else through such a constant or helper. The text of a
+condition is compared and printed with each run of white space as one space, in TypeScript and
+in Rust, so moving white space is not a change.
+
 ### Statechart and report
 
 `earnest chart` prints one fenced `mermaid` block holding a `stateDiagram-v2` chart. States and
@@ -239,18 +251,29 @@ export type State = m.Infer<typeof AddToCartFocus>;
 
 - Imports from `@earnest/model`, and `import type` from anywhere.
 - Top-level `const` declarations of declarations (`m.enum(...)`), numbers, text, booleans and
-  helper functions written as arrow functions.
+  helper functions written as arrow functions. A number, text or boolean is written out, or
+  computed from constants declared before it with the operators below.
+- A model, an action, a rule, an end or a view, each made by calling `m.model` or the model
+  itself as the whole value of a top-level `const`: `export const low = Cart.rule({ ... })`.
+  The model's name is refused anywhere else, so a rule can't be made through another name, in
+  a condition, in a record, in a list or inside a function. A constant is exported under its
+  own name.
 - `type` and `interface` declarations.
 - In a function: literals, `null`, field and input reads, `===`, `!==`, `<`, `<=`, `>`, `>=`,
   `&&`, `||`, `!`, `+`, `-` (also as a sign: `-1`), `*`, `%`, the `? :` choice, the `!` after a
   value that TypeScript needs to read a field of an optional (`s.chosen!.qty`), object literals with spread, calls to the
   primitives below and to helper functions, and template strings in `view` labels. A function
   body is one expression, or a block of `const` declarations and `if (...) return ...;`
-  statements that ends in a `return`.
+  statements that ends in a `return`. Nothing follows that `return`.
+- A name means what TypeScript says it means. In an action, an input is in scope only in a
+  function that takes it, as `(s, { by })` or as a field of the whole input, `(s, input) =>
+  input.by`; `when` and `then` may take different ones. Where a function does not take it, the
+  same name is the top-level constant.
 
 Anything else makes the file unreadable: `await`, loops, `let`, assignment, `new`, classes,
-`fetch`, `Date`, `Math.random`, other imports, and any name the file does not define. `%` on a
-negative number is a fault, because languages disagree on its result.
+`fetch`, `Date`, `Math.random`, other imports, a name written twice in one object, and any name
+the file does not define, also in a constant that nothing reads. `%` on a negative number is a
+fault, because languages disagree on its result.
 
 ## Writing a model in Rust
 
@@ -310,6 +333,11 @@ impl Turnstile {
   `if condition { return Some(Self { .. }); }` are allowed.
 - A rule or an end is a method that returns `bool`. Ids are the method names. An enum value is
   known to the checker by its variant name, so `Gate::Locked` prints as `"Locked"`.
+- A method without `#[action]`, `#[rule]` or `#[end]` is a helper function. The three
+  attributes are written plainly, never with a path. No part of a model is under `#[cfg]` or
+  `#[cfg_attr]`: the checker reads one text for every build. Only an item that is not part of
+  a model (a test module, a function, a plain `impl` block) may be `#[cfg(test)]`, and it is
+  skipped.
 - A model is ordinary Rust: a test calls `state.pay()` to take one step, which is how a path from
   the report is replayed with `cargo test`. `Turnstile::starts()` lists every start state, and
   a rule or an end is called the same way: `state.stays_locked()`.
@@ -342,6 +370,14 @@ Collection values are written with `m.setOf(a, b)`, `m.seqOf(a, b)` and `m.mapOf
 TypeScript, and `Set::of([a, b])`, `Seq::of([a, b])` and `Map::of([(k, v)])` in Rust. Sending to
 a full queue, pushing past a sequence's `max`, or counting past a range is not an error in the
 primitive: the checker reports the state as out of range, with the path to it.
+
+An optional value has no order. `<`, `<=`, `>` and `>=` between two optional values make the
+file unreadable, in Rust too, where `None < Some(5)` compiles: write
+`value.is_some_and(|number| number < 5)`. A number compared or added with an optional number
+reads the number inside, and is a fault in a state where it is `null`. A record may be spread
+from an optional record the same way: `{ ...s.chosen!, qty: 1 }`. A field may have the name of
+a primitive's property, such as `isFull`: what `value.isFull` reads is decided by what `value`
+is.
 
 The TypeScript library also runs as ordinary code. `explore(Model)` searches a model in Node and
 returns its distinct state count, each rule's verdict and the shortest path to each broken rule.

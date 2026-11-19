@@ -62,6 +62,9 @@ pub(crate) fn why_outside(path: &str) -> &'static str {
     }
 }
 
+const ONE_BUILD: &str = "the checker reads the file as it is written, for every build at once: \
+    a part kept or left out by `cfg` would be checked in one build and missing in another";
+
 pub(crate) fn attribute<'a>(attributes: &'a [Attribute], name: &str) -> Option<&'a Attribute> {
     attributes
         .iter()
@@ -90,6 +93,16 @@ impl<'a> Reader<'a> {
             &format!("`{feature}`"),
             message,
         ));
+    }
+
+    pub(crate) fn refuse_conditional(&mut self, attributes: &[Attribute]) {
+        for attribute in attributes {
+            let path = attribute.path();
+            if path.is_ident("cfg") || path.is_ident("cfg_attr") {
+                let feature = format!("#[{}]", path_text(path));
+                self.refuse(attribute.pound_token.span, &feature, ONE_BUILD);
+            }
+        }
     }
 
     pub(crate) fn nothing(&mut self, span: Span, feature: &str, message: &str) -> Term {

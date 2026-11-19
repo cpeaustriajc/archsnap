@@ -11,6 +11,9 @@ use oxc_syntax::operator::{BinaryOperator, UnaryOperator};
 
 const NEEDS_A_NUMBER: &str = "a whole number or a top-level number constant is needed here";
 
+pub(crate) const WRITTEN_TWICE: &str =
+    "this name is written twice in one object, where only the last one would count";
+
 impl Reader<'_> {
     pub(crate) fn is_declaration(&self, wrapped: &Expression<'_>) -> bool {
         match bare(wrapped) {
@@ -99,6 +102,9 @@ impl Reader<'_> {
             };
             match written.key.static_name() {
                 Some(name) if !written.computed && !written.method => {
+                    if found.iter().any(|(earlier, _, _)| *earlier == name) {
+                        self.refuse(start, &name, WRITTEN_TWICE);
+                    }
                     found.push((name.into_owned(), start, &written.value));
                 }
                 _ => {
@@ -352,7 +358,6 @@ impl Reader<'_> {
         let mut found = Vec::new();
         for (name, _, value) in self.entries(fields) {
             let shape = self.shape(value);
-            self.field_names.push(name.clone());
             found.push((name, shape));
         }
         found

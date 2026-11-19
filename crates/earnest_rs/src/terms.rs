@@ -3,9 +3,9 @@ use earnest_ast::{Binary, Reach, Term, TermKind, Unary};
 use proc_macro2::Span;
 use syn::spanned::Spanned;
 use syn::{
-    BinOp, Expr, ExprBinary, ExprCall, ExprClosure, ExprField, ExprIf, ExprLit, ExprMethodCall,
-    ExprPath, ExprStruct, ExprUnary, GenericArgument, Lit, Macro, Member, Pat, PathArguments, Type,
-    UnOp,
+    Attribute, BinOp, Expr, ExprBinary, ExprCall, ExprClosure, ExprField, ExprIf, ExprLit,
+    ExprMethodCall, ExprPath, ExprStruct, ExprUnary, GenericArgument, Lit, Macro, Member, Pat,
+    PathArguments, Type, UnOp,
 };
 
 const PRIMITIVES: [&str; 50] = [
@@ -79,6 +79,27 @@ fn unwrapped(expr: &Expr) -> &Expr {
     }
 }
 
+fn attributes_of(expr: &Expr) -> &[Attribute] {
+    match expr {
+        Expr::Binary(found) => &found.attrs,
+        Expr::Block(found) => &found.attrs,
+        Expr::Call(found) => &found.attrs,
+        Expr::Closure(found) => &found.attrs,
+        Expr::Field(found) => &found.attrs,
+        Expr::If(found) => &found.attrs,
+        Expr::Lit(found) => &found.attrs,
+        Expr::Macro(found) => &found.attrs,
+        Expr::MethodCall(found) => &found.attrs,
+        Expr::Paren(found) => &found.attrs,
+        Expr::Path(found) => &found.attrs,
+        Expr::Reference(found) => &found.attrs,
+        Expr::Return(found) => &found.attrs,
+        Expr::Struct(found) => &found.attrs,
+        Expr::Unary(found) => &found.attrs,
+        _ => &[],
+    }
+}
+
 fn is_state(expr: &Expr) -> bool {
     matches!(unwrapped(expr), Expr::Path(name) if name.path.is_ident("self"))
 }
@@ -119,6 +140,7 @@ fn changes_in_place(op: &BinOp) -> bool {
 
 impl Reader<'_> {
     pub(crate) fn term(&mut self, expr: &Expr) -> Term {
+        self.refuse_conditional(attributes_of(expr));
         match expr {
             Expr::Paren(inner) => self.term(&inner.expr),
             Expr::Group(inner) => self.term(&inner.expr),
@@ -486,6 +508,7 @@ impl Reader<'_> {
         }
         let mut fields = Vec::with_capacity(literal.fields.len());
         for field in &literal.fields {
+            self.refuse_conditional(&field.attrs);
             let value = self.term(&field.expr);
             match &field.member {
                 Member::Named(field_name) => fields.push((field_name.to_string(), value)),

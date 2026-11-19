@@ -419,3 +419,98 @@ fn a_column_counts_characters_and_a_rule_text_survives_them() {
     assert_eq!(draft.rules[0].says, "Café ☕", "the sentence");
     assert_eq!(draft.rules[0].text, "self.height < 9", "the body's text");
 }
+
+const SHORT: &str = "    #[rule(\"The pile is short\")]
+    fn short(&self) -> bool {
+        self.height < 3
+    }
+";
+
+#[test]
+fn a_rule_kept_or_left_out_by_cfg_is_refused() {
+    let source = pile(&format!("    #[cfg(feature = \"strict\")]\n{SHORT}"));
+    assert_eq!(
+        places(&source),
+        [at(14, 5, "`#[cfg]`")],
+        "the rule would be checked in one build and missing in another"
+    );
+    let renamed = pile(&SHORT.replace(
+        "#[rule(",
+        "#[cfg_attr(feature = \"strict\", rule(\"The pile is short\"))]\n    #[doc(alias = ",
+    ));
+    assert_eq!(
+        places(&renamed),
+        [at(14, 5, "`#[cfg_attr]`")],
+        "an attribute that is there in some builds only"
+    );
+}
+
+#[test]
+fn a_model_block_or_a_state_only_in_test_builds_is_refused_and_not_skipped() {
+    let block = pile(SHORT).replace("#[model]", "#[cfg(test)]\n#[model]");
+    assert_eq!(
+        places(&block),
+        [at(12, 1, "`#[cfg]`")],
+        "the block holds the model's rules"
+    );
+    let state = pile(SHORT).replace("#[derive", "#[cfg(test)]\n#[derive");
+    assert_eq!(
+        places(&state),
+        [at(3, 1, "`#[cfg]`")],
+        "the struct is the model"
+    );
+}
+
+#[test]
+fn a_statement_a_field_or_an_input_under_cfg_is_refused() {
+    let guarded = pile(
+        "    #[action(\"a box is added\")]
+    fn add(&self, #[cfg(test)] #[range(1, 2)] boxes: u8) -> Option<Self> {
+        #[cfg(debug_assertions)]
+        require!(self.height < 3);
+        #[cfg(test)]
+        let next = self.height + boxes;
+        Some(Self { #[cfg(test)] height: next, ..self.clone() })
+    }
+",
+    );
+    assert_eq!(
+        places(&guarded),
+        [
+            at(15, 19, "`#[cfg]`"),
+            at(16, 9, "`#[cfg]`"),
+            at(18, 9, "`#[cfg]`"),
+            at(20, 21, "`#[cfg]`")
+        ],
+        "an input, a `require!`, a `let` and a field of the result"
+    );
+    let field = pile(SHORT).replace(
+        "    #[initial(false)]",
+        "    #[cfg(test)]\n    #[initial(false)]",
+    );
+    assert_eq!(
+        places(&field),
+        [at(8, 5, "`#[cfg]`")],
+        "a field of the state"
+    );
+}
+
+#[test]
+fn a_role_written_with_a_path_is_refused_because_the_macro_would_not_see_it() {
+    let source = pile(&SHORT.replace("#[rule(", "#[earnest::model::rule("));
+    assert_eq!(
+        places(&source),
+        [at(14, 5, "`#[earnest::model::rule]`")],
+        "`#[model]` would leave the method a helper, and the rule unchecked"
+    );
+}
+
+#[test]
+fn tests_and_their_helpers_under_cfg_test_are_still_skipped() {
+    let source = format!(
+        "{}\n#[cfg(test)]\nfn loud() {{ println!(\"x\"); }}\n\n#[cfg(test)]\nimpl Pile {{ fn poke(&mut self) {{ self.height += 1; }} }}\n\n#[cfg(test)]\nmod tests {{ use std::time::Instant; }}\n",
+        pile(SHORT)
+    );
+    let draft = only_draft("src/pile.rs", &source);
+    assert_eq!(draft.rules.len(), 1, "the rule of the model is read");
+}

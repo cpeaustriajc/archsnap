@@ -31,7 +31,8 @@ pub(crate) struct Reader<'s> {
     top_names: Vec<String>,
     shapes: Vec<(String, Shape)>,
     numbers: Vec<(String, i64)>,
-    field_names: Vec<String>,
+    plain_values: Vec<String>,
+    models: Vec<String>,
     locals: Vec<(String, String)>,
 }
 
@@ -39,6 +40,13 @@ pub(crate) struct Reader<'s> {
 ///
 /// `file` is the path to print in each problem; it also picks the dialect, so a path ending
 /// in `.tsx` is read as TSX and any other as TypeScript. Nothing is read from disk.
+///
+/// A top-level `const` is read as exactly one of: a model, an action, a rule, an end or a view
+/// made by calling the library or the model directly; a declaration; a helper function; or a
+/// number, text or boolean written out or computed from earlier constants. Any other value is
+/// a problem, whether or not something reads the constant, and so is the name of a model used
+/// as a value. In an action, each function's own parameters decide which inputs it has in
+/// scope. A rule's `text` is in the normal form of `earnest_ast::condition_text`.
 ///
 /// When the reading has any problem the file is unreadable and its drafts must not be
 /// checked. Problems come in order of position and cover the whole file, except after a
@@ -82,7 +90,8 @@ impl<'s> Reader<'s> {
             top_names: Vec::new(),
             shapes: Vec::new(),
             numbers: Vec::new(),
-            field_names: Vec::new(),
+            plain_values: Vec::new(),
+            models: Vec::new(),
             locals: Vec::new(),
         }
     }

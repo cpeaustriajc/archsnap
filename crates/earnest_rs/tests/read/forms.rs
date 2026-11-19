@@ -66,10 +66,20 @@ fn an_action_takes_its_inputs_from_parameters_and_its_guard_from_every_require()
     let arrive = &draft.actions[0];
     assert_eq!(arrive.id, "arrive", "the id is the method name");
     assert_eq!(arrive.label, "a guest arrives", "the sentence");
-    assert_eq!(arrive.state_name.as_deref(), Some("self"), "the state");
     assert_eq!(
-        arrive.input_name, None,
+        arrive.change.state_name.as_deref(),
+        Some("self"),
+        "the state"
+    );
+    assert_eq!(
+        arrive.change.input_name, None,
         "inputs are read by their own names"
+    );
+    assert_eq!(arrive.change.taken, ["guest"], "every parameter is taken");
+    assert_eq!(
+        arrive.guard.as_ref().map(|guard| guard.taken.as_slice()),
+        Some(["guest".to_owned()].as_slice()),
+        "the guard takes them too"
     );
     assert_eq!(arrive.inputs.len(), 1, "one parameter after `&self`");
     assert_eq!(arrive.inputs[0].0, "guest", "the input's name");
@@ -78,7 +88,7 @@ fn an_action_takes_its_inputs_from_parameters_and_its_guard_from_every_require()
         "the input's declaration is its type"
     );
     let Some(TermKind::Binary(Binary::And, first, second)) =
-        arrive.guard.as_ref().map(|guard| &guard.kind)
+        arrive.guard.as_ref().map(|guard| &guard.term.kind)
     else {
         panic!("two `require!`s are joined with and: {:?}", arrive.guard);
     };
@@ -90,7 +100,7 @@ fn an_action_takes_its_inputs_from_parameters_and_its_guard_from_every_require()
         matches!(second.kind, TermKind::Binary(Binary::Or, _, _)),
         "then the second: {second:?}"
     );
-    let TermKind::Wrap(result) = &arrive.change.kind else {
+    let TermKind::Wrap(result) = &arrive.change.term.kind else {
         panic!("`Some(..)` wraps the result: {:?}", arrive.change);
     };
     let TermKind::Record { base, fields } = &result.kind else {
