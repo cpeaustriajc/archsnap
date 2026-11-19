@@ -1,0 +1,23 @@
+{
+	"name": "@earnest/model",
+	"version": "0.1.0",
+	"description": "The TypeScript library that earnest models are written with",
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"files": [
+		"src",
+		"README.md"
+	],
+	"engines": {
+		"node": ">=22.18"
+	},
+	"scripts": {
+		"check": "tsc --noEmit -p . && prettier --check . && node --test test/"
+	},
+	"devDependencies": {
+		"prettier": "^3.8.0",
+		"typescript": "^6.0.0"
+	}
+}

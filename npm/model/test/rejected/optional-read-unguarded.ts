@@ -1,0 +1,15 @@
+import { m } from "@earnest/model";
+
+const Press = m.enum(["keyboard", "virtual", "mouse"]);
+
+export const Cart = m.model("Cart", {
+	cta: m.enum(["Add", "Adding", "InCart"]).initial("Add"),
+	pressBy: Press.optional().initial(null),
+	seen: m.set(Press),
+	count: m.int(0, 3).initial(0),
+});
+
+export const typed = Cart.rule({
+	says: "The press has a long name",
+	holds: (s) => s.pressBy.length > 5,
+});
