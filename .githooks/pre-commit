@@ -1,0 +1,14 @@
+#!/bin/sh
+# Refuses the commit unless every quality check passes.
+# Enable once per clone with: git config core.hooksPath .githooks
+# It checks the working tree as it is on disk, not only the staged changes.
+
+if ! command -v just >/dev/null 2>&1; then
+    echo "pre-commit: 'just' is not on PATH; it is needed to run 'just check'. Install it (for example 'cargo install just') and commit again." >&2
+    exit 1
+fi
+
+if ! just check; then
+    echo "pre-commit: 'just check' failed; the commit was not made. Fix the failures above and commit again." >&2
+    exit 1
+fi
