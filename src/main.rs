@@ -18,7 +18,10 @@ use store::Store;
 const MAX_PRINTED_WARNINGS: usize = 10;
 
 #[derive(Parser)]
-#[command(version, about = "Weekly architecture snapshots of a TypeScript/JavaScript repo")]
+#[command(
+    version,
+    about = "Weekly architecture snapshots of a TypeScript/JavaScript repo"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
@@ -35,7 +38,7 @@ struct RunArgs {
     /// Repository to scan (defaults to the current directory).
     #[arg(long)]
     repo: Option<PathBuf>,
-    /// Output folder (defaults to <repo>/.archsnap).
+    /// Output folder (defaults to <repo>/.earnest).
     #[arg(long)]
     out: Option<PathBuf>,
     /// How many weeks that had commits to snapshot, newest first.
@@ -54,8 +57,8 @@ struct RunArgs {
 
 fn main() -> ExitCode {
     std::panic::set_hook(Box::new(|info| {
-        eprintln!("archsnap: internal error: {info}");
-        eprintln!("  help: this is a bug in archsnap; please report it with the command you ran");
+        eprintln!("earnest: internal error: {info}");
+        eprintln!("  help: this is a bug in earnest; please report it with the command you ran");
         std::process::exit(70);
     }));
     let Cmd::Run(args) = Cli::parse().command;
@@ -77,7 +80,7 @@ fn run(args: RunArgs) -> Result<(), Fatal> {
         return Err(Fatal::NotGitRepo(dir));
     }
     let git = Git::open(&dir, args.verbose)?;
-    let out = args.out.unwrap_or_else(|| git.root.join(".archsnap"));
+    let out = args.out.unwrap_or_else(|| git.root.join(".earnest"));
     let store = Store::open(&out)?;
 
     let mut warnings: Vec<Warning> = Vec::new();
@@ -133,24 +136,43 @@ fn run(args: RunArgs) -> Result<(), Fatal> {
 
     let mut weeks = Vec::with_capacity(total);
     for i in (0..snapshots.len()).rev() {
-        let before = if i == 0 { None } else { Some(&snapshots[i - 1]) };
+        let before = if i == 0 {
+            None
+        } else {
+            Some(&snapshots[i - 1])
+        };
         let mut snapshot = snapshots[i].clone();
         // File-level links only for the newest week: on big repos every week's links would bloat the page.
         if i + 1 != snapshots.len() {
             snapshot.edges.iter_mut().for_each(|e| e.links.clear());
         }
-        weeks.push(report::WeekView { diff: diff::diff(before, &snapshots[i]), snapshot });
+        weeks.push(report::WeekView {
+            diff: diff::diff(before, &snapshots[i]),
+            snapshot,
+        });
     }
 
     for w in warnings.iter().take(MAX_PRINTED_WARNINGS) {
         w.print();
     }
     if warnings.len() > MAX_PRINTED_WARNINGS {
-        eprintln!("…and {} more warnings (listed in the report)", warnings.len() - MAX_PRINTED_WARNINGS);
+        eprintln!(
+            "…and {} more warnings (listed in the report)",
+            warnings.len() - MAX_PRINTED_WARNINGS
+        );
     }
 
-    let repo_name = git.root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let html = report::render(&report::Report { repo: repo_name, shallow, weeks, warnings: &warnings });
+    let repo_name = git
+        .root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let html = report::render(&report::Report {
+        repo: repo_name,
+        shallow,
+        weeks,
+        warnings: &warnings,
+    });
     let path = store.write_report(&html)?;
     eprintln!("→ {}", path.display());
 

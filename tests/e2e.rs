@@ -16,7 +16,9 @@ struct Repo {
 
 impl Repo {
     fn new() -> Self {
-        let repo = Repo { dir: TempDir::new().unwrap() };
+        let repo = Repo {
+            dir: TempDir::new().unwrap(),
+        };
         repo.git(&["init", "-q", "-b", "main"], WEEK_37);
         repo
     }
@@ -41,7 +43,12 @@ impl Repo {
     fn git(&self, args: &[&str], date: &str) {
         let status = Command::new("git")
             .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-            .args(["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"])
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
             .args(args)
             .current_dir(self.path())
             .env("GIT_AUTHOR_DATE", date)
@@ -52,7 +59,7 @@ impl Repo {
     }
 
     fn out(&self) -> PathBuf {
-        self.path().join(".archsnap")
+        self.path().join(".earnest")
     }
 
     fn snapshot(&self, week: &str) -> Value {
@@ -61,8 +68,8 @@ impl Repo {
     }
 }
 
-fn archsnap(dir: &Path) -> Bin {
-    let mut cmd = Bin::cargo_bin("archsnap").unwrap();
+fn earnest(dir: &Path) -> Bin {
+    let mut cmd = Bin::cargo_bin("earnest").unwrap();
     cmd.current_dir(dir).env("NO_COLOR", "1").arg("run");
     cmd
 }
@@ -70,11 +77,14 @@ fn archsnap(dir: &Path) -> Bin {
 /// Two weeks of history: week 37 has src/a -> src/b, week 38 adds src/c.
 fn two_week_repo() -> Repo {
     let repo = Repo::new();
-    repo.write("src/a/index.ts", "import { b } from '../b/util.js';\nexport const a = b;\n")
-        .write("src/b/util.ts", "export const b = 1;\n")
-        .write("node_modules/pkg/index.js", "module.exports = 1;\n")
-        .write("src/types.d.ts", "declare const x: number;\n")
-        .commit("week 37", WEEK_37);
+    repo.write(
+        "src/a/index.ts",
+        "import { b } from '../b/util.js';\nexport const a = b;\n",
+    )
+    .write("src/b/util.ts", "export const b = 1;\n")
+    .write("node_modules/pkg/index.js", "module.exports = 1;\n")
+    .write("src/types.d.ts", "declare const x: number;\n")
+    .commit("week 37", WEEK_37);
     repo.write(
         "src/c/main.tsx",
         "import React from 'react';\nimport { a } from '../a';\nexport const c = () => a;\n",
@@ -87,7 +97,7 @@ fn two_week_repo() -> Repo {
 fn builds_weekly_snapshots_and_report() {
     let repo = two_week_repo();
 
-    archsnap(repo.path())
+    earnest(repo.path())
         .assert()
         .success()
         .stderr(predicate::str::contains("[1/2]"))
@@ -98,13 +108,25 @@ fn builds_weekly_snapshots_and_report() {
     assert!(w37["modules"].get("src/a").is_some());
     assert!(w37["modules"].get("src/c").is_none());
     assert!(w38["modules"].get("src/c").is_some());
-    assert!(w38["modules"].get("node_modules/pkg").is_none(), "node_modules must be ignored");
-    assert_eq!(w38["stats"]["files"], 3, ".d.ts and node_modules are not counted");
+    assert!(
+        w38["modules"].get("node_modules/pkg").is_none(),
+        "node_modules must be ignored"
+    );
+    assert_eq!(
+        w38["stats"]["files"], 3,
+        ".d.ts and node_modules are not counted"
+    );
 
     let edges = w38["edges"].as_array().unwrap();
     let has = |from: &str, to: &str| edges.iter().any(|e| e["from"] == from && e["to"] == to);
-    assert!(has("src/a", "src/b"), ".js specifier resolves to the .ts file");
-    assert!(has("src/c", "src/a"), "directory import resolves to index.ts");
+    assert!(
+        has("src/a", "src/b"),
+        ".js specifier resolves to the .ts file"
+    );
+    assert!(
+        has("src/c", "src/a"),
+        "directory import resolves to index.ts"
+    );
     assert_eq!(w38["externals"]["react"], 1);
 
     let html = fs::read_to_string(repo.out().join("index.html")).unwrap();
@@ -115,8 +137,8 @@ fn builds_weekly_snapshots_and_report() {
 #[test]
 fn second_run_reuses_cached_snapshots() {
     let repo = two_week_repo();
-    archsnap(repo.path()).assert().success();
-    archsnap(repo.path())
+    earnest(repo.path()).assert().success();
+    earnest(repo.path())
         .assert()
         .success()
         .stderr(predicate::str::contains("cached"));
@@ -125,20 +147,20 @@ fn second_run_reuses_cached_snapshots() {
 #[test]
 fn not_a_git_repo_fails_with_exit_2() {
     let dir = TempDir::new().unwrap();
-    archsnap(dir.path())
+    earnest(dir.path())
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("archsnap(not_git_repo)"))
+        .stderr(predicate::str::contains("earnest(not_git_repo)"))
         .stderr(predicate::str::contains("--repo"));
 }
 
 #[test]
 fn repo_without_commits_fails_with_exit_2() {
     let repo = Repo::new();
-    archsnap(repo.path())
+    earnest(repo.path())
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("archsnap(no_commits)"));
+        .stderr(predicate::str::contains("earnest(no_commits)"));
 }
 
 #[test]
@@ -146,12 +168,12 @@ fn unwritable_output_fails_with_exit_3_before_scanning() {
     let repo = two_week_repo();
     let blocker = repo.path().join("not-a-dir");
     fs::write(&blocker, "file in the way").unwrap();
-    archsnap(repo.path())
+    earnest(repo.path())
         .arg("--out")
         .arg(&blocker)
         .assert()
         .code(3)
-        .stderr(predicate::str::contains("archsnap(output_not_writable)"))
+        .stderr(predicate::str::contains("earnest(output_not_writable)"))
         .stderr(predicate::str::contains("[1/").not());
 }
 
@@ -161,10 +183,10 @@ fn syntax_error_skips_file_and_points_at_it() {
     repo.write("src/b/broken.ts", "export function f( {\n  return 1\n")
         .commit("broken", WEEK_38);
 
-    archsnap(repo.path())
+    earnest(repo.path())
         .assert()
         .success()
-        .stderr(predicate::str::contains("archsnap(parse_skipped)"))
+        .stderr(predicate::str::contains("earnest(parse_skipped)"))
         .stderr(predicate::str::contains("src/b/broken.ts:"));
 
     let w38 = repo.snapshot("2026-W38");
@@ -175,22 +197,26 @@ fn syntax_error_skips_file_and_points_at_it() {
 #[test]
 fn strict_turns_warnings_into_exit_1_but_still_writes_report() {
     let repo = two_week_repo();
-    repo.write("src/b/broken.ts", "export function f( {\n").commit("broken", WEEK_38);
+    repo.write("src/b/broken.ts", "export function f( {\n")
+        .commit("broken", WEEK_38);
 
-    archsnap(repo.path()).arg("--strict").assert().code(1);
+    earnest(repo.path()).arg("--strict").assert().code(1);
     assert!(repo.out().join("index.html").exists());
 }
 
 #[test]
 fn unresolved_relative_import_warns_with_specifier() {
     let repo = two_week_repo();
-    repo.write("src/c/extra.ts", "import { x } from './missing';\nexport const y = x;\n")
-        .commit("unresolved", WEEK_38);
+    repo.write(
+        "src/c/extra.ts",
+        "import { x } from './missing';\nexport const y = x;\n",
+    )
+    .commit("unresolved", WEEK_38);
 
-    archsnap(repo.path())
+    earnest(repo.path())
         .assert()
         .success()
-        .stderr(predicate::str::contains("archsnap(unresolved_import)"))
+        .stderr(predicate::str::contains("earnest(unresolved_import)"))
         .stderr(predicate::str::contains("./missing"));
 
     assert_eq!(repo.snapshot("2026-W38")["stats"]["unresolved"], 1);
@@ -209,37 +235,42 @@ fn shallow_clone_degrades_to_current_snapshot_only() {
     assert!(status.success());
     let clone = parent.path().join("clone");
 
-    archsnap(&clone)
+    earnest(&clone)
         .assert()
         .success()
-        .stderr(predicate::str::contains("archsnap(shallow_clone)"))
+        .stderr(predicate::str::contains("earnest(shallow_clone)"))
         .stderr(predicate::str::contains("fetch-depth: 0"));
 
-    let snaps: Vec<_> = fs::read_dir(clone.join(".archsnap/snapshots")).unwrap().collect();
+    let snaps: Vec<_> = fs::read_dir(clone.join(".earnest/snapshots"))
+        .unwrap()
+        .collect();
     assert_eq!(snaps.len(), 1);
 }
 
 #[test]
 fn corrupt_cached_snapshot_is_rebuilt() {
     let repo = two_week_repo();
-    archsnap(repo.path()).assert().success();
+    earnest(repo.path()).assert().success();
     let p = repo.out().join("snapshots/2026-W37.json");
     fs::write(&p, "{ not json").unwrap();
 
-    archsnap(repo.path())
+    earnest(repo.path())
         .assert()
         .success()
-        .stderr(predicate::str::contains("archsnap(snapshot_corrupt)"));
+        .stderr(predicate::str::contains("earnest(snapshot_corrupt)"));
     assert!(repo.snapshot("2026-W37")["modules"].get("src/a").is_some());
 }
 
 #[test]
 fn jsx_in_plain_js_files_parses() {
     let repo = two_week_repo();
-    repo.write("src/ui/button.js", "import { a } from '../a';\nexport const B = () => <div>{a}</div>;\n")
-        .commit("jsx in js", WEEK_38);
+    repo.write(
+        "src/ui/button.js",
+        "import { a } from '../a';\nexport const B = () => <div>{a}</div>;\n",
+    )
+    .commit("jsx in js", WEEK_38);
 
-    archsnap(repo.path())
+    earnest(repo.path())
         .assert()
         .success()
         .stderr(predicate::str::contains("parse_skipped").not());
@@ -259,7 +290,7 @@ fn imports_of_committed_but_unscanned_files_are_not_unresolved() {
         )
         .commit("unscanned targets", WEEK_38);
 
-    archsnap(repo.path())
+    earnest(repo.path())
         .assert()
         .success()
         .stderr(predicate::str::contains("unresolved_import").not());
@@ -272,7 +303,7 @@ fn symlinks_are_not_parsed_as_source() {
     std::os::unix::fs::symlink("../a/index.ts", repo.path().join("src/b/link.ts")).unwrap();
     repo.commit("symlink", WEEK_38);
 
-    archsnap(repo.path())
+    earnest(repo.path())
         .assert()
         .success()
         .stderr(predicate::str::contains("parse_skipped").not());
@@ -287,27 +318,39 @@ fn missing_git_object_fails_with_exit_3() {
         .output()
         .unwrap();
     let oid = String::from_utf8(out.stdout).unwrap().trim().to_string();
-    fs::remove_file(repo.path().join(".git/objects").join(&oid[..2]).join(&oid[2..])).unwrap();
+    fs::remove_file(
+        repo.path()
+            .join(".git/objects")
+            .join(&oid[..2])
+            .join(&oid[2..]),
+    )
+    .unwrap();
 
-    archsnap(repo.path())
+    earnest(repo.path())
         .assert()
         .code(3)
-        .stderr(predicate::str::contains("archsnap(git_failed)"));
+        .stderr(predicate::str::contains("earnest(git_failed)"));
 }
 
 #[test]
 fn zero_depth_and_zero_weeks_are_rejected() {
     let repo = two_week_repo();
-    archsnap(repo.path()).args(["--depth", "0"]).assert().code(2);
-    archsnap(repo.path()).args(["--weeks", "0"]).assert().code(2);
+    earnest(repo.path()).args(["--depth", "0"]).assert().code(2);
+    earnest(repo.path()).args(["--weeks", "0"]).assert().code(2);
 }
 
 #[test]
 fn first_week_does_not_mark_everything_new() {
     let repo = two_week_repo();
-    archsnap(repo.path()).assert().success();
+    earnest(repo.path()).assert().success();
     let html = fs::read_to_string(repo.out().join("index.html")).unwrap();
-    let data = html.split("id=\"archsnap-data\" type=\"application/json\">").nth(1).unwrap().split("</script>").next().unwrap();
+    let data = html
+        .split("id=\"earnest-data\" type=\"application/json\">")
+        .nth(1)
+        .unwrap()
+        .split("</script>")
+        .next()
+        .unwrap();
     let report: Value = serde_json::from_str(data).unwrap();
     let oldest = report["weeks"].as_array().unwrap().last().unwrap();
     assert_eq!(oldest["diff"]["added_modules"].as_array().unwrap().len(), 0);
@@ -356,7 +399,10 @@ crons = ["0 6 * * *"]
 
 fn system(snapshot: &Value) -> (Vec<Value>, Vec<Value>) {
     let s = &snapshot["system"];
-    (s["nodes"].as_array().unwrap().clone(), s["edges"].as_array().unwrap().clone())
+    (
+        s["nodes"].as_array().unwrap().clone(),
+        s["edges"].as_array().unwrap().clone(),
+    )
 }
 
 fn node_id(nodes: &[Value], label_part: &str) -> String {
@@ -372,7 +418,7 @@ fn node_id(nodes: &[Value], label_part: &str) -> String {
 #[test]
 fn system_map_reads_packages_wrangler_sdks_and_urls() {
     let repo = monorepo();
-    archsnap(repo.path()).assert().success();
+    earnest(repo.path()).assert().success();
     let (nodes, edges) = system(&repo.snapshot("2026-W37"));
     let has_edge = |from: &str, to: &str| edges.iter().any(|e| e["from"] == from && e["to"] == to);
 
@@ -391,7 +437,9 @@ fn system_map_reads_packages_wrangler_sdks_and_urls() {
     assert!(has_edge(&worker, &rates));
     assert!(has_edge(&web, &core), "workspace dependency is shared code");
     assert!(
-        !nodes.iter().any(|n| n["label"].as_str().unwrap().contains("docs.ignored.dev")),
+        !nodes
+            .iter()
+            .any(|n| n["label"].as_str().unwrap().contains("docs.ignored.dev")),
         "URLs in comments are not services"
     );
 }
@@ -399,19 +447,31 @@ fn system_map_reads_packages_wrangler_sdks_and_urls() {
 #[test]
 fn areas_follow_workspace_packages() {
     let repo = monorepo();
-    archsnap(repo.path()).assert().success();
+    earnest(repo.path()).assert().success();
     let s = repo.snapshot("2026-W37");
-    for area in ["apps/api", "apps/web", "apps/web/src/components", "packages/core"] {
-        assert!(s["modules"].get(area).is_some(), "missing area {area}: {:?}", s["modules"]);
+    for area in [
+        "apps/api",
+        "apps/web",
+        "apps/web/src/components",
+        "packages/core",
+    ] {
+        assert!(
+            s["modules"].get(area).is_some(),
+            "missing area {area}: {:?}",
+            s["modules"]
+        );
     }
 }
 
 #[test]
 fn workspace_imports_resolve_and_record_what_crosses_the_boundary() {
     let repo = monorepo();
-    archsnap(repo.path()).assert().success();
+    earnest(repo.path()).assert().success();
     let s = repo.snapshot("2026-W37");
-    assert!(s["externals"].get("@shop/core").is_none(), "workspace packages are not externals");
+    assert!(
+        s["externals"].get("@shop/core").is_none(),
+        "workspace packages are not externals"
+    );
     let edge = s["edges"]
         .as_array()
         .unwrap()
@@ -421,8 +481,16 @@ fn workspace_imports_resolve_and_record_what_crosses_the_boundary() {
     let link = &edge["links"][0];
     assert_eq!(link["from"], "apps/api/src/index.ts");
     assert_eq!(link["to"], "packages/core/src/index.ts");
-    let names: Vec<&str> = link["names"].as_array().unwrap().iter().map(|n| n.as_str().unwrap()).collect();
-    assert!(names.contains(&"formatPrice") && names.contains(&"type Money"), "type-only imports are marked: {names:?}");
+    let names: Vec<&str> = link["names"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n.as_str().unwrap())
+        .collect();
+    assert!(
+        names.contains(&"formatPrice") && names.contains(&"type Money"),
+        "type-only imports are marked: {names:?}"
+    );
 }
 
 #[test]
@@ -445,9 +513,12 @@ crons = ["0 6 * * *"]
 "#,
     )
     .commit("add queue", WEEK_38);
-    archsnap(repo.path()).assert().success();
+    earnest(repo.path()).assert().success();
     let html = fs::read_to_string(repo.out().join("index.html")).unwrap();
-    assert!(html.contains("Added queue emails"), "summary should mention the new queue");
+    assert!(
+        html.contains("Added queue emails"),
+        "summary should mention the new queue"
+    );
 }
 
 /// An API with mounted Hono routes, a web client calling one, and a cron handler in the Worker entry.
@@ -480,26 +551,41 @@ fn routed_repo() -> Repo {
 #[test]
 fn api_routes_are_read_with_their_mount_prefix() {
     let repo = routed_repo();
-    archsnap(repo.path()).assert().success();
+    earnest(repo.path()).assert().success();
     let s = repo.snapshot("2026-W38");
     let routes: Vec<String> = s["system"]["routes"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|r| format!("{} {} {}", r["method"].as_str().unwrap(), r["path"].as_str().unwrap(), r["file"].as_str().unwrap()))
+        .map(|r| {
+            format!(
+                "{} {} {}",
+                r["method"].as_str().unwrap(),
+                r["path"].as_str().unwrap(),
+                r["file"].as_str().unwrap()
+            )
+        })
         .collect();
-    assert!(routes.contains(&"GET /api/rates apps/api/src/routes/rates.ts".to_string()), "{routes:?}");
-    assert!(routes.contains(&"POST /api/rates/:id/refresh apps/api/src/routes/rates.ts".to_string()), "{routes:?}");
+    assert!(
+        routes.contains(&"GET /api/rates apps/api/src/routes/rates.ts".to_string()),
+        "{routes:?}"
+    );
+    assert!(
+        routes.contains(&"POST /api/rates/:id/refresh apps/api/src/routes/rates.ts".to_string()),
+        "{routes:?}"
+    );
 }
 
 #[test]
 fn client_calls_are_matched_to_api_routes() {
     let repo = routed_repo();
-    archsnap(repo.path()).assert().success();
+    earnest(repo.path()).assert().success();
     let s = repo.snapshot("2026-W38");
     let calls = s["system"]["route_calls"].as_array().unwrap();
     assert!(
-        calls.iter().any(|c| c["file"] == "apps/web/src/main.tsx" && c["method"] == "POST" && c["path"] == "/api/rates/:id/refresh"),
+        calls.iter().any(|c| c["file"] == "apps/web/src/main.tsx"
+            && c["method"] == "POST"
+            && c["path"] == "/api/rates/:id/refresh"),
         "{calls:?}"
     );
 }
@@ -507,80 +593,123 @@ fn client_calls_are_matched_to_api_routes() {
 #[test]
 fn worker_scheduled_handler_is_found() {
     let repo = routed_repo();
-    archsnap(repo.path()).assert().success();
+    earnest(repo.path()).assert().success();
     let s = repo.snapshot("2026-W38");
     let handlers = s["system"]["handlers"].as_array().unwrap();
-    assert!(handlers.iter().any(|h| h["kind"] == "scheduled" && h["file"] == "apps/api/src/index.ts"), "{handlers:?}");
+    assert!(
+        handlers
+            .iter()
+            .any(|h| h["kind"] == "scheduled" && h["file"] == "apps/api/src/index.ts"),
+        "{handlers:?}"
+    );
 }
 
 /// A web app calling real services, reserved example domains and private or metadata IPs.
 fn outside_calls_repo() -> Repo {
     let repo = Repo::new();
-    repo.write("package.json", r#"{ "name": "site", "dependencies": { "react": "19" } }"#)
-        .write(
-            "src/calls.ts",
-            [
-                "export const a = () => fetch('https://api.example.com/v1/items');",
-                "export const b = () => fetch('http://169.254.169.254/latest/meta-data');",
-                "export const c = () => fetch('http://10.0.0.5/health');",
-                "export const d = () => fetch('http://192.168.1.20:8080/x');",
-                "export const e = () => fetch('http://172.20.0.3/x');",
-                "export const f = () => fetch('http://127.0.0.1:3000/x');",
-                "export const g = () => fetch('https://hooks.slack.com/services/T0');",
-                "export const h = () => fetch('https://1.1.1.1/dns-query');",
-                "export const i = () => fetch('https://api.buffer.com/1/profiles.json');",
-                "",
-            ]
-            .join("\n")
-            .as_str(),
-        )
-        .commit("calls", WEEK_37);
+    repo.write(
+        "package.json",
+        r#"{ "name": "site", "dependencies": { "react": "19" } }"#,
+    )
+    .write(
+        "src/calls.ts",
+        [
+            "export const a = () => fetch('https://api.example.com/v1/items');",
+            "export const b = () => fetch('http://169.254.169.254/latest/meta-data');",
+            "export const c = () => fetch('http://10.0.0.5/health');",
+            "export const d = () => fetch('http://192.168.1.20:8080/x');",
+            "export const e = () => fetch('http://172.20.0.3/x');",
+            "export const f = () => fetch('http://127.0.0.1:3000/x');",
+            "export const g = () => fetch('https://hooks.slack.com/services/T0');",
+            "export const h = () => fetch('https://1.1.1.1/dns-query');",
+            "export const i = () => fetch('https://api.buffer.com/1/profiles.json');",
+            "",
+        ]
+        .join("\n")
+        .as_str(),
+    )
+    .commit("calls", WEEK_37);
     repo
 }
 
 fn external_labels(snapshot: &Value) -> Vec<String> {
     let (nodes, _) = system(snapshot);
-    nodes.iter().filter(|n| n["kind"] == "external").map(|n| n["label"].as_str().unwrap().to_string()).collect()
+    nodes
+        .iter()
+        .filter(|n| n["kind"] == "external")
+        .map(|n| n["label"].as_str().unwrap().to_string())
+        .collect()
 }
 
 #[test]
 fn reserved_domains_and_private_ips_are_not_outside_services() {
     let repo = outside_calls_repo();
-    archsnap(repo.path()).assert().success();
+    earnest(repo.path()).assert().success();
     let labels = external_labels(&repo.snapshot("2026-W37"));
-    for gone in ["example.com", "169.254.169.254", "10.0.0.5", "192.168.1.20", "172.20.0.3", "127.0.0.1"] {
-        assert!(!labels.iter().any(|l| l.contains(gone)), "{gone} is not a service: {labels:?}");
+    for gone in [
+        "example.com",
+        "169.254.169.254",
+        "10.0.0.5",
+        "192.168.1.20",
+        "172.20.0.3",
+        "127.0.0.1",
+    ] {
+        assert!(
+            !labels.iter().any(|l| l.contains(gone)),
+            "{gone} is not a service: {labels:?}"
+        );
     }
     for kept in ["slack.com", "1.1.1.1", "buffer.com"] {
-        assert!(labels.iter().any(|l| l.contains(kept)), "{kept} is a service: {labels:?}");
+        assert!(
+            labels.iter().any(|l| l.contains(kept)),
+            "{kept} is a service: {labels:?}"
+        );
     }
 }
 
 #[test]
 fn snapshots_cached_by_an_older_schema_are_rebuilt() {
     let repo = outside_calls_repo();
-    archsnap(repo.path()).assert().success();
+    earnest(repo.path()).assert().success();
     let p = repo.out().join("snapshots").join("2026-W37.json");
     let mut stale = repo.snapshot("2026-W37");
     stale["schema"] = Value::from(stale["schema"].as_u64().unwrap() - 1);
     stale["system"]["nodes"] = Value::Array(vec![]);
     fs::write(&p, serde_json::to_string(&stale).unwrap()).unwrap();
-    archsnap(repo.path()).assert().success();
-    assert!(!external_labels(&repo.snapshot("2026-W37")).is_empty(), "the stale snapshot should be rescanned");
+    earnest(repo.path()).assert().success();
+    assert!(
+        !external_labels(&repo.snapshot("2026-W37")).is_empty(),
+        "the stale snapshot should be rescanned"
+    );
 }
 
 fn embedded_brands(repo: &Repo) -> Value {
     let html = fs::read_to_string(repo.out().join("index.html")).unwrap();
-    let json = html.split("id=\"archsnap-brands\" type=\"application/json\">").nth(1).unwrap().split("</script>").next().unwrap();
+    let json = html
+        .split("id=\"earnest-brands\" type=\"application/json\">")
+        .nth(1)
+        .unwrap()
+        .split("</script>")
+        .next()
+        .unwrap();
     serde_json::from_str(json).unwrap()
 }
 
 #[test]
 fn outside_services_named_like_a_brand_get_its_logo_and_unused_logos_stay_out() {
     let repo = outside_calls_repo();
-    archsnap(repo.path()).assert().success();
+    earnest(repo.path()).assert().success();
     let icons = &embedded_brands(&repo)["icons"];
-    assert!(icons.get("buffer").is_some(), "buffer.com should carry the Buffer logo");
-    assert!(icons.get("stripe").is_some(), "the hand-picked logos are always there");
-    assert!(icons.get("zoom").is_none(), "logos no service uses are left out");
+    assert!(
+        icons.get("buffer").is_some(),
+        "buffer.com should carry the Buffer logo"
+    );
+    assert!(
+        icons.get("stripe").is_some(),
+        "the hand-picked logos are always there"
+    );
+    assert!(
+        icons.get("zoom").is_none(),
+        "logos no service uses are left out"
+    );
 }

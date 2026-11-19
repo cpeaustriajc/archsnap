@@ -56,7 +56,12 @@ pub struct CodeFacts {
 }
 
 fn segments(path: &str) -> Vec<&str> {
-    path.split(['?', '#']).next().unwrap_or("").split('/').filter(|s| !s.is_empty()).collect()
+    path.split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn is_param(seg: &str) -> bool {
@@ -66,7 +71,11 @@ fn is_param(seg: &str) -> bool {
 /// `/api/rates/*/refresh` (client) matches `/api/rates/:id/refresh` (server).
 fn path_matches(client: &str, server: &str) -> bool {
     let (c, s) = (segments(client), segments(server));
-    c.len() == s.len() && !c.is_empty() && c.iter().zip(&s).all(|(a, b)| a == b || is_param(a) || is_param(b))
+    c.len() == s.len()
+        && !c.is_empty()
+        && c.iter()
+            .zip(&s)
+            .all(|(a, b)| a == b || is_param(a) || is_param(b))
 }
 
 fn join_route(prefix: &str, path: &str) -> String {
@@ -77,15 +86,30 @@ fn join_route(prefix: &str, path: &str) -> String {
 
 /// Next.js file routes: `app/api/links/[id]/route.ts` -> `/api/links/:id`, `pages/api/x.ts` -> `/api/x`.
 fn next_route(file: &str, package_dir: &str) -> Option<String> {
-    let rest = if package_dir.is_empty() { file } else { file.strip_prefix(&format!("{package_dir}/"))? };
+    let rest = if package_dir.is_empty() {
+        file
+    } else {
+        file.strip_prefix(&format!("{package_dir}/"))?
+    };
     let rest = rest.strip_prefix("src/").unwrap_or(rest);
     let (dir, name) = rest.rsplit_once('/')?;
-    let segs: Vec<String> = if let Some(app) = dir.strip_prefix("app").filter(|_| name.starts_with("route.")) {
-        app.split('/').filter(|s| !s.is_empty()).filter(|s| !(s.starts_with('(') && s.ends_with(')'))).map(str::to_string).collect()
+    let segs: Vec<String> = if let Some(app) = dir
+        .strip_prefix("app")
+        .filter(|_| name.starts_with("route."))
+    {
+        app.split('/')
+            .filter(|s| !s.is_empty())
+            .filter(|s| !(s.starts_with('(') && s.ends_with(')')))
+            .map(str::to_string)
+            .collect()
     } else {
         let api = dir.strip_prefix("pages/api").map(|d| format!("api{d}"))?;
         let stem = name.split('.').next()?;
-        let mut s: Vec<String> = api.split('/').filter(|s| !s.is_empty()).map(str::to_string).collect();
+        let mut s: Vec<String> = api
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
         if stem != "index" {
             s.push(stem.to_string());
         }
@@ -93,10 +117,12 @@ fn next_route(file: &str, package_dir: &str) -> Option<String> {
     };
     let segs: Vec<String> = segs
         .into_iter()
-        .map(|s| match s.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-            Some(p) => format!(":{}", p.trim_start_matches("...")),
-            None => s,
-        })
+        .map(
+            |s| match s.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                Some(p) => format!(":{}", p.trim_start_matches("...")),
+                None => s,
+            },
+        )
         .collect();
     Some(format!("/{}", segs.join("/")))
 }
@@ -133,11 +159,20 @@ pub fn parse_package(path: &str, text: &str, warnings: &mut Vec<Warning>) -> Opt
     let json: serde_json::Value = match serde_json::from_str(text) {
         Ok(v) => v,
         Err(e) => {
-            warnings.push(config_warning(path, text, e.line(), e.column(), &e.to_string()));
+            warnings.push(config_warning(
+                path,
+                text,
+                e.line(),
+                e.column(),
+                &e.to_string(),
+            ));
             return None;
         }
     };
-    let dir = path.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
+    let dir = path
+        .rsplit_once('/')
+        .map(|(d, _)| d.to_string())
+        .unwrap_or_default();
     let mut deps = BTreeSet::new();
     for key in ["dependencies", "devDependencies", "peerDependencies"] {
         if let Some(obj) = json.get(key).and_then(|v| v.as_object()) {
@@ -145,9 +180,17 @@ pub fn parse_package(path: &str, text: &str, warnings: &mut Vec<Warning>) -> Opt
         }
     }
     Some(Package {
-        name: json.get("name").and_then(|v| v.as_str()).unwrap_or(&dir).to_string(),
+        name: json
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&dir)
+            .to_string(),
         dir,
-        main: json.get("main").or_else(|| json.get("module")).and_then(|v| v.as_str()).map(str::to_string),
+        main: json
+            .get("main")
+            .or_else(|| json.get("module"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         deps,
     })
 }
@@ -175,10 +218,50 @@ pub struct Inputs<'a> {
 }
 
 const GENERIC_FOLDERS: &[&str] = &[
-    "lib", "libs", "utils", "util", "helpers", "helper", "common", "shared", "components", "hooks", "types", "styles",
-    "test", "tests", "__tests__", "spec", "e2e", "playwright", "cypress", "storybook", "stories", "scripts", "config",
-    "constants", "ui", "assets", "public", "src", "middleware", "routes", "pages", "app", "server", "client", "core",
-    "db", "store", "models", "schemas", "env", "fixtures", "mocks", "generated", "icons",
+    "lib",
+    "libs",
+    "utils",
+    "util",
+    "helpers",
+    "helper",
+    "common",
+    "shared",
+    "components",
+    "hooks",
+    "types",
+    "styles",
+    "test",
+    "tests",
+    "__tests__",
+    "spec",
+    "e2e",
+    "playwright",
+    "cypress",
+    "storybook",
+    "stories",
+    "scripts",
+    "config",
+    "constants",
+    "ui",
+    "assets",
+    "public",
+    "src",
+    "middleware",
+    "routes",
+    "pages",
+    "app",
+    "server",
+    "client",
+    "core",
+    "db",
+    "store",
+    "models",
+    "schemas",
+    "env",
+    "fixtures",
+    "mocks",
+    "generated",
+    "icons",
 ];
 
 /// `apps/api/src/net-worth` -> "Net worth"; folders that name a layer rather than a feature give None.
@@ -187,7 +270,9 @@ fn feature_name(area: &str, package_dir: &str) -> Option<String> {
         return None;
     }
     let last = area.rsplit('/').next()?;
-    if GENERIC_FOLDERS.contains(&last.to_ascii_lowercase().as_str()) || last.starts_with(['(', '[', '_', '.']) {
+    if GENERIC_FOLDERS.contains(&last.to_ascii_lowercase().as_str())
+        || last.starts_with(['(', '[', '_', '.'])
+    {
         return None;
     }
     let words = last.replace(['-', '_'], " ");
@@ -195,69 +280,168 @@ fn feature_name(area: &str, package_dir: &str) -> Option<String> {
         return Some(words.to_ascii_uppercase());
     }
     let mut chars = words.chars();
-    chars.next().map(|c| c.to_ascii_uppercase().to_string() + chars.as_str())
+    chars
+        .next()
+        .map(|c| c.to_ascii_uppercase().to_string() + chars.as_str())
 }
 
 const SERVER_FRAMEWORKS: &[(&str, &str)] = &[
-    ("hono", "Hono"), ("express", "Express"), ("fastify", "Fastify"), ("@nestjs/core", "NestJS"),
-    ("koa", "Koa"), ("elysia", "Elysia"), ("@hapi/hapi", "hapi"), ("@trpc/server", "tRPC"),
-    ("graphql-yoga", "GraphQL Yoga"), ("@apollo/server", "Apollo Server"),
+    ("hono", "Hono"),
+    ("express", "Express"),
+    ("fastify", "Fastify"),
+    ("@nestjs/core", "NestJS"),
+    ("koa", "Koa"),
+    ("elysia", "Elysia"),
+    ("@hapi/hapi", "hapi"),
+    ("@trpc/server", "tRPC"),
+    ("graphql-yoga", "GraphQL Yoga"),
+    ("@apollo/server", "Apollo Server"),
 ];
 const WEB_FRAMEWORKS: &[(&str, &str)] = &[
-    ("next", "Next.js"), ("nuxt", "Nuxt"), ("@remix-run/react", "Remix"), ("astro", "Astro"),
-    ("@sveltejs/kit", "SvelteKit"), ("react", "React"), ("vue", "Vue"), ("svelte", "Svelte"),
-    ("solid-js", "Solid"), ("@angular/core", "Angular"), ("vite", "Vite"),
+    ("next", "Next.js"),
+    ("nuxt", "Nuxt"),
+    ("@remix-run/react", "Remix"),
+    ("astro", "Astro"),
+    ("@sveltejs/kit", "SvelteKit"),
+    ("react", "React"),
+    ("vue", "Vue"),
+    ("svelte", "Svelte"),
+    ("solid-js", "Solid"),
+    ("@angular/core", "Angular"),
+    ("vite", "Vite"),
 ];
 const MOBILE_FRAMEWORKS: &[(&str, &str)] = &[("react-native", "React Native"), ("expo", "Expo")];
 
 /// SDK label -> the domain its API lives on, so URL hosts merge into the SDK's box.
 const SDK_DOMAINS: &[(&str, &str)] = &[
-    ("Stripe", "stripe.com"), ("Resend", "resend.com"), ("PlanetScale", "planetscale.com"), ("OpenAI", "openai.com"),
-    ("Anthropic", "anthropic.com"), ("Sentry", "sentry.io"), ("Upstash Redis", "upstash.io"), ("PostHog", "posthog.com"),
-    ("Twilio", "twilio.com"), ("SendGrid", "sendgrid.com"), ("Clerk", "clerk.com"), ("Supabase", "supabase.co"),
-    ("Algolia", "algolia.net"), ("Firebase", "firebaseio.com"), ("Auth0", "auth0.com"),
+    ("Stripe", "stripe.com"),
+    ("Resend", "resend.com"),
+    ("PlanetScale", "planetscale.com"),
+    ("OpenAI", "openai.com"),
+    ("Anthropic", "anthropic.com"),
+    ("Sentry", "sentry.io"),
+    ("Upstash Redis", "upstash.io"),
+    ("PostHog", "posthog.com"),
+    ("Twilio", "twilio.com"),
+    ("SendGrid", "sendgrid.com"),
+    ("Clerk", "clerk.com"),
+    ("Supabase", "supabase.co"),
+    ("Algolia", "algolia.net"),
+    ("Firebase", "firebaseio.com"),
+    ("Auth0", "auth0.com"),
 ];
 /// Each subdomain on these hosting platforms is a different service, so they are not grouped by domain.
 const PLATFORMS: &[&str] = &[
-    "appspot.com", "herokuapp.com", "vercel.app", "netlify.app", "workers.dev", "pages.dev", "github.io", "fly.dev",
-    "onrender.com", "azurewebsites.net", "cloudfront.net", "amazonaws.com", "web.app", "firebaseapp.com", "run.app",
+    "appspot.com",
+    "herokuapp.com",
+    "vercel.app",
+    "netlify.app",
+    "workers.dev",
+    "pages.dev",
+    "github.io",
+    "fly.dev",
+    "onrender.com",
+    "azurewebsites.net",
+    "cloudfront.net",
+    "amazonaws.com",
+    "web.app",
+    "firebaseapp.com",
+    "run.app",
 ];
 const PLACEHOLDERS: &[&str] = &[
-    "a.com", "b.com", "c.com", "acme.com", "acme.co", "foo.com", "bar.com", "test.com", "domain.com", "mydomain.com",
-    "yourdomain.com", "yourwebsite.com", "your-server.com", "newdomain.com", "website.com", "mysite.com", "company.com",
+    "a.com",
+    "b.com",
+    "c.com",
+    "acme.com",
+    "acme.co",
+    "foo.com",
+    "bar.com",
+    "test.com",
+    "domain.com",
+    "mydomain.com",
+    "yourdomain.com",
+    "yourwebsite.com",
+    "your-server.com",
+    "newdomain.com",
+    "website.com",
+    "mysite.com",
+    "company.com",
 ];
 
 /// npm package prefix -> (node kind, label).
 const SDKS: &[(&str, &str, &str)] = &[
-    ("pg", "datastore", "PostgreSQL"), ("postgres", "datastore", "PostgreSQL"),
-    ("@neondatabase/serverless", "datastore", "Neon PostgreSQL"), ("mysql2", "datastore", "MySQL"),
-    ("better-sqlite3", "datastore", "SQLite"), ("@libsql/client", "datastore", "libSQL / Turso"),
-    ("mongodb", "datastore", "MongoDB"), ("mongoose", "datastore", "MongoDB"),
-    ("redis", "datastore", "Redis"), ("ioredis", "datastore", "Redis"), ("@upstash/redis", "datastore", "Upstash Redis"),
-    ("@planetscale/database", "datastore", "PlanetScale"), ("@supabase/supabase-js", "external", "Supabase"),
-    ("firebase", "external", "Firebase"), ("firebase-admin", "external", "Firebase"),
-    ("@aws-sdk/client-s3", "datastore", "AWS S3"), ("@aws-sdk/client-dynamodb", "datastore", "AWS DynamoDB"),
-    ("@aws-sdk/client-sqs", "queue", "AWS SQS"), ("kafkajs", "queue", "Kafka"), ("amqplib", "queue", "RabbitMQ"),
-    ("bullmq", "queue", "BullMQ (Redis)"), ("stripe", "external", "Stripe"), ("@stripe/stripe-js", "external", "Stripe"),
-    ("@sentry/", "external", "Sentry"), ("posthog-js", "external", "PostHog"), ("posthog-node", "external", "PostHog"),
-    ("openai", "external", "OpenAI"), ("@anthropic-ai/sdk", "external", "Anthropic"), ("resend", "external", "Resend"),
-    ("@sendgrid/mail", "external", "SendGrid"), ("twilio", "external", "Twilio"), ("@clerk/", "external", "Clerk"),
-    ("@auth0/", "external", "Auth0"), ("algoliasearch", "external", "Algolia"),
+    ("pg", "datastore", "PostgreSQL"),
+    ("postgres", "datastore", "PostgreSQL"),
+    ("@neondatabase/serverless", "datastore", "Neon PostgreSQL"),
+    ("mysql2", "datastore", "MySQL"),
+    ("better-sqlite3", "datastore", "SQLite"),
+    ("@libsql/client", "datastore", "libSQL / Turso"),
+    ("mongodb", "datastore", "MongoDB"),
+    ("mongoose", "datastore", "MongoDB"),
+    ("redis", "datastore", "Redis"),
+    ("ioredis", "datastore", "Redis"),
+    ("@upstash/redis", "datastore", "Upstash Redis"),
+    ("@planetscale/database", "datastore", "PlanetScale"),
+    ("@supabase/supabase-js", "external", "Supabase"),
+    ("firebase", "external", "Firebase"),
+    ("firebase-admin", "external", "Firebase"),
+    ("@aws-sdk/client-s3", "datastore", "AWS S3"),
+    ("@aws-sdk/client-dynamodb", "datastore", "AWS DynamoDB"),
+    ("@aws-sdk/client-sqs", "queue", "AWS SQS"),
+    ("kafkajs", "queue", "Kafka"),
+    ("amqplib", "queue", "RabbitMQ"),
+    ("bullmq", "queue", "BullMQ (Redis)"),
+    ("stripe", "external", "Stripe"),
+    ("@stripe/stripe-js", "external", "Stripe"),
+    ("@sentry/", "external", "Sentry"),
+    ("posthog-js", "external", "PostHog"),
+    ("posthog-node", "external", "PostHog"),
+    ("openai", "external", "OpenAI"),
+    ("@anthropic-ai/sdk", "external", "Anthropic"),
+    ("resend", "external", "Resend"),
+    ("@sendgrid/mail", "external", "SendGrid"),
+    ("twilio", "external", "Twilio"),
+    ("@clerk/", "external", "Clerk"),
+    ("@auth0/", "external", "Auth0"),
+    ("algoliasearch", "external", "Algolia"),
 ];
 
 const IGNORED_HOSTS: &[&str] = &[
-    "localhost", "127.0.0.1", "0.0.0.0", "example.com", "example.org", "example.net", "www.w3.org",
-    "w3.org", "schema.org", "json-schema.org", "www.example.com",
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "example.com",
+    "example.org",
+    "example.net",
+    "www.w3.org",
+    "w3.org",
+    "schema.org",
+    "json-schema.org",
+    "www.example.com",
 ];
 
 pub fn host_of(url: &str) -> Option<String> {
-    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
-    let host = rest.split(['/', '?', '#', ':', '`', '"', '\'', ' ']).next()?.to_ascii_lowercase();
-    let valid = host.contains('.') && host.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
-    let reserved = [".example", ".local", ".localhost", ".test", ".invalid"].iter().any(|t| host.ends_with(t))
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let host = rest
+        .split(['/', '?', '#', ':', '`', '"', '\'', ' '])
+        .next()?
+        .to_ascii_lowercase();
+    let valid = host.contains('.')
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-');
+    let reserved = [".example", ".local", ".localhost", ".test", ".invalid"]
+        .iter()
+        .any(|t| host.ends_with(t))
         || ["example.com", "example.org", "example.net"].contains(&site_of(&host).as_str())
         || private_ip(&host);
-    if !valid || reserved || IGNORED_HOSTS.contains(&host.as_str()) || PLACEHOLDERS.contains(&site_of(&host).as_str()) {
+    if !valid
+        || reserved
+        || IGNORED_HOSTS.contains(&host.as_str())
+        || PLACEHOLDERS.contains(&site_of(&host).as_str())
+    {
         return None;
     }
     Some(host)
@@ -265,7 +449,9 @@ pub fn host_of(url: &str) -> Option<String> {
 
 /// Loopback, private, link-local (cloud metadata) and unspecified IPv4 addresses.
 fn private_ip(host: &str) -> bool {
-    let Ok(ip) = host.parse::<std::net::Ipv4Addr>() else { return false };
+    let Ok(ip) = host.parse::<std::net::Ipv4Addr>() else {
+        return false;
+    };
     ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
 }
 
@@ -289,7 +475,11 @@ impl Builder {
 
     fn edge(&mut self, from: &str, to: &str, label: &str) {
         if from != to {
-            self.edges.insert(SysEdge { from: from.into(), to: to.into(), label: label.into() });
+            self.edges.insert(SysEdge {
+                from: from.into(),
+                to: to.into(),
+                label: label.into(),
+            });
         }
     }
 }
@@ -299,7 +489,11 @@ fn pkg_id(p: &Package) -> String {
 }
 
 fn found<'a>(deps: &BTreeSet<String>, table: &'a [(&str, &str)]) -> Vec<&'a str> {
-    table.iter().filter(|(dep, _)| deps.contains(*dep)).map(|(_, label)| *label).collect()
+    table
+        .iter()
+        .filter(|(dep, _)| deps.contains(*dep))
+        .map(|(_, label)| *label)
+        .collect()
 }
 
 pub fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
@@ -313,14 +507,24 @@ pub fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
         let web = found(&p.deps, WEB_FRAMEWORKS);
         let mobile = found(&p.deps, MOBILE_FRAMEWORKS);
         let is_workspace_root = monorepo && p.dir.is_empty() && server.is_empty() && web.is_empty();
-        let config_only = ["tsconfig", "eslint-config", "prettier-config", "tailwind-config", "typescript-config", "biome-config"]
-            .iter()
-            .any(|c| p.name.ends_with(c));
+        let config_only = [
+            "tsconfig",
+            "eslint-config",
+            "prettier-config",
+            "tailwind-config",
+            "typescript-config",
+            "biome-config",
+        ]
+        .iter()
+        .any(|c| p.name.ends_with(c));
         if is_workspace_root || config_only {
             continue;
         }
         let shared = monorepo && (p.dir.starts_with("packages/") || p.dir.starts_with("libs/"));
-        let web = match web.iter().position(|w| ["Next.js", "Nuxt", "Remix", "Astro", "SvelteKit"].contains(w)) {
+        let web = match web
+            .iter()
+            .position(|w| ["Next.js", "Nuxt", "Remix", "Astro", "SvelteKit"].contains(w))
+        {
             Some(i) => vec![web[i]],
             None => web,
         };
@@ -337,8 +541,16 @@ pub fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
         } else {
             ("library", vec![])
         };
-        let where_ = if p.dir.is_empty() { "repo root".to_string() } else { p.dir.clone() };
-        let detail = if stack.is_empty() { where_ } else { format!("{}, {where_}", stack.join(" + ")) };
+        let where_ = if p.dir.is_empty() {
+            "repo root".to_string()
+        } else {
+            p.dir.clone()
+        };
+        let detail = if stack.is_empty() {
+            where_
+        } else {
+            format!("{}, {where_}", stack.join(" + "))
+        };
         b.node(&pkg_id(p), kind, &p.name, &detail);
     }
 
@@ -355,10 +567,27 @@ pub fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
                 b.edge(&id, &pkg_id(target), "uses code from");
             }
             for (prefix, kind, label) in SDKS {
-                let hit = if prefix.ends_with('/') { dep.starts_with(prefix) } else { dep == prefix };
+                let hit = if prefix.ends_with('/') {
+                    dep.starts_with(prefix)
+                } else {
+                    dep == prefix
+                };
                 if hit {
-                    let target = b.node(&format!("sdk:{label}"), kind, label, "found in package.json");
-                    b.edge(&id, &target, if *kind == "datastore" { "reads and writes" } else { "calls" });
+                    let target = b.node(
+                        &format!("sdk:{label}"),
+                        kind,
+                        label,
+                        "found in package.json",
+                    );
+                    b.edge(
+                        &id,
+                        &target,
+                        if *kind == "datastore" {
+                            "reads and writes"
+                        } else {
+                            "calls"
+                        },
+                    );
                 }
             }
         }
@@ -369,80 +598,175 @@ pub fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
     let mut domains: BTreeMap<String, String> = BTreeMap::new();
     for (path, text) in &inputs.wranglers {
         let dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
-        let Some(cfg) = parse_wrangler(path, text, warnings) else { continue };
-        let owner = package_of(pkgs, &format!("{dir}/x")).map(pkg_id).unwrap_or_else(|| format!("pkg:{dir}"));
-        let name = cfg.get("name").and_then(|v| v.as_str()).unwrap_or(dir).to_string();
+        let Some(cfg) = parse_wrangler(path, text, warnings) else {
+            continue;
+        };
+        let owner = package_of(pkgs, &format!("{dir}/x"))
+            .map(pkg_id)
+            .unwrap_or_else(|| format!("pkg:{dir}"));
+        let name = cfg
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(dir)
+            .to_string();
         let detail = match b.nodes.get(&owner) {
             Some(n) => format!("Cloudflare Worker \"{name}\", {}", n.detail),
             None => format!("Cloudflare Worker \"{name}\""),
         };
-        let label = b.nodes.get(&owner).map(|n| n.label.clone()).unwrap_or_else(|| name.clone());
-        b.nodes.insert(owner.clone(), SysNode { id: owner.clone(), kind: "service".into(), label, detail, parent: None });
+        let label = b
+            .nodes
+            .get(&owner)
+            .map(|n| n.label.clone())
+            .unwrap_or_else(|| name.clone());
+        b.nodes.insert(
+            owner.clone(),
+            SysNode {
+                id: owner.clone(),
+                kind: "service".into(),
+                label,
+                detail,
+                parent: None,
+            },
+        );
         workers.insert(name.clone(), owner.clone());
-        if let Some(main) = cfg.get("main").and_then(|v| v.as_str()).and_then(|m| crate::scan::join(dir, m)) {
+        if let Some(main) = cfg
+            .get("main")
+            .and_then(|v| v.as_str())
+            .and_then(|m| crate::scan::join(dir, m))
+        {
             mains.push((owner.clone(), main));
         }
-        let routes = cfg.get("routes").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let routes = cfg
+            .get("routes")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
         for r in routes.iter().chain(cfg.get("route")) {
-            let pattern = r.as_str().or_else(|| r.get("pattern").and_then(|p| p.as_str())).unwrap_or("");
-            let host = pattern.split('/').next().unwrap_or("").trim_start_matches("*.").trim_start_matches('*');
+            let pattern = r
+                .as_str()
+                .or_else(|| r.get("pattern").and_then(|p| p.as_str()))
+                .unwrap_or("");
+            let host = pattern
+                .split('/')
+                .next()
+                .unwrap_or("")
+                .trim_start_matches("*.")
+                .trim_start_matches('*');
             if !host.is_empty() {
                 domains.insert(host.to_string(), owner.clone());
             }
         }
 
-        let list = |key: &str| cfg.get(key).and_then(|v| v.as_array()).cloned().unwrap_or_default();
-        let field = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+        let list = |key: &str| {
+            cfg.get(key)
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default()
+        };
+        let field =
+            |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
         for db in list("d1_databases") {
             if let Some(n) = field(&db, "database_name").or_else(|| field(&db, "binding")) {
-                let t = b.node(&format!("d1:{n}"), "datastore", &format!("D1 {n}"), "Cloudflare D1 database");
+                let t = b.node(
+                    &format!("d1:{n}"),
+                    "datastore",
+                    &format!("D1 {n}"),
+                    "Cloudflare D1 database",
+                );
                 b.edge(&owner, &t, "reads and writes");
             }
         }
         for kv in list("kv_namespaces") {
             if let Some(n) = field(&kv, "binding") {
-                let t = b.node(&format!("kv:{n}"), "datastore", &format!("KV {n}"), "Cloudflare KV namespace");
+                let t = b.node(
+                    &format!("kv:{n}"),
+                    "datastore",
+                    &format!("KV {n}"),
+                    "Cloudflare KV namespace",
+                );
                 b.edge(&owner, &t, "reads and writes");
             }
         }
         for r2 in list("r2_buckets") {
             if let Some(n) = field(&r2, "bucket_name").or_else(|| field(&r2, "binding")) {
-                let t = b.node(&format!("r2:{n}"), "datastore", &format!("R2 {n}"), "Cloudflare R2 bucket");
+                let t = b.node(
+                    &format!("r2:{n}"),
+                    "datastore",
+                    &format!("R2 {n}"),
+                    "Cloudflare R2 bucket",
+                );
                 b.edge(&owner, &t, "reads and writes");
             }
         }
-        if let Some(dobj) = cfg.get("durable_objects").and_then(|d| d.get("bindings")).and_then(|v| v.as_array()) {
+        if let Some(dobj) = cfg
+            .get("durable_objects")
+            .and_then(|d| d.get("bindings"))
+            .and_then(|v| v.as_array())
+        {
             for d in dobj {
                 if let Some(n) = field(d, "class_name").or_else(|| field(d, "name")) {
-                    let t = b.node(&format!("do:{n}"), "datastore", &format!("Durable Object {n}"), "Cloudflare Durable Object");
+                    let t = b.node(
+                        &format!("do:{n}"),
+                        "datastore",
+                        &format!("Durable Object {n}"),
+                        "Cloudflare Durable Object",
+                    );
                     b.edge(&owner, &t, "reads and writes");
                 }
             }
         }
         if let Some(q) = cfg.get("queues") {
-            let queues = |k: &str| q.get(k).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let queues = |k: &str| {
+                q.get(k)
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default()
+            };
             for p in queues("producers") {
                 if let Some(n) = field(&p, "queue") {
-                    let t = b.node(&format!("queue:{n}"), "queue", &format!("queue {n}"), "Cloudflare Queue");
+                    let t = b.node(
+                        &format!("queue:{n}"),
+                        "queue",
+                        &format!("queue {n}"),
+                        "Cloudflare Queue",
+                    );
                     b.edge(&owner, &t, "sends to");
                 }
             }
             for c in queues("consumers") {
                 if let Some(n) = field(&c, "queue") {
-                    let t = b.node(&format!("queue:{n}"), "queue", &format!("queue {n}"), "Cloudflare Queue");
+                    let t = b.node(
+                        &format!("queue:{n}"),
+                        "queue",
+                        &format!("queue {n}"),
+                        "Cloudflare Queue",
+                    );
                     b.edge(&t, &owner, "delivers to");
                 }
             }
         }
-        if let Some(crons) = cfg.get("triggers").and_then(|t| t.get("crons")).and_then(|v| v.as_array()) {
+        if let Some(crons) = cfg
+            .get("triggers")
+            .and_then(|t| t.get("crons"))
+            .and_then(|v| v.as_array())
+        {
             for c in crons.iter().filter_map(|c| c.as_str()) {
-                let t = b.node(&format!("cron:{name}:{c}"), "schedule", &describe_cron(c), &format!("cron {c}"));
+                let t = b.node(
+                    &format!("cron:{name}:{c}"),
+                    "schedule",
+                    &describe_cron(c),
+                    &format!("cron {c}"),
+                );
                 b.edge(&t, &owner, "runs");
             }
         }
-        if let Some(assets) = cfg.get("assets").and_then(|a| a.get("directory")).and_then(|v| v.as_str())
+        if let Some(assets) = cfg
+            .get("assets")
+            .and_then(|a| a.get("directory"))
+            .and_then(|v| v.as_str())
             && let Some(target) = crate::scan::join(dir, assets)
-            && let Some(web) = package_of(pkgs, &format!("{target}/x")).filter(|p| !p.dir.is_empty() || target.is_empty())
+            && let Some(web) = package_of(pkgs, &format!("{target}/x"))
+                .filter(|p| !p.dir.is_empty() || target.is_empty())
         {
             let web_id = pkg_id(web);
             if web_id != owner && b.nodes.contains_key(&web_id) {
@@ -452,23 +776,47 @@ pub fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
         }
         for s in list("services") {
             if let Some(n) = field(&s, "service") {
-                let t = workers.get(&n).cloned().unwrap_or_else(|| b.node(&format!("worker:{n}"), "service", &n, "Cloudflare Worker (not in this repo)"));
+                let t = workers.get(&n).cloned().unwrap_or_else(|| {
+                    b.node(
+                        &format!("worker:{n}"),
+                        "service",
+                        &n,
+                        "Cloudflare Worker (not in this repo)",
+                    )
+                });
                 b.edge(&owner, &t, "calls");
             }
         }
     }
 
     for (dir, name) in &inputs.xcode {
-        b.node(&format!("xcode:{dir}/{name}"), "mobile", name, &format!("Apple app (Xcode), {}", if dir.is_empty() { "repo root" } else { dir }));
+        b.node(
+            &format!("xcode:{dir}/{name}"),
+            "mobile",
+            name,
+            &format!(
+                "Apple app (Xcode), {}",
+                if dir.is_empty() { "repo root" } else { dir }
+            ),
+        );
     }
 
     let mut features: BTreeMap<String, String> = BTreeMap::new();
     for (area, dir) in &inputs.areas {
         let parent = format!("pkg:{}", if dir.is_empty() { "." } else { dir });
-        let hosts_features = b.nodes.get(&parent).is_some_and(|p| p.kind == "service" || p.kind == "web");
+        let hosts_features = b
+            .nodes
+            .get(&parent)
+            .is_some_and(|p| p.kind == "service" || p.kind == "web");
         if let (true, Some(label)) = (hosts_features, feature_name(area, dir)) {
             let id = format!("feat:{area}");
-            let node = SysNode { id: id.clone(), kind: "feature".into(), label, detail: area.clone(), parent: Some(parent) };
+            let node = SysNode {
+                id: id.clone(),
+                kind: "feature".into(),
+                label,
+                detail: area.clone(),
+                parent: Some(parent),
+            };
             b.nodes.insert(id.clone(), node);
             features.insert(area.clone(), id);
         }
@@ -485,7 +833,9 @@ pub fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
                 .or(inputs.xcode.first())
                 .map(|(d, n)| format!("xcode:{d}/{n}"))
         } else {
-            package_of(pkgs, file).map(pkg_id).filter(|id| b.nodes.contains_key(id))
+            package_of(pkgs, file)
+                .map(pkg_id)
+                .filter(|id| b.nodes.contains_key(id))
         };
         let Some(owner) = owner else { continue };
         let worker = host
@@ -497,7 +847,10 @@ pub fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
             Some(w) => w,
             None => {
                 let key = service_key(host);
-                let sdk = SDK_DOMAINS.iter().find(|(_, d)| *d == key).map(|(label, _)| format!("sdk:{label}"));
+                let sdk = SDK_DOMAINS
+                    .iter()
+                    .find(|(_, d)| *d == key)
+                    .map(|(label, _)| format!("sdk:{label}"));
                 match sdk.filter(|id| b.nodes.contains_key(id)) {
                     Some(id) => id,
                     None => {
@@ -519,23 +872,46 @@ pub fn detect(inputs: Inputs, warnings: &mut Vec<Warning>) -> System {
     }
 
     if b.nodes.values().any(|n| n.kind == "web") {
-        let browser = b.node("client:browser", "client", "Browser", "people using the web app");
-        let webs: Vec<String> = b.nodes.values().filter(|n| n.kind == "web").map(|n| n.id.clone()).collect();
+        let browser = b.node(
+            "client:browser",
+            "client",
+            "Browser",
+            "people using the web app",
+        );
+        let webs: Vec<String> = b
+            .nodes
+            .values()
+            .filter(|n| n.kind == "web")
+            .map(|n| n.id.clone())
+            .collect();
         for w in webs {
             b.edge(&browser, &w, "opens");
         }
     }
 
     let (routes, route_calls, handlers) = http(&inputs, pkgs, &b, &mains);
-    System { nodes: b.nodes.into_values().collect(), edges: b.edges.into_iter().collect(), routes, route_calls, handlers }
+    System {
+        nodes: b.nodes.into_values().collect(),
+        edges: b.edges.into_iter().collect(),
+        routes,
+        route_calls,
+        handlers,
+    }
 }
 
-fn http(inputs: &Inputs, pkgs: &[Package], b: &Builder, mains: &[(String, String)]) -> (Vec<Route>, Vec<RouteCall>, Vec<Handler>) {
+fn http(
+    inputs: &Inputs,
+    pkgs: &[Package],
+    b: &Builder,
+    mains: &[(String, String)],
+) -> (Vec<Route>, Vec<RouteCall>, Vec<Handler>) {
     let owner_of = |file: &str| -> Option<String> {
         if file.ends_with(".swift") {
             return inputs.xcode.first().map(|(d, n)| format!("xcode:{d}/{n}"));
         }
-        package_of(pkgs, file).map(pkg_id).filter(|id| b.nodes.contains_key(id))
+        package_of(pkgs, file)
+            .map(pkg_id)
+            .filter(|id| b.nodes.contains_key(id))
     };
     let kind_of = |id: &str| b.nodes.get(id).map(|n| n.kind.as_str()).unwrap_or("");
 
@@ -543,9 +919,15 @@ fn http(inputs: &Inputs, pkgs: &[Package], b: &Builder, mains: &[(String, String
     let mut prefix_of: BTreeMap<(String, String), String> = BTreeMap::new();
     for _ in 0..4 {
         for (file, facts) in &inputs.code {
-            let Some(owner) = owner_of(file) else { continue };
+            let Some(owner) = owner_of(file) else {
+                continue;
+            };
             for (parent, prefix, child) in &facts.mounts {
-                let base = parent.as_ref().and_then(|p| prefix_of.get(&(owner.clone(), p.clone()))).cloned().unwrap_or_default();
+                let base = parent
+                    .as_ref()
+                    .and_then(|p| prefix_of.get(&(owner.clone(), p.clone())))
+                    .cloned()
+                    .unwrap_or_default();
                 prefix_of.insert((owner.clone(), child.clone()), join_route(&base, prefix));
             }
         }
@@ -553,22 +935,49 @@ fn http(inputs: &Inputs, pkgs: &[Package], b: &Builder, mains: &[(String, String
 
     let mut routes: Vec<Route> = Vec::new();
     for (file, facts) in &inputs.code {
-        let Some(owner) = owner_of(file) else { continue };
+        let Some(owner) = owner_of(file) else {
+            continue;
+        };
         let pkg_dir = package_of(pkgs, file).map(|p| p.dir.as_str()).unwrap_or("");
         let kind = kind_of(&owner);
         if kind == "service" {
             for (method, path, router) in &facts.routes {
-                let base = router.as_ref().and_then(|r| prefix_of.get(&(owner.clone(), r.clone()))).cloned().unwrap_or_default();
-                routes.push(Route { method: method.clone(), path: join_route(&base, path), file: file.clone(), service: owner.clone() });
+                let base = router
+                    .as_ref()
+                    .and_then(|r| prefix_of.get(&(owner.clone(), r.clone())))
+                    .cloned()
+                    .unwrap_or_default();
+                routes.push(Route {
+                    method: method.clone(),
+                    path: join_route(&base, path),
+                    file: file.clone(),
+                    service: owner.clone(),
+                });
             }
         }
-        if (kind == "service" || kind == "web") && let Some(path) = next_route(file, pkg_dir) {
-            let methods: Vec<&String> = facts.exports.iter().filter(|e| ["GET", "POST", "PUT", "PATCH", "DELETE"].contains(&e.as_str())).collect();
+        if (kind == "service" || kind == "web")
+            && let Some(path) = next_route(file, pkg_dir)
+        {
+            let methods: Vec<&String> = facts
+                .exports
+                .iter()
+                .filter(|e| ["GET", "POST", "PUT", "PATCH", "DELETE"].contains(&e.as_str()))
+                .collect();
             if file.contains("/pages/api/") || file.starts_with("pages/api/") {
-                routes.push(Route { method: "ANY".into(), path: path.clone(), file: file.clone(), service: owner.clone() });
+                routes.push(Route {
+                    method: "ANY".into(),
+                    path: path.clone(),
+                    file: file.clone(),
+                    service: owner.clone(),
+                });
             }
             for m in methods {
-                routes.push(Route { method: m.clone(), path: path.clone(), file: file.clone(), service: owner.clone() });
+                routes.push(Route {
+                    method: m.clone(),
+                    path: path.clone(),
+                    file: file.clone(),
+                    service: owner.clone(),
+                });
             }
         }
     }
@@ -577,21 +986,43 @@ fn http(inputs: &Inputs, pkgs: &[Package], b: &Builder, mains: &[(String, String
 
     let is_test = |f: &str| {
         let l = f.to_ascii_lowercase();
-        ["tests/", "test/", "__tests__/", "e2e/", ".test.", ".spec.", "tests.swift", "test.swift"].iter().any(|t| l.contains(t))
+        [
+            "tests/",
+            "test/",
+            "__tests__/",
+            "e2e/",
+            ".test.",
+            ".spec.",
+            "tests.swift",
+            "test.swift",
+        ]
+        .iter()
+        .any(|t| l.contains(t))
     };
     let mut calls: Vec<RouteCall> = Vec::new();
     for (file, facts) in &inputs.code {
         if is_test(file) {
             continue;
         }
-        let Some(owner) = owner_of(file) else { continue };
+        let Some(owner) = owner_of(file) else {
+            continue;
+        };
         for (path, method) in &facts.paths {
             let hit = routes
                 .iter()
                 .filter(|r| &r.file != file && path_matches(path, &r.path))
-                .find(|r| method.as_ref().is_none_or(|m| m == &r.method || r.method == "ANY"));
+                .find(|r| {
+                    method
+                        .as_ref()
+                        .is_none_or(|m| m == &r.method || r.method == "ANY")
+                });
             if let Some(r) = hit {
-                let call = RouteCall { from: owner.clone(), file: file.clone(), method: r.method.clone(), path: r.path.clone() };
+                let call = RouteCall {
+                    from: owner.clone(),
+                    file: file.clone(),
+                    method: r.method.clone(),
+                    path: r.path.clone(),
+                };
                 if !calls.contains(&call) {
                     calls.push(call);
                 }
@@ -602,10 +1033,17 @@ fn http(inputs: &Inputs, pkgs: &[Package], b: &Builder, mains: &[(String, String
     let mut handlers = Vec::new();
     for (owner, main) in mains {
         let stem = main.rsplit_once('.').map(|(s, _)| s).unwrap_or(main);
-        let facts = inputs.code.iter().find(|(f, _)| f == main || f.rsplit_once('.').map(|(s, _)| s) == Some(stem));
+        let facts = inputs
+            .code
+            .iter()
+            .find(|(f, _)| f == main || f.rsplit_once('.').map(|(s, _)| s) == Some(stem));
         if let Some((file, facts)) = facts {
             for kind in &facts.handlers {
-                handlers.push(Handler { kind: kind.clone(), file: file.clone(), service: owner.clone() });
+                handlers.push(Handler {
+                    kind: kind.clone(),
+                    file: file.clone(),
+                    service: owner.clone(),
+                });
             }
         }
     }
@@ -620,21 +1058,43 @@ fn describe_cron(c: &str) -> String {
     }
     let num = |s: &str| s.parse::<u32>().ok();
     let at = |m: u32, h: u32| format!("{h:02}:{m:02} UTC");
-    const DAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const DAYS: [&str; 7] = [
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+    ];
     let day = |s: &str| {
-        num(s).and_then(|d| DAYS.get(d as usize % 7).map(|d| d.to_string()))
-            .or_else(|| DAYS.iter().find(|d| d[..3].eq_ignore_ascii_case(s)).map(|d| d.to_string()))
+        num(s)
+            .and_then(|d| DAYS.get(d as usize % 7).map(|d| d.to_string()))
+            .or_else(|| {
+                DAYS.iter()
+                    .find(|d| d[..3].eq_ignore_ascii_case(s))
+                    .map(|d| d.to_string())
+            })
     };
     match (f[0], f[1], f[2], f[3], f[4]) {
         ("*", "*", "*", "*", "*") => "Every minute".into(),
         (m, "*", "*", "*", "*") if m.starts_with("*/") => format!("Every {} minutes", &m[2..]),
         (m, "*", "*", "*", "*") if num(m).is_some() => format!("Hourly at :{:02}", num(m).unwrap()),
-        (m, h, "*", "*", "*") if num(m).is_some() && num(h).is_some() => format!("Daily at {}", at(num(m).unwrap(), num(h).unwrap())),
+        (m, h, "*", "*", "*") if num(m).is_some() && num(h).is_some() => {
+            format!("Daily at {}", at(num(m).unwrap(), num(h).unwrap()))
+        }
         (m, h, "*", "*", d) if num(m).is_some() && num(h).is_some() && day(d).is_some() => {
-            format!("Weekly on {} at {}", day(d).unwrap(), at(num(m).unwrap(), num(h).unwrap()))
+            format!(
+                "Weekly on {} at {}",
+                day(d).unwrap(),
+                at(num(m).unwrap(), num(h).unwrap())
+            )
         }
         (m, h, dom, "*", "*") if num(m).is_some() && num(h).is_some() && num(dom).is_some() => {
-            format!("Monthly on day {dom} at {}", at(num(m).unwrap(), num(h).unwrap()))
+            format!(
+                "Monthly on day {dom} at {}",
+                at(num(m).unwrap(), num(h).unwrap())
+            )
         }
         _ => format!("Schedule {c}"),
     }
@@ -647,25 +1107,41 @@ pub fn site_of(host: &str) -> String {
     if n <= 2 || host.parse::<std::net::Ipv4Addr>().is_ok() {
         return host.to_string();
     }
-    let country_second_level =
-        parts[n - 1].len() == 2 && ["co", "com", "org", "net", "gov", "edu", "ac"].contains(&parts[n - 2]);
+    let country_second_level = parts[n - 1].len() == 2
+        && ["co", "com", "org", "net", "gov", "edu", "ac"].contains(&parts[n - 2]);
     parts[n - if country_second_level { 3 } else { 2 }..].join(".")
 }
 
 fn service_key(host: &str) -> String {
     let site = site_of(host);
-    if PLATFORMS.contains(&site.as_str()) { mirror_key(host) } else { site }
+    if PLATFORMS.contains(&site.as_str()) {
+        mirror_key(host)
+    } else {
+        site
+    }
 }
 
 /// query1.finance.yahoo.com and query2.finance.yahoo.com are one service.
 fn mirror_key(host: &str) -> String {
     let (first, rest) = host.split_once('.').unwrap_or((host, ""));
     let trimmed = first.trim_end_matches(|c: char| c.is_ascii_digit());
-    let first = if trimmed.is_empty() || trimmed.ends_with('-') && trimmed.len() < 2 { first } else { trimmed };
-    if rest.is_empty() { first.to_string() } else { format!("{first}.{rest}") }
+    let first = if trimmed.is_empty() || trimmed.ends_with('-') && trimmed.len() < 2 {
+        first
+    } else {
+        trimmed
+    };
+    if rest.is_empty() {
+        first.to_string()
+    } else {
+        format!("{first}.{rest}")
+    }
 }
 
-fn parse_wrangler(path: &str, text: &str, warnings: &mut Vec<Warning>) -> Option<serde_json::Value> {
+fn parse_wrangler(
+    path: &str,
+    text: &str,
+    warnings: &mut Vec<Warning>,
+) -> Option<serde_json::Value> {
     if path.ends_with(".toml") {
         return match toml::from_str::<serde_json::Value>(text) {
             Ok(v) => Some(v),
@@ -679,7 +1155,13 @@ fn parse_wrangler(path: &str, text: &str, warnings: &mut Vec<Warning>) -> Option
     match serde_json::from_str(&strip_json_comments(text)) {
         Ok(v) => Some(v),
         Err(e) => {
-            warnings.push(config_warning(path, text, e.line(), e.column(), &e.to_string()));
+            warnings.push(config_warning(
+                path,
+                text,
+                e.line(),
+                e.column(),
+                &e.to_string(),
+            ));
             None
         }
     }
@@ -688,19 +1170,34 @@ fn parse_wrangler(path: &str, text: &str, warnings: &mut Vec<Warning>) -> Option
 fn line_col(text: &str, offset: usize) -> (usize, usize) {
     let before = &text[..offset.min(text.len())];
     let line = before.matches('\n').count() + 1;
-    let col = before.rsplit('\n').next().map(|l| l.chars().count() + 1).unwrap_or(1);
+    let col = before
+        .rsplit('\n')
+        .next()
+        .map(|l| l.chars().count() + 1)
+        .unwrap_or(1);
     (line, col)
 }
 
 fn config_warning(path: &str, text: &str, line: usize, col: usize, msg: &str) -> Warning {
-    let offset: usize = text.split_inclusive('\n').take(line.saturating_sub(1)).map(str::len).sum::<usize>() + col.saturating_sub(1);
+    let offset: usize = text
+        .split_inclusive('\n')
+        .take(line.saturating_sub(1))
+        .map(str::len)
+        .sum::<usize>()
+        + col.saturating_sub(1);
     let offset = offset.min(text.len().saturating_sub(1)) as u32;
     Warning::new(
         "config_unreadable",
         format!("can't read {path}: {msg}"),
         "the system map leaves out what this file would add; fix it and re-run",
     )
-    .in_file(path, Source { text: text.to_string(), labels: vec![(offset, offset + 1, Some(msg.to_string()))] })
+    .in_file(
+        path,
+        Source {
+            text: text.to_string(),
+            labels: vec![(offset, offset + 1, Some(msg.to_string()))],
+        },
+    )
 }
 
 /// Drops `//` and `/* */` comments and trailing commas outside strings (wrangler.jsonc).
@@ -749,7 +1246,12 @@ fn strip_json_comments(text: &str) -> String {
     let mut cleaned = String::with_capacity(out.len());
     let bytes: Vec<char> = out.chars().collect();
     for (i, c) in bytes.iter().enumerate() {
-        if *c == ',' && bytes[i + 1..].iter().find(|n| !n.is_whitespace()).is_some_and(|n| *n == '}' || *n == ']') {
+        if *c == ','
+            && bytes[i + 1..]
+                .iter()
+                .find(|n| !n.is_whitespace())
+                .is_some_and(|n| *n == '}' || *n == ']')
+        {
             continue;
         }
         cleaned.push(*c);
@@ -758,7 +1260,13 @@ fn strip_json_comments(text: &str) -> String {
 }
 
 pub fn diff_lines(before: &System, after: &System) -> Vec<String> {
-    let label = |s: &System, id: &str| s.nodes.iter().find(|n| n.id == id).map(|n| n.label.clone()).unwrap_or_else(|| id.to_string());
+    let label = |s: &System, id: &str| {
+        s.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| n.label.clone())
+            .unwrap_or_else(|| id.to_string())
+    };
     let describe = |n: &SysNode| match n.kind.as_str() {
         "datastore" | "queue" => n.label.clone(),
         "schedule" => format!("schedule ({})", n.label.to_lowercase()),
@@ -766,7 +1274,15 @@ pub fn diff_lines(before: &System, after: &System) -> Vec<String> {
         "library" => format!("shared package {}", n.label),
         "feature" => format!("feature {} ({})", n.label, n.detail),
         "mobile" => format!("app {}", n.label),
-        _ => format!("{} {}", if n.kind == "web" { "web app" } else { "service" }, n.label),
+        _ => format!(
+            "{} {}",
+            if n.kind == "web" {
+                "web app"
+            } else {
+                "service"
+            },
+            n.label
+        ),
     };
     let old: BTreeSet<&str> = before.nodes.iter().map(|n| n.id.as_str()).collect();
     let new: BTreeSet<&str> = after.nodes.iter().map(|n| n.id.as_str()).collect();
@@ -781,12 +1297,22 @@ pub fn diff_lines(before: &System, after: &System) -> Vec<String> {
     let new_e: BTreeSet<_> = after.edges.iter().collect();
     for e in after.edges.iter().filter(|e| !old_e.contains(e)) {
         if old.contains(e.from.as_str()) && old.contains(e.to.as_str()) {
-            lines.push(format!("{} now {} {}.", label(after, &e.from), e.label, label(after, &e.to)));
+            lines.push(format!(
+                "{} now {} {}.",
+                label(after, &e.from),
+                e.label,
+                label(after, &e.to)
+            ));
         }
     }
     for e in before.edges.iter().filter(|e| !new_e.contains(e)) {
         if new.contains(e.from.as_str()) && new.contains(e.to.as_str()) {
-            lines.push(format!("{} no longer {} {}.", label(before, &e.from), e.label, label(before, &e.to)));
+            lines.push(format!(
+                "{} no longer {} {}.",
+                label(before, &e.from),
+                e.label,
+                label(before, &e.to)
+            ));
         }
     }
     lines

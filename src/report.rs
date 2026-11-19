@@ -32,20 +32,35 @@ pub fn render(report: &Report) -> String {
     let json = json.replace('<', "\\u003c");
     // Title first: substituting data first would let repo contents inject a title marker.
     TEMPLATE
-        .replace("__ARCHSNAP_TITLE__", &html_escape(&report.repo))
-        .replace("__ARCHSNAP_BRANDS__", &brands(report).replace('<', "\\u003c"))
-        .replace("__ARCHSNAP_DATA__", &json)
+        .replace("__EARNEST_TITLE__", &html_escape(&report.repo))
+        .replace(
+            "__EARNEST_BRANDS__",
+            &brands(report).replace('<', "\\u003c"),
+        )
+        .replace("__EARNEST_DATA__", &json)
 }
 
 /// The hand-picked logos, plus a logo for each outside service whose domain names a simple-icons slug
 /// (api.buffer.com -> buffer), under `domains` keyed by the node label.
 fn brands(report: &Report) -> String {
     let mut out: serde_json::Value = serde_json::from_str(BRANDS).expect("brands.json parses");
-    let more: serde_json::Value = serde_json::from_str(BRANDS_MORE).expect("brands-more.json parses");
+    let more: serde_json::Value =
+        serde_json::from_str(BRANDS_MORE).expect("brands-more.json parses");
     let mut domains = serde_json::Map::new();
-    for n in report.weeks.iter().flat_map(|w| &w.snapshot.system.nodes).filter(|n| n.kind == "external") {
+    for n in report
+        .weeks
+        .iter()
+        .flat_map(|w| &w.snapshot.system.nodes)
+        .filter(|n| n.kind == "external")
+    {
         let site = site_of(&n.label);
-        let slug: String = site.split('.').next().unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        let slug: String = site
+            .split('.')
+            .next()
+            .unwrap_or("")
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect();
         if slug.is_empty() || !n.label.contains('.') {
             continue;
         }
@@ -61,5 +76,8 @@ fn brands(report: &Report) -> String {
 }
 
 fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }

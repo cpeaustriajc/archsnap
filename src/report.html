@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>__ARCHSNAP_TITLE__ architecture</title>
+<title>__EARNEST_TITLE__ architecture</title>
 <style>
 :root {
   color-scheme: light;
@@ -288,10 +288,10 @@ tr.removed td { color: var(--ink-3); }
   </section>
 </div>
 
-<script id="archsnap-brands" type="application/json">__ARCHSNAP_BRANDS__</script>
-<script id="archsnap-data" type="application/json">__ARCHSNAP_DATA__</script>
+<script id="earnest-brands" type="application/json">__EARNEST_BRANDS__</script>
+<script id="earnest-data" type="application/json">__EARNEST_DATA__</script>
 <script>
-const data = JSON.parse(document.getElementById("archsnap-data").textContent);
+const data = JSON.parse(document.getElementById("earnest-data").textContent);
 const $ = (id) => document.getElementById(id);
 const el = (tag, attrs = {}, text) => {
   const e = document.createElement(tag);
@@ -609,7 +609,7 @@ function renderSystem() {
   const sys = foldOutside(full, 12);
   const host = $("system");
   if (!sys.nodes.length) {
-    host.replaceChildren(el("p", { class: "lede" }, "No apps, services or data stores found this week. archsnap reads package.json files, Cloudflare wrangler config, Xcode projects and the URLs the code calls."));
+    host.replaceChildren(el("p", { class: "lede" }, "No apps, services or data stores found this week. earnest reads package.json files, Cloudflare wrangler config, Xcode projects and the URLs the code calls."));
     $("system-detail").replaceChildren();
     $("connections-summary").textContent = "No connections found";
     $("connections").replaceChildren();
@@ -1011,7 +1011,7 @@ function renderAreas() {
 }
 
 // ---- Poster view: the system drawn top-down like a hand-made design diagram ----
-const { icons: BRANDS, domains: BRAND_DOMAINS = {} } = JSON.parse(document.getElementById("archsnap-brands").textContent);
+const { icons: BRANDS, domains: BRAND_DOMAINS = {} } = JSON.parse(document.getElementById("earnest-brands").textContent);
 const DOMAIN_BRAND = {
   "apple.com": "apple", "github.com": "github", "githubusercontent.com": "github", "google.com": "google",
   "googleapis.com": "google", "dns.google": "google", "youtube.com": "youtube", "youtu.be": "youtube", "tiktok.com": "tiktok",
@@ -1071,11 +1071,11 @@ function flowOf(e) {
   return "request";
 }
 
-let view = (() => { try { return localStorage.getItem("archsnap-view") || "poster"; } catch { return "poster"; } })();
+let view = (() => { try { return localStorage.getItem("earnest-view") || "poster"; } catch { return "poster"; } })();
 
 function setView(v) {
   view = v;
-  try { localStorage.setItem("archsnap-view", v); } catch { /* private mode: the choice just isn't remembered */ }
+  try { localStorage.setItem("earnest-view", v); } catch { /* private mode: the choice just isn't remembered */ }
   $("view-poster").setAttribute("aria-pressed", String(v === "poster"));
   $("view-explore").setAttribute("aria-pressed", String(v === "explore"));
   $("poster-view").hidden = v !== "poster";
@@ -1724,7 +1724,7 @@ function renderSequence() {
   }
 }
 
-let walkView = (() => { try { return localStorage.getItem("archsnap-walk") || "sequence"; } catch { return "sequence"; } })();
+let walkView = (() => { try { return localStorage.getItem("earnest-walk") || "sequence"; } catch { return "sequence"; } })();
 
 function renderWalkTabs() {
   $("walk-tab-sequence").setAttribute("aria-pressed", String(walkView === "sequence"));
@@ -1735,7 +1735,7 @@ function renderWalkTabs() {
 
 function setWalkView(v) {
   walkView = v;
-  try { localStorage.setItem("archsnap-walk", v); } catch { /* private mode: the choice just isn't remembered */ }
+  try { localStorage.setItem("earnest-walk", v); } catch { /* private mode: the choice just isn't remembered */ }
   renderWalkTabs();
 }
 
