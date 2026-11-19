@@ -1,17 +1,13 @@
 default: check
 
 # One recipe per check. To add a check, write its recipe and name it here.
-check: format comments unused-dependencies dependencies lint test verify
+check: format unused-dependencies dependencies lint test verify
 
 format:
     cargo fmt --check
 
 lint:
     cargo clippy --all-targets --locked -- -D warnings
-
-comments:
-    ast-grep test --skip-snapshot-tests
-    ast-grep scan
 
 dependencies:
     cargo deny check

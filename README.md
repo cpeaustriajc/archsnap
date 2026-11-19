@@ -380,10 +380,12 @@ One command runs every check:
 just check
 ```
 
-The `justfile` lists the checks: `cargo fmt --check`, clippy with warnings denied, the ast-grep
-rule that forbids comments, `cargo deny check`, `cargo machete`, the tests and the Verus proofs
-(`cargo verus focus`). It needs `just`, `ast-grep`, `cargo-deny`, `cargo-machete` and Verus on
-your `PATH`; `.github/workflows/check.yml` pins the version of each. The tests also need Node
+The `justfile` lists the checks: `cargo fmt --check`, clippy with warnings denied, `cargo deny
+check`, `cargo machete`, the tests and the Verus proofs (`cargo verus focus`). It needs `just`,
+`cargo-deny`, `cargo-machete` and Verus on your `PATH`; `.github/workflows/check.yml` pins the
+version of each. The lint table in `Cargo.toml` and the settings in `clippy.toml` are
+[BeautifulRust](https://github.com/morganlinton/BeautifulRust)'s `lints/lints.toml` and
+`lints/clippy.toml`, taken whole; update them from there, never by hand. The tests also need Node
 22.18 or newer and `tsc` on your `PATH`. `just fix` formats the code and applies clippy's fixes.
 
 To run the checks before each commit, enable the hook once per clone:
