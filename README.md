@@ -138,3 +138,22 @@ End-to-end tests drive the real binary against throwaway git repos:
 ```sh
 cargo test
 ```
+
+## Development
+
+One command runs every check:
+
+```sh
+just check
+```
+
+The `justfile` lists the checks: `cargo fmt --check`, clippy with warnings denied, the ast-grep rules
+in `rules/`, `cargo deny check`, `cargo machete` and the tests. It needs `just`, `ast-grep`,
+`cargo-deny` and `cargo-machete` on your `PATH`. `just fix` formats the code and applies clippy's
+fixes.
+
+To run the checks before each commit, enable the hook once per clone:
+
+```sh
+git config core.hooksPath .githooks
+```
