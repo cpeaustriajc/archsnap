@@ -230,7 +230,7 @@ pub(crate) struct WranglerFile {
     pub(crate) text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct XcodeProject {
     pub(crate) dir: String,
     pub(crate) name: String,
