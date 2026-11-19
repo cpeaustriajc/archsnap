@@ -18,7 +18,10 @@ use store::Store;
 const MAX_PRINTED_WARNINGS: usize = 10;
 
 #[derive(Parser)]
-#[command(version, about = "Weekly architecture snapshots of a TypeScript/JavaScript repo")]
+#[command(
+    version,
+    about = "Weekly architecture snapshots of a TypeScript/JavaScript repo"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
@@ -133,24 +136,43 @@ fn run(args: RunArgs) -> Result<(), Fatal> {
 
     let mut weeks = Vec::with_capacity(total);
     for i in (0..snapshots.len()).rev() {
-        let before = if i == 0 { None } else { Some(&snapshots[i - 1]) };
+        let before = if i == 0 {
+            None
+        } else {
+            Some(&snapshots[i - 1])
+        };
         let mut snapshot = snapshots[i].clone();
         // File-level links only for the newest week: on big repos every week's links would bloat the page.
         if i + 1 != snapshots.len() {
             snapshot.edges.iter_mut().for_each(|e| e.links.clear());
         }
-        weeks.push(report::WeekView { diff: diff::diff(before, &snapshots[i]), snapshot });
+        weeks.push(report::WeekView {
+            diff: diff::diff(before, &snapshots[i]),
+            snapshot,
+        });
     }
 
     for w in warnings.iter().take(MAX_PRINTED_WARNINGS) {
         w.print();
     }
     if warnings.len() > MAX_PRINTED_WARNINGS {
-        eprintln!("…and {} more warnings (listed in the report)", warnings.len() - MAX_PRINTED_WARNINGS);
+        eprintln!(
+            "…and {} more warnings (listed in the report)",
+            warnings.len() - MAX_PRINTED_WARNINGS
+        );
     }
 
-    let repo_name = git.root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let html = report::render(&report::Report { repo: repo_name, shallow, weeks, warnings: &warnings });
+    let repo_name = git
+        .root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let html = report::render(&report::Report {
+        repo: repo_name,
+        shallow,
+        weeks,
+        warnings: &warnings,
+    });
     let path = store.write_report(&html)?;
     eprintln!("→ {}", path.display());
 

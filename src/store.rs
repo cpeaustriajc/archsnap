@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::diag::{Fatal, Warning};
-use crate::scan::{Snapshot, SCHEMA, TOOL_VERSION};
+use crate::scan::{SCHEMA, Snapshot, TOOL_VERSION};
 
 pub struct Store {
     pub out: PathBuf,
@@ -10,23 +10,42 @@ pub struct Store {
 
 impl Store {
     pub fn open(out: &Path) -> Result<Store, Fatal> {
-        let fail = |source| Fatal::OutputNotWritable { path: out.to_path_buf(), source };
+        let fail = |source| Fatal::OutputNotWritable {
+            path: out.to_path_buf(),
+            source,
+        };
         fs::create_dir_all(out.join("snapshots")).map_err(fail)?;
         let probe = out.join(".write-test");
         fs::write(&probe, b"ok").map_err(fail)?;
         let _ = fs::remove_file(probe);
-        Ok(Store { out: out.to_path_buf() })
+        Ok(Store {
+            out: out.to_path_buf(),
+        })
     }
 
     fn path(&self, week: &str) -> PathBuf {
         self.out.join("snapshots").join(format!("{week}.json"))
     }
 
-    pub fn load(&self, week: &str, sha: &str, depth: usize) -> Result<Option<Snapshot>, Box<Warning>> {
+    pub fn load(
+        &self,
+        week: &str,
+        sha: &str,
+        depth: usize,
+    ) -> Result<Option<Snapshot>, Box<Warning>> {
         let p = self.path(week);
-        let Ok(text) = fs::read_to_string(&p) else { return Ok(None) };
+        let Ok(text) = fs::read_to_string(&p) else {
+            return Ok(None);
+        };
         match serde_json::from_str::<Snapshot>(&text) {
-            Ok(s) if s.schema == SCHEMA && s.tool == TOOL_VERSION && s.sha == sha && s.depth == depth => Ok(Some(s)),
+            Ok(s)
+                if s.schema == SCHEMA
+                    && s.tool == TOOL_VERSION
+                    && s.sha == sha
+                    && s.depth == depth =>
+            {
+                Ok(Some(s))
+            }
             Ok(_) => Ok(None),
             Err(e) => Err(Box::new(Warning::new(
                 "snapshot_corrupt",
@@ -44,7 +63,10 @@ impl Store {
 
     pub fn write_report(&self, html: &str) -> Result<PathBuf, Fatal> {
         let p = self.out.join("index.html");
-        fs::write(&p, html).map_err(|source| Fatal::OutputNotWritable { path: p.clone(), source })?;
+        fs::write(&p, html).map_err(|source| Fatal::OutputNotWritable {
+            path: p.clone(),
+            source,
+        })?;
         Ok(p)
     }
 }
