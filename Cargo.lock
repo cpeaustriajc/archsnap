@@ -255,6 +255,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "earnest_tla"
+version = "0.1.0"
+dependencies = [
+ "earnest_ir",
+ "earnest_value",
+ "proptest",
+]
+
+[[package]]
 name = "earnest_ts"
 version = "0.1.0"
 dependencies = [
