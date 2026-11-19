@@ -177,3 +177,6 @@ fn change_lines(d: &Diff) -> Vec<String> {
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
+
+#[cfg(test)]
+mod properties;
