@@ -191,10 +191,7 @@ fn import_resolution_is_deterministic_for_the_same_input() {
             let borrowed: BTreeSet<&str> = files.iter().map(String::as_str).collect();
             let first = describe(&classify(&from, &spec, &borrowed, &packages));
             let second = describe(&classify(&from, &spec, &borrowed, &packages));
-            let rebuilt: BTreeSet<&str> = files.iter().rev().map(String::as_str).collect();
-            let third = describe(&classify(&from, &spec, &rebuilt, &packages));
-            prop_assert_eq!(&first, &second);
-            prop_assert_eq!(&first, &third);
+            prop_assert_eq!(first, second);
             Ok(())
         })
         .unwrap();
