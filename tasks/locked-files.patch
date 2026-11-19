@@ -1,0 +1,264 @@
+diff -urN a/.claude/settings.json b/.claude/settings.json
+--- a/.claude/settings.json	2026-11-19 15:31:31.656547671 +0000
++++ b/.claude/settings.json	2026-11-19 15:31:31.692254464 +0000
+@@ -26,7 +26,9 @@
+       "Edit(/rules/**)",
+       "Edit(/rule-tests/**)",
+       "Edit(/sgconfig.yml)",
+-      "Edit(/.github/workflows/**)"
++      "Edit(/.github/workflows/**)",
++      "Edit(/apps/earnest/tests/**)",
++      "Edit(/tasks/conformance/**)"
+     ]
+   },
+   "hooks": {
+@@ -97,6 +99,17 @@
+           }
+         ]
+       }
++    ],
++    "SubagentStop": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "command -v just >/dev/null || { echo \"Stop hook: just is not on PATH. Install it, then run just check.\" >&2; exit 2; }; cd \"$(jq -r '.cwd // empty')\" 2>/dev/null && just --summary >/dev/null 2>&1 || cd \"$CLAUDE_PROJECT_DIR\" || exit 2; out=$(just check 2>&1) || { printf '%s\\n' \"$out\" | tail -n 80 >&2; exit 2; }",
++            "timeout": 900
++          }
++        ]
++      }
+     ]
+   }
+ }
+diff -urN a/.github/workflows/check.yml b/.github/workflows/check.yml
+--- a/.github/workflows/check.yml	2026-11-19 15:31:31.662577855 +0000
++++ b/.github/workflows/check.yml	2026-11-19 15:31:31.692356878 +0000
+@@ -22,6 +22,11 @@
+   VERUS_VERSION: 0.2026.11.02.8bf68ee
+   VERUS_SHA256: f3a0119292df8855e4435da8130bee1873b0e6a60c306accf81a08ea687bba3c
+   VERUS_TOOLCHAIN: 1.99.1
++  NODE_VERSION: 22.23.5
++  TYPESCRIPT_VERSION: 6.0.2
++  PRETTIER_VERSION: 3.8.1
++  TLC_VERSION: 1.8.0
++  TLC_SHA256: 7e53aa636dac8a3cb0533f343115c0548e03fc0ce5edc7739becf58d3d0fb84f
+ 
+ jobs:
+   check:
+@@ -33,7 +38,10 @@
+           persist-credentials: false
+       - run: rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt,clippy --no-self-update
+       - run: rustup default "$RUST_VERSION"
+-      - run: sudo npm install --global "rust-just@$JUST_VERSION" "@ast-grep/cli@$AST_GREP_VERSION"
++      - uses: actions/setup-node@v4
++        with:
++          node-version: ${{ env.NODE_VERSION }}
++      - run: sudo npm install --global "rust-just@$JUST_VERSION" "@ast-grep/cli@$AST_GREP_VERSION" "typescript@$TYPESCRIPT_VERSION" "prettier@$PRETTIER_VERSION"
+       - uses: actions/cache@v4
+         with:
+           path: ~/cargo-tools
+@@ -56,3 +64,10 @@
+           key: cargo-build-${{ runner.os }}-${{ env.RUST_VERSION }}-verus-${{ env.VERUS_VERSION }}-${{ hashFiles('Cargo.lock') }}
+           restore-keys: cargo-build-${{ runner.os }}-${{ env.RUST_VERSION }}-verus-${{ env.VERUS_VERSION }}-
+       - run: just check
++      - name: Install TLC
++        run: |
++          mkdir -p target/tools
++          curl --fail --silent --show-error --location --output target/tools/tla2tools.jar \
++            "https://github.com/tlaplus/tlaplus/releases/download/v$TLC_VERSION/tla2tools.jar"
++          echo "$TLC_SHA256  target/tools/tla2tools.jar" | sha256sum --check --quiet
++      - run: just tlc
+diff -urN a/justfile b/justfile
+--- a/justfile	2026-11-19 15:31:31.649377087 +0000
++++ b/justfile	2026-11-19 15:31:31.692000052 +0000
+@@ -1,7 +1,7 @@
+ default: check
+ 
+ # One recipe per check. To add a check, write its recipe and name it here.
+-check: format comments unused-dependencies dependencies lint test verify
++check: format comments unused-dependencies dependencies lint typescript test verify
+ 
+ format:
+     cargo fmt --check
+@@ -25,6 +25,15 @@
+ verify:
+     cargo verus focus
+ 
++typescript:
++    tsc --noEmit -p npm/model
++    prettier --check npm/model
++    node --test npm/model/test/
++
++# Needs Java and target/tools/tla2tools.jar. CI runs it; `just check` does not.
++tlc:
++    cargo run --release --locked -p earnest-cli -- confirm --tlc target/tools/tla2tools.jar tasks/conformance/models
++
+ mutants:
+     cargo mutants --jobs {{ num_cpus() }} --timeout 30 --build-timeout 300
+ 
+diff -urN a/rule-tests/no-lint-attributes-test.yml b/rule-tests/no-lint-attributes-test.yml
+--- a/rule-tests/no-lint-attributes-test.yml	1970-01-01 00:00:00.000000000 +0000
++++ b/rule-tests/no-lint-attributes-test.yml	2026-11-19 15:31:31.664222261 +0000
+@@ -0,0 +1,112 @@
++id: no-lint-attributes
++valid:
++  - "#[derive(Debug)] struct S;"
++  - "#[test] fn t() {}"
++  - "#[cfg(test)] mod m {}"
++  - "#[cfg_attr(test, derive(Debug))] struct S;"
++  - "#![cfg_attr(docsrs, feature(doc_cfg))]"
++  - "#[cfg_attr(feature = \"deny\", derive(Debug))] struct S;"
++  - "#![forbid_nothing]"
++  - "let s = \"#[allow(dead_code)]\";"
++  - "let s = r#\"#![deny(warnings)]\"#;"
++  - "fn allow() {} fn f() { allow(); }"
++  - "let allow = 1;"
++  - "#[clippy::cognitive_complexity = \"10\"] fn f() {}"
++  - "let v = vec![allow(1)];"
++  - "m!(deny(x));"
++  - "m! { #[derive(Debug)] struct S; }"
++  - "m! { #[cfg_attr(test, derive(Debug))] struct S; }"
++  - "#[doc = \"allow\"] fn f() {}"
++  - "#[cfg(feature = \"deny\")] fn f() {}"
++  - "#[cfg(allow)] fn f() {}"
++  - "#[allow_internal_unstable] fn f() {}"
++  - "struct S { allow: i32, warn: i32 }"
++  - "use foo::allow;"
++  - "fn f() { x.deny(); foo::expect(1); }"
++  - "let a = b[allow(1)];"
++  - "// #[allow(dead_code)]"
++  - "/* #![deny(warnings)] */"
++  - "/// #[allow(dead_code)]"
++  - "m!(foo[allow(x)]);"
++  - "m!(#[doc = \"allow\"] fn f() {});"
++  - "m! { #[cfg_attr(test, derive(Debug))] fn f() { allow(x); } }"
++  - "m!(#[cfg_attr(test, derive(Debug))] fn f() { deny(1) });"
++  - "#[cfg_attr(test, derive(Debug))] fn f() { allow(1); }"
++  - "#[cfg_attr(allow, derive(Debug))] struct S;"
++  - "macro_rules! m { ($(#[$meta:meta])* $v:vis fn $n:ident) => { $(#[$meta])* $v fn $n() {} }; }"
++  - "#[derive(Debug)] struct allow;"
++invalid:
++  - "#[core::allow(dead_code)] fn f() {}"
++  - "#[::core::prelude::v1::deny(dead_code)] fn f() {}"
++  - "#[r#allow(dead_code)] fn f() {}"
++  - "m! { #[allow(unused)] fn a() {} }"
++  - "m!(#![deny(warnings)]);"
++  - "macro_rules! m { () => { #[expect(dead_code)] fn b() {} }; }"
++  - "m! { #[cfg_attr(test, warn(unused))] fn a() {} }"
++  - "#[allow(dead_code)] fn f() {}"
++  - "#[expect(dead_code)] fn f() {}"
++  - "#[warn(dead_code)] fn f() {}"
++  - "#[deny(dead_code)] fn f() {}"
++  - "#[forbid(dead_code)] fn f() {}"
++  - "#![allow(dead_code)]"
++  - "#![expect(dead_code)]"
++  - "#![warn(dead_code)]"
++  - "#![deny(dead_code)]"
++  - "#![forbid(unsafe_code)]"
++  - "#![deny(warnings)]"
++  - "#[allow(clippy::too_many_arguments)] fn f() {}"
++  - "#[allow(clippy::all, dead_code)] fn f() {}"
++  - "#[cfg_attr(test, allow(dead_code))] fn f() {}"
++  - "#![cfg_attr(test, deny(unused))]"
++  - "#[cfg_attr(feature = \"x\", cfg_attr(test, expect(unused)))] fn f() {}"
++  - "#[cfg_attr(test, derive(Debug), warn(unused))] struct S;"
++  - |
++    #[derive(Debug)]
++    #[allow(dead_code)]
++    struct S;
++  - |
++    fn f() {
++        #[allow(unused_variables)]
++        let x = 1;
++    }
++  - |
++    impl S {
++        #[expect(dead_code)]
++        fn g(&self) {}
++    }
++  - "# [ allow ( dead_code ) ] fn f() {}"
++  - "#[ /* c */ allow(dead_code) ] fn f() {}"
++  - |
++    #[cfg_attr(
++        test,
++        // comment
++        allow(dead_code),
++    )]
++    fn f() {}
++  - "mod m { #![allow(dead_code)] }"
++  - "fn f(#[allow(unused)] x: i32) {}"
++  - "struct S { #[allow(dead_code)] a: i32 }"
++  - "enum E { #[allow(dead_code)] A }"
++  - "fn f(x: i32) { match x { #[allow(unreachable_patterns)] _ => {} } }"
++  - "extern \"C\" { #[allow(improper_ctypes)] fn f(); }"
++  - "#[allow(unused_imports)] use std::fmt;"
++  - "fn f() { #[allow(unused_parens)] foo(); }"
++  - "fn f() { #[allow(unused_braces)] { 1 } }"
++  - "fn f() { let s = S { #[allow(dead_code)] a: 1 }; }"
++  - "fn f() { g(#[allow(unused)] 1); }"
++  - "fn f() { let v = [#[allow(unused)] 1]; }"
++  - "fn f() { #[allow(unused)] let a = 1; }"
++  - "m![#[allow(x)] fn f() {}];"
++  - "m!(#[allow(x)] fn f() {});"
++  - "m!(n! { #[allow(x)] fn f() {} });"
++  - "m! { # [ deny ( x ) ] fn f() {} }"
++  - "macro_rules! m { ($x:ident) => { #[allow(unused)] fn $x() {} }; }"
++  - "m! { #[cfg_attr(test, cfg_attr(feature = \"x\", deny(y)))] fn f() {} }"
++  - "#[cfg_attr(test, core::allow(dead_code))] fn f() {}"
++  - "#[cfg_attr(test, ::core::prelude::v1::deny(dead_code))] fn f() {}"
++  - "m! { #[cfg_attr(test, ::core::forbid(x))] fn f() {} }"
++  - "#[cfg_attr(test, r#allow(dead_code))] fn f() {}"
++  - "#[cfg_attr(test, expect(dead_code, reason = \"x\"))] fn f() {}"
++  - "#[allow(dead_code, reason = \"x\")] fn f() {}"
++  - "m! { #![cfg_attr(test, allow(x))] }"
++  - "#[r#cfg_attr(test, allow(x))] fn f() {}"
+diff -urN a/rules/no-lint-attributes.yml b/rules/no-lint-attributes.yml
+--- a/rules/no-lint-attributes.yml	1970-01-01 00:00:00.000000000 +0000
++++ b/rules/no-lint-attributes.yml	2026-11-19 15:31:31.664222261 +0000
+@@ -0,0 +1,46 @@
++id: no-lint-attributes
++language: rust
++severity: error
++message: Change the code instead of silencing the lint; do not use allow, expect, warn, deny or forbid.
++note: |
++  Lint-level attributes are forbidden everywhere, including inside cfg_attr and
++  inside macro bodies. Fix the cause the lint reports.
++utils:
++  # Inside macros, `#[...]` and `#![...]` are not parsed as attributes: they are
++  # flat tokens, so the bracket group is a token_tree that follows `#` or `#!`.
++  attribute-tokens:
++    kind: token_tree
++    follows:
++      any:
++        - regex: '^#$'
++        - regex: '^!$'
++          follows:
++            regex: '^#$'
++rule:
++  kind: identifier
++  regex: ^(r#)?(allow|expect|warn|deny|forbid)$
++  any:
++    # #[allow(x)], #![deny(x)], #[core::allow(x)]
++    - inside:
++        kind: attribute
++    - inside:
++        kind: scoped_identifier
++        field: name
++        inside:
++          kind: attribute
++    # #[cfg_attr(cond, allow(x))], at any nesting depth
++    - precedes:
++        kind: token_tree
++      inside:
++        stopBy: end
++        has:
++          kind: identifier
++          regex: ^(r#)?cfg_attr$
++        any:
++          - kind: attribute
++          - matches: attribute-tokens
++    # m! { #[allow(x)] fn f() {} }
++    - follows:
++        regex: '^\[$'
++      inside:
++        matches: attribute-tokens
