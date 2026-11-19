@@ -1,9 +1,9 @@
-# archsnap
+# earnest
 
 Weekly architecture snapshots of a TypeScript/JavaScript repo, for everyone on the team, PMs included.
 
-`archsnap run` walks git history, takes one snapshot per ISO week, and writes a self-contained
-`.archsnap/index.html` with:
+`earnest run` walks git history, takes one snapshot per ISO week, and writes a self-contained
+`.earnest/index.html` with:
 
 - **The week in plain words**: new or removed areas, areas that grew or shrank, new dependencies
   between areas, packages started or stopped.
@@ -42,16 +42,16 @@ It reads only committed code (never your working tree), makes no network or LLM 
 
 ```sh
 cargo install --path .
-archsnap run                      # in any git repo
-archsnap run --repo ../app --out /tmp/app-report
-archsnap run --depth 4            # finer areas, e.g. apps/web/src/components
-archsnap run --weeks 26 --strict
+earnest run                      # in any git repo
+earnest run --repo ../app --out /tmp/app-report
+earnest run --depth 4            # finer areas, e.g. apps/web/src/components
+earnest run --weeks 26 --strict
 ```
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `--repo <path>` | current dir | Repository to scan |
-| `--out <dir>` | `<repo>/.archsnap` | Where snapshots and `index.html` go |
+| `--out <dir>` | `<repo>/.earnest` | Where snapshots and `index.html` go |
 | `--weeks <n>` | 12 | How many weeks that had commits to snapshot (at least 1) |
 | `--depth <n>` | 1 | Folder levels per area below each workspace package, after `src/` (`apps/web/src/billing/api/x.ts` → `apps/web/src/billing` at 1) |
 | `--strict` | off | Exit 1 when there are warnings (the report is still written) |
@@ -67,24 +67,24 @@ on:
   schedule: [{ cron: "0 6 * * 1" }]   # Mondays
   workflow_dispatch:
 jobs:
-  archsnap:
+  earnest:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }       # full history; a shallow clone only gets this week
-      - run: cargo install --git https://github.com/cpeaustriajc/archsnap
-      - run: archsnap run
+      - run: cargo install --git https://github.com/cpeaustriajc/earnest
+      - run: earnest run
       - uses: actions/upload-artifact@v4
-        with: { name: archsnap-report, path: .archsnap/index.html }
+        with: { name: earnest-report, path: .earnest/index.html }
 ```
 
 ## Errors and warnings
 
-Problems that only affect part of the snapshot are **warnings**: archsnap points at the exact spot,
+Problems that only affect part of the snapshot are **warnings**: earnest points at the exact spot,
 keeps going, and lists them in the report.
 
 ```
-  ⚠ archsnap(unresolved_import): can't find `./missing` imported from src/cart/cart.ts
+  ⚠ earnest(unresolved_import): can't find `./missing` imported from src/cart/cart.ts
    ╭─[src/cart/cart.ts:2:22]
  1 │ import { pay } from '../pay/index.js';
  2 │ import { gone } from './missing';
@@ -94,7 +94,7 @@ keeps going, and lists them in the report.
   help: no committed file matches this path; it is shown as unresolved in the report
 ```
 
-| Code | What happened | What archsnap does |
+| Code | What happened | What earnest does |
 |---|---|---|
 | `parse_skipped` | A file has a syntax error | Leaves it out of the snapshot |
 | `unresolved_import` | A relative or `@/` import matches no committed file | Counts it as unresolved |
@@ -109,7 +109,7 @@ Printed warnings come from the newest week only; older weeks just record counts.
 | 1 | `--strict` and there were warnings |
 | 2 | Bad flags, not a git repo, no commits, or git missing |
 | 3 | Can't write the output folder, a git command failed, or a git object is missing |
-| 70 | Bug in archsnap |
+| 70 | Bug in earnest |
 
 ## What counts
 

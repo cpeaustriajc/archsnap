@@ -43,7 +43,7 @@ struct RunArgs {
     /// Repository to scan (defaults to the current directory).
     #[arg(long)]
     repo: Option<PathBuf>,
-    /// Output folder (defaults to <repo>/.archsnap).
+    /// Output folder (defaults to <repo>/.earnest).
     #[arg(long)]
     out: Option<PathBuf>,
     /// How many weeks that had commits to snapshot, newest first.
@@ -71,7 +71,7 @@ fn main() -> ExitCode {
 
 fn report_panic(panic: &PanicHookInfo) {
     let mut stderr = io::stderr().lock();
-    let reported = writeln!(stderr, "archsnap: internal error: {panic}")
+    let reported = writeln!(stderr, "earnest: internal error: {panic}")
         .and_then(|()| writeln!(stderr, "  help: {BUG_REPORT_HELP}"));
     let exit_code = match reported {
         Ok(()) => INTERNAL_ERROR_EXIT,
@@ -96,7 +96,7 @@ fn run(args: RunArgs) -> Result<(), Fatal> {
         return Err(Fatal::NotGitRepo(dir));
     }
     let git = Git::open(&dir, args.verbose)?;
-    let out = args.out.unwrap_or_else(|| git.root.join(".archsnap"));
+    let out = args.out.unwrap_or_else(|| git.root.join(".earnest"));
     let store = Store::open(&out)?;
 
     let mut warnings: Vec<Warning> = Vec::new();

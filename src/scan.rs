@@ -34,7 +34,7 @@ const IGNORED_DIRS: &[&str] = &[
     "coverage",
     "vendor",
     ".next",
-    ".archsnap",
+    ".earnest",
 ];
 const MAX_FILE_BYTES: u64 = 512 * 1024;
 const MAX_LINKS_PER_EDGE: usize = 200;

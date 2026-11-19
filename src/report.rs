@@ -43,12 +43,12 @@ pub(crate) fn render(report: &Report) -> Result<String, Fatal> {
     let escaped_json = json.replace('<', "\\u003c");
     // Title first: substituting data first would let repo contents inject a title marker.
     Ok(TEMPLATE
-        .replace("__ARCHSNAP_TITLE__", &html_escape(&report.repo))
+        .replace("__EARNEST_TITLE__", &html_escape(&report.repo))
         .replace(
-            "__ARCHSNAP_BRANDS__",
+            "__EARNEST_BRANDS__",
             &brands(report)?.replace('<', "\\u003c"),
         )
-        .replace("__ARCHSNAP_DATA__", &escaped_json))
+        .replace("__EARNEST_DATA__", &escaped_json))
 }
 
 /// The hand-picked logos, plus a logo for each outside service whose domain names a simple-icons slug

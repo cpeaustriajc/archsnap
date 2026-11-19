@@ -8,7 +8,7 @@ use serde::Serialize;
 
 pub(crate) const INTERNAL_ERROR_EXIT: u8 = 70;
 pub(crate) const BUG_REPORT_HELP: &str =
-    "this is a bug in archsnap; please report it with the command you ran";
+    "this is a bug in earnest; please report it with the command you ran";
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Fatal {
@@ -70,14 +70,14 @@ impl Fatal {
 
     fn help(&self) -> &'static str {
         match self {
-            Fatal::NotGitRepo(_) => "run archsnap inside a git repo, or pass --repo <path>",
+            Fatal::NotGitRepo(_) => "run earnest inside a git repo, or pass --repo <path>",
             Fatal::NoCommits(_) => "commit at least once, then re-run",
             Fatal::GitMissing => "install git and make sure `git --version` works",
             Fatal::GitFailed { .. } => "re-run with --verbose to see every git call",
             Fatal::OutputNotWritable { .. } => {
                 "check the folder exists and is writable, or pass --out <dir>"
             }
-            Fatal::StderrNotWritable(_) => "keep stderr open until archsnap exits",
+            Fatal::StderrNotWritable(_) => "keep stderr open until earnest exits",
             Fatal::Internal { .. } => BUG_REPORT_HELP,
             Fatal::Strict(_) => "the report was still written; drop --strict to exit 0 on warnings",
         }
@@ -85,7 +85,7 @@ impl Fatal {
 
     pub(crate) fn print(&self) -> Result<(), Fatal> {
         let diagnostic = OxcDiagnostic::error(self.to_string())
-            .with_error_code("archsnap", self.code())
+            .with_error_code("earnest", self.code())
             .with_help(self.help());
         write_stderr(&render(diagnostic, None)?)
     }
@@ -138,7 +138,7 @@ impl Warning {
 
     pub(crate) fn print(&self) -> Result<(), Fatal> {
         let diagnostic = OxcDiagnostic::warn(self.message.clone())
-            .with_error_code("archsnap", self.code)
+            .with_error_code("earnest", self.code)
             .with_help(self.help.clone());
         let rendered = match (&self.file, &self.source) {
             (Some(file), Some(source)) => render(
