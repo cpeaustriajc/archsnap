@@ -1,0 +1,14 @@
+{
+  "name": "@earnest/cli-darwin-arm64",
+  "version": "0.1.0",
+  "description": "The earnest binary for darwin-arm64, installed by @earnest/cli",
+  "files": [
+    "bin"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ]
+}

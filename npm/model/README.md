@@ -8,6 +8,19 @@ type inferred from the declarations, and run as ordinary code in Node.
 The repository's `README.md` is the contract: what a model file may contain, every primitive and
 its operations, and the JSON shapes used below.
 
+## Installing
+
+```sh
+npm install --save-dev @earnest/model
+```
+
+The published package holds compiled JavaScript and declarations in `dist/`, so it runs in Node
+and type-checks under a strict `tsc` in a project that installs it. In this repository `exports`
+points at `src/index.ts`, which Node runs by stripping types, and `publishConfig.exports` points
+at `dist/` for the tarball that `pnpm pack` makes; `pnpm run build` emits it and `prepack` runs
+the build. `test/installed.test.ts` packs the library, installs the tarball into a fresh project
+and runs `explore`, `replay` and a strict type check there.
+
 ## Writing a model
 
 ```ts

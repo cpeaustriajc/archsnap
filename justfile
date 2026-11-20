@@ -20,6 +20,10 @@ typescript:
     pnpm --dir npm/model run typecheck
     pnpm --dir npm/model run format
     pnpm --dir npm/model test
+    pnpm --dir npm/cli install --frozen-lockfile
+    pnpm --dir npm/cli run typecheck
+    pnpm --dir npm/cli run format
+    pnpm --dir npm/cli test
 
 test:
     cargo test --locked
@@ -29,6 +33,10 @@ tlc:
     for model in tasks/conformance/models/*.model.ts tasks/conformance/models/*.rs; do target/release/earnest confirm --tlc target/tools/tla2tools.jar "$model" || exit 1; done
     cargo clippy --locked -p earnest_break_it --features tlc --test tlc -- -D warnings
     cargo test --locked -p earnest_break_it --features tlc --test tlc
+
+benchmark:
+    cargo build --release --locked -p earnest-cli
+    cargo run --release --locked -p earnest_benchmark -- --runs 5
 
 verify:
     cargo verus focus

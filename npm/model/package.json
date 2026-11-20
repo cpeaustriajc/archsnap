@@ -3,14 +3,24 @@
   "version": "0.1.0",
   "description": "The TypeScript library that earnest models are written with",
   "files": [
-    "src",
+    "dist",
     "README.md"
   ],
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
   "scripts": {
+    "build": "tsrs -p tsconfig.build.json",
+    "prepack": "node --eval \"fs.rmSync('dist', { recursive: true, force: true })\" && pnpm run build",
     "typecheck": "tsrs --noEmit",
     "format": "oxfmt --check",
     "format:fix": "oxfmt",

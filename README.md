@@ -10,6 +10,24 @@ except what "Where Node and the checker differ" in `npm/model/README.md` says, a
 has not been run. TLC has not confirmed the TLA+ export in CI. The spec is the
 Claude Doc "A formal verification suite for agents".
 
+## Install
+
+In a project that holds models, from the package manager the project already uses:
+
+```sh
+npm install --save-dev @earnest/cli @earnest/model
+npx earnest verify
+```
+
+`pnpm add -D` and `yarn add -D` do the same. `@earnest/cli` is one program: a small Node
+launcher and, in an optional dependency chosen by operating system and cpu, the binary
+(`@earnest/cli-linux-x64-gnu`, `-linux-arm64-gnu`, `-darwin-arm64`, `-darwin-x64` and
+`-win32-x64-msvc`). It has no install script and downloads nothing, so after the install
+`earnest` needs no network, no Java and no setup step on its first run. `@earnest/model` is the
+library a TypeScript model imports; it ships compiled JavaScript and declarations, so it runs in
+Node and type-checks under strict `tsc` from `node_modules`. See `npm/cli/README.md` and
+`npm/model/README.md`. A Rust model needs no npm package: it uses the `earnest` crate.
+
 ## Commands
 
 ```sh
@@ -619,9 +637,9 @@ it is, with apps, npm packages and tasks beside them.
 | `crates/earnest_chart` | The Mermaid chart and Markdown report writer |
 | `crates/earnest`, `crates/earnest_macros` | The Rust model library and its macros |
 | `npm/model` | The TypeScript model library, `@earnest/model` |
-| `npm/cli` | `@earnest/cli`, which ships the binary |
+| `npm/cli` | `@earnest/cli`, which ships the binary: a Node launcher and one package for each platform that holds the release build |
 | `tasks/conformance` | Model files with their expected state counts, verdicts and paths, shared by every test |
-| `tasks/benchmark` | The speed targets and the models that measure them |
+| `tasks/benchmark` | The speed measurement: fixed models in TypeScript and Rust with hand-derived state counts, and a binary that times the release `earnest verify` on them |
 
 Data flows one way: a reader turns a file into a tree, `earnest_semantic` lowers the tree to a
 checked model, `earnest_check` searches it, and a writer prints the result. A crate depends only
@@ -648,6 +666,23 @@ version of each. The lint table in `Cargo.toml` and the settings in `clippy.toml
 The TypeScript library in `npm/model` has its own commands, run from that folder after
 `pnpm install --frozen-lockfile`: `pnpm run typecheck` (tsrs), `pnpm run format` (oxfmt, check
 only), `pnpm run format:fix` and `pnpm test` (vitest).
+
+`npm/cli` has the same commands, plus `node scripts/assemble.ts` to build the package of this
+machine's platform; its `pnpm test` builds the release binary, packs both packages, installs
+them into a fresh project with no network and runs `earnest verify` there. `@earnest/model` is
+published with its `dist/` built by `pnpm pack`, and its tests include the same check for the
+installed library.
+
+The speed targets of the spec (the first app's 12 models in under 5 s in all, the slowest under
+10 s alone) are measured on stand-in models, since the app's are not in this repository:
+
+```sh
+cargo build --release --locked -p earnest-cli
+cargo run --release --locked -p earnest_benchmark -- --runs 5
+```
+
+It is not part of `just check`; `tasks/benchmark/README.md` holds the models, their state
+counts derived by hand and the last measurement.
 
 To run the checks before each commit, enable the hook once per clone:
 
