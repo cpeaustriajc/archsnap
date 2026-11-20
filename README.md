@@ -10,6 +10,21 @@ except what "Where Node and the checker differ" in `npm/model/README.md` says, a
 has not been run. TLC has not confirmed the TLA+ export in CI. The spec is the
 Claude Doc "A formal verification suite for agents".
 
+## Why the app's own language
+
+A model is an ordinary TypeScript or Rust file, in the same language as the app it describes.
+That is a deliberate choice, made to keep verification from adding anything new to a project.
+
+- **No second language.** Whoever writes the app can write the model. There is no TLA+ or Quint
+  to learn, and none to review.
+- **No second toolchain.** The project's own type checker, linter and formatter already accept a
+  model file. Nothing new is installed to write one.
+- **No second place for the truth.** The model sits next to the code, uses the same names, and
+  changes in the same pull request.
+
+Earnest still checks what a TLA+ checker checks. Every model can be exported as TLA+, and TLC
+finds the same states and the same verdicts.
+
 ## Install
 
 In a project that holds models, from the package manager the project already uses:
