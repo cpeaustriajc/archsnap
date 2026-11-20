@@ -1,4 +1,4 @@
-use crate::reader::{Reader, at};
+use crate::reader::{Reader, at, name_of, path_text};
 use earnest_ast::{Binary, MOST_NESTING, Term, TermKind};
 use proc_macro2::Span;
 use syn::spanned::Spanned;
@@ -16,7 +16,7 @@ fn is_require(statement: &StmtMacro) -> bool {
         .path
         .segments
         .last()
-        .is_some_and(|segment| segment.ident == "require")
+        .is_some_and(|segment| name_of(&segment.ident) == "require")
 }
 
 fn early_return(statement: &Stmt) -> Option<&ExprIf> {
@@ -116,7 +116,7 @@ impl Reader<'_> {
             },
             other => other,
         };
-        let gives_none = matches!(value, Expr::Path(name) if name.path.is_ident("None"));
+        let gives_none = matches!(value, Expr::Path(name) if path_text(&name.path) == "None");
         if body == Body::Action && gives_none {
             return self.nothing(
                 value.span(),
@@ -254,7 +254,7 @@ impl Reader<'_> {
                         "a binding can't change: every operation gives back a new value",
                     );
                 }
-                named.ident.to_string()
+                name_of(&named.ident)
             }
             other => {
                 let feature = self.short_text(other.span());

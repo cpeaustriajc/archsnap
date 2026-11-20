@@ -243,11 +243,13 @@ proptest! {
             rules: vec![rule(&value, &said, Some(path.clone()))],
             findings: vec![Finding { kind: FindingKind::Fault, message: said.clone(), path }],
             reason: Some(said.clone()),
+            computes_beyond_32_bits: false,
             ..outcome(Status::Fail, 3)
         };
         let sections = [Section { name: &name, file: &file, outcome: &model }];
         let side = Some(RuleText { says: &said, holds: &value });
         let changes = [RuleChange {
+            file: "src/cart.model.ts",
             model: &name,
             id: &value,
             change: ChangeKind::Tightened,

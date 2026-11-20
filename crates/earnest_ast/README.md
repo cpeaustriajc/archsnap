@@ -14,5 +14,5 @@ is another value than `None`. A number's `Shape` carries its integer type, a `De
 a value with its type written out, and a helper is a `Function` of the file or a `Method` of
 the model, which may share a name.
 
-`nesting_problem` and `MOST_NESTING` are the one limit on how deep a model file or an expression
+`nesting_problem` (which skips comments and quoted text, as `Quoting` says) and `MOST_NESTING` are the one limit on how deep a model file or an expression
 may nest, which both readers and the lowering apply, and `is_color` is what a view's color may be.

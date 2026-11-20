@@ -2,6 +2,9 @@ use crate::{Expr, MapOp, Math, Op, Order, SeqOp, SetOp, Shelf, Sweep};
 use earnest_value::{IntType, MOST_SAFE_INTEGER, Sym, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::time::Instant;
+
+const TICKS_BETWEEN_CLOCK_READS: u32 = 1024;
 
 /// Why an expression has no value in a state.
 ///
@@ -24,6 +27,9 @@ pub enum Fault {
     /// An operation got a value of a kind it has no meaning for, too few arguments, or a field
     /// or slot that does not exist.
     WrongKind,
+    /// The time limit passed while the expression was being evaluated. It says nothing about
+    /// the model: the search drops the state it was evaluating.
+    Stopped,
 }
 
 impl Fault {
@@ -39,6 +45,7 @@ impl Fault {
             }
             Self::Outside(ty) => format!("computes a number outside `{}`", ty.name()),
             Self::WrongKind => "uses a value of the wrong kind".to_owned(),
+            Self::Stopped => "was stopped by the time limit".to_owned(),
         }
     }
 }
@@ -52,6 +59,10 @@ impl Fault {
 pub struct Frame<'a> {
     state: &'a [Value],
     locals: Vec<Value>,
+    deadline: Option<Instant>,
+    ticks: u32,
+    expired: bool,
+    beyond_32_bits: bool,
 }
 
 impl<'a> Frame<'a> {
@@ -63,7 +74,39 @@ impl<'a> Frame<'a> {
         Self {
             state,
             locals: vec![Value::Null; slots],
+            deadline: None,
+            ticks: 0,
+            expired: false,
+            beyond_32_bits: false,
         }
+    }
+
+    /// Makes the frame stop evaluation at `deadline`: a long loop in an expression then gives
+    /// [`Fault::Stopped`]. `None` is no limit and costs nothing.
+    #[must_use]
+    pub fn until(mut self, deadline: Option<Instant>) -> Self {
+        self.deadline = deadline;
+        self
+    }
+
+    /// Whether the deadline has passed. The clock is read once in every 1024 calls, and the
+    /// answer stays true once it is true. A loop that may run long calls this on each pass.
+    pub fn out_of_time(&mut self) -> bool {
+        let Some(limit) = self.deadline else {
+            return false;
+        };
+        self.ticks = self.ticks.wrapping_add(1);
+        if !self.expired && self.ticks.is_multiple_of(TICKS_BETWEEN_CLOCK_READS) {
+            self.expired = Instant::now() >= limit;
+        }
+        self.expired
+    }
+
+    /// Whether any arithmetic evaluated with this frame gave a number outside 32 bits, which
+    /// TLC's integers can't hold.
+    #[must_use]
+    pub fn computed_beyond_32_bits(&self) -> bool {
+        self.beyond_32_bits
     }
 
     /// Puts `value` in `slot`, as the search does with an action's inputs. A slot the frame
@@ -192,6 +235,9 @@ fn sweep_over(
 ) -> Evaluated {
     let mut kept = Vec::new();
     for item in items {
+        if frame.out_of_time() {
+            return Err(Fault::Stopped);
+        }
         frame.put(slot, item.clone());
         let passed = truth(body, frame)?;
         match sweep {
@@ -229,7 +275,16 @@ fn apply(op: Op, arguments: &[Expr], frame: &mut Frame<'_>) -> Evaluated {
         Op::Equal => Ok(Value::Bool(first == second.ok_or(Fault::WrongKind)?)),
         Op::Differ => Ok(Value::Bool(first != second.ok_or(Fault::WrongKind)?)),
         Op::Order(order) => compare(order, &first, second.as_ref()),
-        Op::Math(math) => arithmetic(math, &first, second.as_ref()),
+        Op::Math(math) => {
+            let answer = arithmetic(math, &first, second.as_ref());
+            let wide = match &answer {
+                Ok(Value::Int(number)) => i32::try_from(*number).is_err(),
+                Err(Fault::Overflow) => true,
+                _ => false,
+            };
+            frame.beyond_32_bits |= wide;
+            answer
+        }
         Op::Set(set_op) => on_set(set_op, first, second),
         Op::Map(map_op) => on_map(map_op, first, second, third),
         Op::Seq(seq_op) => on_seq(seq_op, first, second),

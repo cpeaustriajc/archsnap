@@ -137,12 +137,18 @@ pub(crate) fn differences(checked: &Checked, counting: &TlcRun, rules: &[RuleRun
     found
 }
 
-pub(crate) fn confirm_lines(checked: &Checked, differences: &[String]) -> Vec<String> {
+pub(crate) fn confirm_lines(
+    checked: &Checked,
+    differences: &[String],
+    limits: &[String],
+) -> Vec<String> {
     let result = &checked.result;
     let word = if differences.is_empty() {
         "same"
-    } else {
+    } else if limits.is_empty() {
         "differs"
+    } else {
+        "cannot"
     };
     let mut lines = vec![format!(
         "{word:<7}  {}  {} states  {}",
@@ -150,6 +156,13 @@ pub(crate) fn confirm_lines(checked: &Checked, differences: &[String]) -> Vec<St
         result.states,
         result.status.word()
     )];
+    if !differences.is_empty() {
+        lines.extend(
+            limits
+                .iter()
+                .map(|why| format!("  TLC can't confirm this model: {why}")),
+        );
+    }
     lines.extend(differences.iter().map(|each| format!("  {each}")));
     lines
 }
@@ -526,10 +539,35 @@ State 1: <Initial predicate>
     #[test]
     fn the_lines_say_same_or_differs_and_list_each_difference() {
         let ours = checked(4, &[]);
-        assert_eq!(confirm_lines(&ours, &[]), ["same     Oven  4 states  fail"]);
         assert_eq!(
-            confirm_lines(&ours, &["states: 4 against 5".to_owned()]),
+            confirm_lines(&ours, &[], &[]),
+            ["same     Oven  4 states  fail"]
+        );
+        assert_eq!(
+            confirm_lines(&ours, &["states: 4 against 5".to_owned()], &[]),
             ["differs  Oven  4 states  fail", "  states: 4 against 5"]
+        );
+    }
+
+    #[test]
+    fn a_difference_in_a_model_beyond_tlc_says_tlc_cannot_confirm_it_and_why() {
+        let ours = checked(4, &[]);
+        assert_eq!(
+            confirm_lines(
+                &ours,
+                &["states: 4 against 5".to_owned()],
+                &["a number is too big".to_owned()]
+            ),
+            [
+                "cannot   Oven  4 states  fail",
+                "  TLC can't confirm this model: a number is too big",
+                "  states: 4 against 5",
+            ]
+        );
+        assert_eq!(
+            confirm_lines(&ours, &[], &["a number is too big".to_owned()]),
+            ["same     Oven  4 states  fail"],
+            "TLC agreed, so the model is confirmed"
         );
     }
 }

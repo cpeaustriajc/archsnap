@@ -4,9 +4,9 @@ A model checker for models written in your app's own language. A coding agent st
 a change as a model in TypeScript or Rust, `earnest verify` visits every reachable state, and the
 result goes into the PR as a statechart and a report.
 
-Status: version 1 is built and passes its own checks, and is not yet proven. Three adversarial
+Status: version 1 is built and passes its own checks, and is not yet proven. Four adversarial
 passes each found models with a broken rule that were reported as passing; those are fixed
-except what "Where Node and the checker differ" in `npm/model/README.md` says, and a fourth pass
+except what "Where Node and the checker differ" in `npm/model/README.md` says, and a fifth pass
 has not been run. TLC has not confirmed the TLA+ export in CI. The spec is the
 Claude Doc "A formal verification suite for agents".
 
@@ -31,7 +31,7 @@ earnest confirm --tlc tla2tools.jar
 | `--rule <id>` | all | Check only this rule (needs `--model` when two models share the id) |
 | `--json` | off | Print the results as JSON instead of text |
 | `--max-states <n>` | 5000000 | Stop a model after this many distinct states. Every state that is counted has its rules judged |
-| `--time-limit <seconds>` | none | Stop a model after this long |
+| `--time-limit <seconds>` | none | Stop a model after this long, also inside one state: a rule or an action that takes very long in one state is stopped too |
 | `--jobs <n>` | all cores | Worker threads |
 | `--no-cache` | off | Check every model again, even when unchanged |
 | `--base <git ref>` | none | Compare each model's rules with the same file at this commit |
@@ -41,14 +41,36 @@ earnest confirm --tlc tla2tools.jar
 
 ### Which files are models
 
-A file is a model file when it is a `.ts`, `.mts` or `.tsx` file that imports `@earnest/model`, or
-a `.rs` file that names the `earnest` crate. The file is judged by what its imports mean and not
-by how they are written. In TypeScript the specifier is what JavaScript makes of it, so
-`"@earnest\x2fmodel"`, a Unicode escape or a line continuation in it is the library, and so is
-an `export ... from`, a dynamic `import()` or a `require`. In Rust the file is read as tokens, so
-a path that starts with `earnest` counts however it is spaced, grouped or broken by a comment:
-`use earnest::model::Model`, `use earnest::/* c */model::Model`, `use earnest as kit` and
-`extern crate earnest`. A word in a comment or a text is not a use. A file that mentions
+A file is a model file when any of these holds, and a model file is read or refused as
+unreadable, never left out:
+
+- it is named on the command line, whatever it is called and whatever it imports;
+- in TypeScript, its name ends in `.model.ts`, `.model.mts` or `.model.tsx`, whatever it imports;
+- it is a `.ts`, `.mts` or `.tsx` file that imports `@earnest/model` by the plain specifier, or
+  a `.rs` file that names the `earnest` crate.
+
+The plain specifier is judged by what it means and not by how it is written. In TypeScript the
+specifier is what JavaScript makes of it, so `"@earnest\x2fmodel"`, a Unicode escape or a line
+continuation in it is the library, and so is an `export ... from`, a dynamic `import()` or a
+`require` in a file that spells `earnest`. In Rust the file is read as tokens, so a path that
+starts with `earnest` counts however it is spaced, grouped or broken by a comment: `use
+earnest::model::Model`, `use earnest::/* c */model::Model`, `use earnest as kit` and `extern
+crate earnest`. A raw identifier is the same name as its plain spelling everywhere in Rust, so
+`use r#earnest::model::Model` names the crate. A word in a comment or a text is not a use.
+
+A file named on the command line is always read or refused, whatever it is called: a name that
+is only an extension (`.ts`, `.mts`, `.tsx`, `.rs`) is a file of that language, and a file of
+another kind is `unreadable` with a sentence saying the checker does not know how to read it.
+The same file given under two spellings of its path (`a.model.ts` and `./a.model.ts`, or a path
+through `..`) is checked and listed once.
+
+A model file may reach the library only by `import { m } from "@earnest/model"`. Reaching it
+any other way, such as `await import("@ear" + "nest/model")`, a `require`, or an import of a
+local module that passes the library on (`import { m } from "./kit.ts"`), is refused with a
+sentence. A file that is not named `.model.ts`, not named on the command line and that hides
+its import from its text, such as a joined specifier, is not found: name it or call it
+`.model.ts`. A file nested too deep to parse is a model file by its import only when it
+spells `earnest`. A file that mentions
 `earnest`, and that can't be parsed or reaches for a module in a way the checker can't follow,
 is not left out: it is a model file, and the reader refuses what it can't read. Folders named
 `node_modules`, `target`, `dist`, `build` and any folder whose name starts with a dot are
@@ -97,24 +119,38 @@ unreadable  src/clock.model.ts
   the action's id, its input as `name = value` when it has one, and each field that changed as
   `field: before -> after`.
 - `stuck`, `out of range` and `fault` findings have the same path form. A model is out of range
-  when an action gives a field a value outside what the field declares. The state out of range
-  is counted, and nothing is searched from it.
+  when an action gives a field a value outside what the field declares. That is a fault of the
+  model, reported with the path to the state. The state out of range is counted, no rule is
+  judged in it, and nothing is explored from it. `explore` in the TypeScript library does the
+  same.
 - Anything the model asks that can't be evaluated in a state is a `fault` in that state: a rule,
   the `when` or the `then` of an action, or the `when` of an end, for example because it reads a
   field of `null`. A state is `stuck` only when the `when` of every action is false and every
   end is false. A state where a `when` or an end can't be evaluated is a fault and is not stuck.
   An end is asked only in a state where no action can happen. `explore` in the TypeScript
   library follows the same rule.
-- A model that stops at `--max-states` or `--time-limit` is `unfinished` with `<n> states so
-  far`. Each of those states has had its rules judged, also the states the search found last
+- A model that stops at `--max-states` or `--time-limit` with nothing broken found is
+  `unfinished` with `<n> states so far`. One that already has a broken rule, a stuck state, a
+  state out of range or a fault is `fail`, and its line says it stopped early with the limit
+  in parentheses, as `fail  Turnstile  3 states so far  (state limit of 3)`; the exit code is 1
+  for both. Each of those states has had its rules judged, also the states the search found last
   and did not go on from, so a rule a counted state breaks is `broken` with its path. No action
   is tried from the states it did not go on from, so they add no stuck state and no fault of an
-  action.
+  action. When `--time-limit` stops the search inside the evaluation of one state, the states
+  whose rules were not judged by then are not counted: an unfinished model can be `0 states so
+  far`.
+- The combinations of an action's inputs are tried one at a time under both limits, and the
+  states one state leads to are held only once, so an action with a very large input space (a
+  billion combinations) ends as `unfinished` at the limit with bounded memory, never a kill.
 - An `unreadable` file lists each problem as `file:line:column`, the feature in backticks and a
   sentence. No model in that file is checked.
 - The summary line counts each model and each unreadable file once in its total, then lists
   `pass`, `fail` and `unfinished`, and adds `<n> unreadable` only when there are unreadable
   files. In JSON, `summary.models` counts models only and `summary.unreadable` counts files.
+- A model's name, a file's name and every other name that stands on a line of its own print on
+  that one line: a line break, a tab or any other control character, or a line or paragraph
+  separator, is one space, with the white space around it dropped, as `earnest report` does. A
+  name can't start a line that reads as another result.
 - Values print as `"text"`, `12`, `true`, `null`, `{a, b}` for a set, `[a, b]` for a sequence or
   queue, `{k -> v}` for a map and `{name: value}` for a record. Inside the quotes of a text, `"`
   prints as `\"`, `\` as `\\`, a line feed as `\n`, a carriage return as `\r`, a tab as `\t` and
@@ -213,9 +249,16 @@ that was deleted lists its rules as `removed` and exits as a run with no model d
 name that neither the run nor the base has is exit 2. A rule is
 `loosened` when some reachable state of the new model passes the new rule and breaks the old one,
 `tightened` when the reverse happens and no state loosens it, `changed` when its condition differs
-but no reachable state tells the two apart or the old condition can't be read against the new
-model, and `reworded` when only its sentence differs. A rule whose sentence and condition are
-unchanged is not listed.
+but no reachable state tells the two apart, the old condition can't be read against the new
+model, or the old or the new condition has no value in a state (a fault there, such as a read of
+`null`) and no other state loosens or tightens it, and `reworded` when only its sentence differs. A rule whose sentence and condition are
+unchanged is not listed. Rule changes compare meaning, not text: a comment or white space
+in a condition is no change.
+
+Every change carries the path of its file, as the last field of its line in the text and the
+report, so two models of one name in two files are told apart. The entries of `ruleChanges`
+in the JSON do not carry it yet: a test of the behavior suite compares an entry whole, and adding
+`file` to the entry is a one-line change once that test says so.
 
 Every rule the two commits share is compared, not only those whose text was edited. The old
 condition is read with the constants and helper functions of the file at the base commit, so a
@@ -255,6 +298,18 @@ also defines `Judged_id` for a rule that can fault: a state where the rule has n
 it. `earnest confirm` checks both for each rule and compares TLC's verdict, `broken` when a state
 breaks `Rule_id`, else `unknown` when a state breaks `Judged_id`, else `holds`, with the
 checker's.
+
+TLC has two limits of its own, and the export can't remove them. TLC holds integers to 32
+bits, from -2147483648 to 2147483647, and compares some texts that are not ASCII as equal when
+it counts states, so `Z` and `Ś` are one state. When a model declares a number outside the 32
+bits, has a text that is not ASCII, or (in `earnest confirm`, which runs the search) computes a
+number outside the 32 bits while the search runs, TLC can't confirm it. `earnest tla` warns on
+stderr for a declared number or text, and says that a number computed while the model runs is
+seen only by `earnest confirm`. `earnest confirm` prints `cannot` in place of `differs`, with a
+line `TLC can't confirm this model:` and the reason, before the differences it found. A model
+that TLC confirms anyway is `same`. `cannot` is not `same`, so `earnest confirm` exits 1 for it.
+The tests that need Java and the jar are built only with the cargo feature `tlc`: `cargo test
+--locked -p earnest_break_it --features tlc --test tlc`.
 
 ## Writing a model in TypeScript
 
@@ -303,13 +358,19 @@ export type State = m.Infer<typeof AddToCartFocus>;
   A set, map, sequence, queue, lock, timer, request or retry field without it starts empty, free,
   idle or at zero.
 - An action has a sentence, an optional `input`, an optional `when` and a `then`. The checker
-  tries every value of every input. `then` gives back only the fields that change.
-- The id of an action, rule or end is the name of its exported constant.
+  tries every value of every input, with the first input changing fastest: for inputs `a` and
+  `b` it tries (a1, b1), (a2, b1), (a1, b2), and so on. `explore` in the TypeScript library and
+  `steps()` of a Rust model try them in the same order, so the path the checker shows to a state
+  is the one found by walking `steps()` breadth first. `then` gives back only the fields that change.
+- The id of an action, rule or end is the name of its exported constant. A rule, action or end
+  bound to a constant that is not exported, by `export const` or by an `export { name }`, makes
+  the file unreadable.
 - `end` marks states where stopping is correct. Any other state with no action is stuck.
 - `view` is optional. `step` maps an action id to its arrow label; the default is the action's
   sentence. `colors` accepts `broken`, `start` and `end`, each with `#` and 3, 4, 6 or 8
   hexadecimal digits or a color name of letters; any other part, or any other color, makes the
-  file unreadable, because the chart would leave it out without a word.
+  file unreadable, because the chart would leave it out without a word. A `step` entry whose id is not an
+  action of the model makes the file unreadable for the same reason.
 
 ### What a model file may contain
 
@@ -325,10 +386,15 @@ export type State = m.Infer<typeof AddToCartFocus>;
 - `type` and `interface` declarations.
 - In a function: literals, `null`, field and input reads, `===`, `!==`, `<`, `<=`, `>`, `>=`,
   `&&`, `||`, `!`, `+`, `-` (also as a sign: `-1`), `*`, `m.rem(a, b)`, the `? :` choice, the `!` after a
-  value that TypeScript needs to read a field of an optional (`s.chosen!.qty`), object literals with spread, calls to the
+  `m.some(value)`, the value inside an optional (`m.some(s.chosen).qty`), object literals with spread, calls to the
   primitives below and to helper functions, and template strings in `view` labels. A function
   body is one expression, or a block of `const` declarations and `if (...) return ...;`
   statements that ends in a `return`. Nothing follows that `return`.
+- A name is declared once in its scope, as JavaScript requires: a second top-level `const` of
+  one name, a second `const` of one name in a block, a `const` in the body of a function that
+  has a parameter of that name, and two parameters of one name (`(n, n) => ...`) are refused,
+  where the language refuses the file. A nested block or a function's own parameter may shadow
+  a name of an outer scope.
 - A name means what TypeScript says it means. In an action, an input is in scope only in a
   function that takes it, as `(s, { by })` or as a field of the whole input, `(s, input) =>
   input.by`; `when` and `then` may take different ones. Where a function does not take it, the
@@ -361,7 +427,13 @@ listed twice in `m.enum` or `m.oneOf` (the library throws on it too), and any na
 not define, also in a constant that nothing reads. The operator `%` and `%=` are refused: write `m.rem(a, b)`, which is
 the remainder, and a fault for a negative `a` or a `b` below 1, because languages disagree on
 the result. The library's `m.rem` throws the same fault in Node, so `explore` and `replay` report
-it as `earnest verify` does. Rust's `%` keeps its meaning, a fault on a negative number.
+it as `earnest verify` does. Rust's `%` keeps its meaning, a fault on a negative number. A postfix `!` after a value is
+refused: write `m.some(value)`, which is the value of an optional and is a fault where it is
+`null`, in `earnest verify` and in the library's `explore` and `replay` alike, because
+JavaScript would go on with `null` as the number 0. The nesting of a model file is counted on
+its code: brackets and runs of operators inside a string, a template literal (outside its
+`${}`), a comment, a Rust raw string or a character literal do not count, and a file that is
+not a model file is never reported as unreadable for them.
 
 ## Writing a model in Rust
 
@@ -430,7 +502,9 @@ impl Turnstile {
   function, a constant, a struct or an enum, and no value of a body can have the name of a
   function or of `forall` or `exists` that the body calls. An item of the library is imported
   by its own name: `use earnest::model::forall as exists;` is refused, as is any other `as`
-  except `as _`. A `use` inside a body, a `macro_rules!` and a `type` alias are refused too, as a
+  except `as _`. A model file imports the library directly: a `pub use earnest::...` (also
+  `pub(crate)`, also `r#earnest`) is refused, because a file that re-exports the library would
+  hide it from the checker in the files that use it. A `use` inside a body, a `macro_rules!` and a `type` alias are refused too, as a
   model file holds no such item. The three attributes are written plainly, never with a path. No part of a model is under `#[cfg]` or
   `#[cfg_attr]`: the checker reads one text for every build. Only an item that is not part of
   a model (a test module, a function, a plain `impl` block) may be `#[cfg(test)]`, and it is
@@ -438,6 +512,13 @@ impl Turnstile {
 - A model is ordinary Rust: a test calls `state.pay()` to take one step, which is how a path from
   the report is replayed with `cargo test`. `Turnstile::starts()` lists every start state, and
   a rule or an end is called the same way: `state.stays_locked()`.
+
+A raw identifier is the same name as its plain spelling everywhere in Rust: `fn r#fn` is the
+rule `fn`, `fn r#loop` the action `loop` and the field `r#type` the field `type`, in the
+output, in `--rule`, in the JSON and in the TLA+ names. Rust refuses two items of one name in a
+namespace (two constants or functions, two types), two methods of one name for a type, two
+fields, two variants and two parameters of one name, so the file is unreadable with the line of
+the second one; a `let` may shadow, as in Rust.
 
 Where the checker's reading of a Rust file could differ from what Rust does when the file runs,
 the checker agrees with Rust or refuses the file. It never reads the file as something else.
@@ -506,7 +587,7 @@ An optional value has no order. `<`, `<=`, `>` and `>=` between two optional val
 file unreadable, in Rust too, where `None < Some(5)` compiles: write
 `value.is_some_and(|number| number < 5)`. A number compared or added with an optional number
 reads the number inside, and is a fault in a state where it is `null`. A record may be spread
-from an optional record the same way: `{ ...s.chosen!, qty: 1 }`. A field may have the name of
+from an optional record the same way: `{ ...m.some(s.chosen), qty: 1 }`. A field may have the name of
 a primitive's property, such as `isFull`: what `value.isFull` reads is decided by what `value`
 is.
 

@@ -402,3 +402,168 @@ fn m_rem_is_the_remainder_operation() {
         "the same tree the operator used to give"
     );
 }
+
+fn refused_once(source: &str, feature: &str) {
+    let found = problems(source);
+    assert_eq!(found.len(), 1, "one problem in `{source}`: {found:?}");
+    assert_eq!(
+        found[0].feature,
+        format!("`{feature}`"),
+        "the name, in `{source}`"
+    );
+}
+
+#[test]
+fn a_top_level_constant_declared_twice_is_refused_at_the_second() {
+    let source = format!("{HEAD}const MOST = 3;\nconst MOST = 1;\n");
+    let found = problems(&source);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].feature, "`MOST`");
+    assert_eq!(found[0].line, 4, "the second declaration");
+    let helpers = format!("{HEAD}const f = (a) => a;\nconst f = (a) => a + 1;\n");
+    refused_once(&helpers, "f");
+}
+
+#[test]
+fn a_block_constant_declared_twice_or_named_like_a_parameter_is_refused() {
+    refused_once(
+        &rule("(s) => { const a = 1; const a = 2; return s.n <= a; }"),
+        "a",
+    );
+    refused_once(&rule("(s) => { const s = 1; return s <= 2; }"), "s");
+    assert_eq!(
+        features(&rule(
+            "(s) => { if (s.n > 1) { const s = 1; return s < 2; } return true; }"
+        )),
+        Vec::<String>::new(),
+        "a nested block may shadow a parameter"
+    );
+    assert_eq!(
+        features(&rule(
+            "(s) => { const a = 1; if (s.n > 1) { const a = 2; return a < 3; } return a < 3; }"
+        )),
+        Vec::<String>::new(),
+        "a nested block may shadow a constant"
+    );
+}
+
+#[test]
+fn a_parameter_named_twice_is_refused() {
+    refused_once(&format!("{HEAD}const add = (n, n) => n + 1;\n"), "n");
+    refused_once(
+        &model_with(
+            "export const go = M.action(\"go\", { input: { by: m.int(0, 1) }, \
+             then: (s, { by, by }) => ({ n: by }) });",
+        ),
+        "by",
+    );
+}
+
+#[test]
+fn a_postfix_bang_is_refused_with_the_function_to_write_instead() {
+    let found = problems(&rule("(s) => s.chosen!.qty <= 1"));
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].feature, "`!`");
+    assert!(
+        found[0].message.contains("m.some(value)"),
+        "the sentence names the function: {}",
+        found[0].message
+    );
+}
+
+#[test]
+fn m_some_is_read_as_the_value_inside_an_optional() {
+    let source = "import { m } from \"@earnest/model\";\n\
+        export const M = m.model(\"M\", { o: m.int(0, 2).optional() });\n\
+        export const r = M.rule({ says: \"r\", holds: (s) => m.some(s.o) <= 1 });\n";
+    let reading = read("m.model.ts", source);
+    assert_eq!(reading.problems, [], "no problem");
+    assert_eq!(reading.drafts.len(), 1);
+}
+
+#[test]
+fn a_file_nested_too_deep_to_parse_is_a_model_file_only_when_it_mentions_the_library() {
+    let deep = format!("const a = {}1{};\n", "(".repeat(2_000), ")".repeat(2_000));
+    assert!(!reaches_library(
+        "a.ts",
+        &format!("{deep}const s = \"a\\nb\";\n")
+    ));
+    assert!(reaches_library("a.ts", &format!("{deep}// earnest\n")));
+}
+
+#[test]
+fn a_file_with_text_that_looks_deep_is_not_unreadable_for_it() {
+    let dashes = "-".repeat(1_001);
+    let source = format!("const banner = \"\\n{dashes}\";\n");
+    assert!(!reaches_library("banner.ts", &source));
+    assert_eq!(
+        read("banner.ts", &source).problems,
+        [],
+        "read without a word"
+    );
+}
+
+#[test]
+fn a_rule_action_or_end_bound_to_an_unexported_constant_is_refused() {
+    for part in [
+        "const low = M.rule({ says: \"low\", holds: (s) => s.n <= 1 });",
+        "const inc = M.action(\"inc\", { then: (s) => ({ n: s.n + 1 }) });",
+        "const top = M.end({ says: \"top\", when: (s) => s.n === 3 });",
+    ] {
+        let found = problems(&model_with(part));
+        assert_eq!(found.len(), 1, "`{part}` is refused once: {found:?}");
+        assert_eq!(found[0].line, 4, "on the line of the constant");
+        assert!(
+            found[0].message.contains("exported constant"),
+            "the sentence says why: {}",
+            found[0].message
+        );
+    }
+}
+
+#[test]
+fn an_exported_constant_and_a_name_in_an_export_list_are_read() {
+    assert_eq!(
+        problems(&model_with(
+            "export const low = M.rule({ says: \"low\", holds: (s) => s.n <= 1 });"
+        )),
+        [],
+        "exported where it is declared"
+    );
+    assert_eq!(
+        problems(&model_with(
+            "const low = M.rule({ says: \"low\", holds: (s) => s.n <= 1 });\nexport { low };"
+        )),
+        [],
+        "exported by a list"
+    );
+}
+
+#[test]
+fn a_view_step_for_an_action_the_model_does_not_have_is_refused() {
+    let source = model_with(
+        "export const inc = M.action(\"inc\", { then: (s) => ({ n: s.n + 1 }) });\n\
+         export const v = M.view({ step: { inc: \"up\", dec: \"down\" } });",
+    );
+    let found = problems(&source);
+    assert_eq!(found.len(), 1, "one unknown id: {found:?}");
+    assert_eq!(found[0].feature, "`dec`");
+    assert!(
+        found[0].message.contains("no action with this id"),
+        "{}",
+        found[0].message
+    );
+}
+
+#[test]
+fn a_view_step_may_come_before_the_action_it_labels() {
+    let source = model_with(
+        "export const v = M.view({ step: { inc: \"up\" } });\n\
+         export const inc = M.action(\"inc\", { then: (s) => ({ n: s.n + 1 }) });",
+    );
+    assert_eq!(
+        problems(&source),
+        [],
+        "the id is known by the end of the file"
+    );
+}

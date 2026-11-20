@@ -1,10 +1,18 @@
-use earnest_ast::nesting_problem;
-use proc_macro2::{Spacing, TokenStream, TokenTree};
+use earnest_ast::{Quoting, nesting_problem};
+use proc_macro2::{Ident, Spacing, TokenStream, TokenTree};
 
 const CRATE: &str = "earnest";
+const RAW: &str = "r#";
+
+fn plain(name: &Ident) -> String {
+    let written = name.to_string();
+    written
+        .strip_prefix(RAW)
+        .map_or(written.clone(), str::to_owned)
+}
 
 fn is_ident(tree: Option<&TokenTree>, word: &str) -> bool {
-    matches!(tree, Some(TokenTree::Ident(found)) if found == word)
+    matches!(tree, Some(TokenTree::Ident(found)) if plain(found) == word)
 }
 
 fn is_colon(tree: Option<&TokenTree>, spacing: Spacing) -> bool {
@@ -28,7 +36,7 @@ fn names_the_crate(tokens: TokenStream) -> bool {
         for (index, tree) in trees.iter().enumerate() {
             match tree {
                 TokenTree::Group(group) => pending.push(group.stream()),
-                TokenTree::Ident(name) if name == CRATE && starts_a_path(&trees, index) => {
+                TokenTree::Ident(name) if plain(name) == CRATE && starts_a_path(&trees, index) => {
                     return true;
                 }
                 TokenTree::Ident(_) | TokenTree::Punct(_) | TokenTree::Literal(_) => {}
@@ -44,7 +52,8 @@ fn names_the_crate(tokens: TokenStream) -> bool {
 /// The crate is named by a path that starts with it, such as `earnest::model::Model`, by `use
 /// earnest as kit` and by `extern crate earnest`, wherever the path is spaced, grouped or
 /// broken by a comment: the file is read as tokens, so what lies between them does not count.
-/// A word `earnest` in a comment or a text does not name the crate. A file that mentions
+/// A raw identifier is the same name, so `r#earnest` names the crate too. A word `earnest` in
+/// a comment or a text does not name the crate. A file that mentions
 /// `earnest` and can't be read as Rust tokens is true too, because it can't be shown to leave
 /// the crate alone and the reader then refuses what it can't read.
 #[must_use]
@@ -53,7 +62,7 @@ pub fn uses_library(source: &str) -> bool {
     if !source.contains(CRATE) {
         return false;
     }
-    if nesting_problem("", source).is_some() {
+    if nesting_problem("", source, Quoting::Rust).is_some() {
         return true;
     }
     source.parse::<TokenStream>().map_or(true, names_the_crate)
@@ -75,6 +84,9 @@ mod tests {
             "use ::earnest::model::Model;",
             "use earnest as kit;",
             "extern crate earnest;",
+            "use r#earnest::model::Model;",
+            "use ::r#earnest::{model::Model};",
+            "extern crate r#earnest;",
             "use earnest;",
             "fn f() -> earnest::model::Timer { todo() }",
         ] {

@@ -109,8 +109,22 @@ pub(crate) fn domain_choices(attributes: &[Attribute], ty: &Type) -> syn::Result
     Ok(quote! { <#ty as ::earnest::model::Domain>::values() })
 }
 
-pub(crate) fn for_each_combination(slots: &[Slot], innermost: TokenStream) -> TokenStream {
-    slots.iter().rev().fold(innermost, |body, slot| {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Fastest {
+    First,
+    Last,
+}
+
+pub(crate) fn for_each_combination(
+    slots: &[Slot],
+    fastest: Fastest,
+    innermost: TokenStream,
+) -> TokenStream {
+    let order: Vec<&Slot> = match fastest {
+        Fastest::First => slots.iter().collect(),
+        Fastest::Last => slots.iter().rev().collect(),
+    };
+    order.into_iter().fold(innermost, |body, slot| {
         let variable = &slot.variable;
         let choices = &slot.choices;
         quote! {
@@ -126,6 +140,7 @@ pub(crate) fn every_combination(slots: &[Slot]) -> TokenStream {
     let copies = slots.iter().map(Slot::copy);
     let loops = for_each_combination(
         slots,
+        Fastest::Last,
         quote! {
             earnest_combinations.push(Self { #(#names: #copies),* });
         },

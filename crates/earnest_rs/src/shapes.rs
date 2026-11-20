@@ -1,4 +1,4 @@
-use crate::reader::{Reader, at, attribute, path_text, place_of};
+use crate::reader::{Reader, at, attribute, name_of, path_text, place_of};
 use earnest_ast::{MOST_NESTING, Shape, ShapeKind, TOO_DEEP, Term, TermKind};
 use earnest_value::IntType;
 use proc_macro2::Span;
@@ -204,7 +204,7 @@ impl Reader<'_> {
             GenericArgument::Type(Type::Path(name)) => name
                 .path
                 .get_ident()
-                .and_then(|ident| self.numbers.get(&ident.to_string()).copied()),
+                .and_then(|ident| self.numbers.get(&name_of(ident)).copied()),
             _ => None,
         };
         let size = number.and_then(|found| usize::try_from(found).ok());
@@ -303,7 +303,7 @@ impl Reader<'_> {
                     Declares::Values(_) => self.shape(&field.ty, &field.attrs),
                     Declares::Type => self.type_shape(&field.ty),
                 };
-                fields.push((field_name.to_string(), shape));
+                fields.push((name_of(field_name), shape));
             }
         }
         self.open_records.pop();

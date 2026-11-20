@@ -134,11 +134,12 @@ fn steps_tries_every_action_with_every_input_in_order() {
             arrival(Ann, party(&[Ann], 0)),
             arrival(Bob, party(&[Bob], 0)),
             round(1, Measure::Single, party(&[], 1)),
-            round(1, Measure::Double, party(&[], 2)),
             round(2, Measure::Single, party(&[], 2)),
+            round(1, Measure::Double, party(&[], 2)),
             round(2, Measure::Double, party(&[], 3)),
         ],
-        "Cy can't arrive alone; the first input changes slowest"
+        "Cy can't arrive alone; the first input changes fastest, as the checker and `explore` \
+         try them"
     );
     let full = party(&[Ann, Bob, Cy], 3);
     assert_eq!(full.steps(), [], "everyone is inside and the bar is dry");

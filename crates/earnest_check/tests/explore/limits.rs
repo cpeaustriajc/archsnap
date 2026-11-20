@@ -1,7 +1,10 @@
-use crate::build::{Sketch, below, both, counter, is, is_not, not, plus, steps, texts, yes};
-use earnest_check::{Limits, Outcome, Status, Verdict, explore};
-use earnest_ir::{Expr, Model};
-use std::time::Duration;
+use crate::build::{
+    Sketch, apply, below, both, counter, int, is, is_not, not, plus, steps, texts, yes,
+};
+use earnest_check::{FindingKind, Limits, Outcome, Status, Verdict, explore};
+use earnest_ir::{Expr, Math, Model, Op, Order, Shelf, Sweep};
+use earnest_value::{Domain, Value};
+use std::time::{Duration, Instant};
 
 fn long_counter() -> Model {
     let (mut sketch, n) = counter(99);
@@ -298,4 +301,186 @@ fn the_states_judged_at_the_limit_are_the_same_on_one_thread_and_on_four() {
     assert_eq!(single.states, 1500);
     assert_eq!(single.rules[0].verdict, Verdict::Broken, "1234 is counted");
     assert_eq!(explore(&model, &limited(4)), single);
+}
+
+fn every_of(count: i64, body: Expr) -> Expr {
+    let items = Value::set((0..count).map(Value::Int).collect());
+    Expr::Sweep {
+        sweep: Sweep::Every,
+        shelf: Shelf::Set,
+        slot: 0,
+        source: Box::new(Expr::Const(items)),
+        body: Box::new(body),
+    }
+}
+
+#[test]
+fn a_time_limit_stops_a_rule_that_takes_billions_of_steps_in_one_state() {
+    let (mut sketch, n) = counter(3);
+    sketch.end("full", is(&n, 3));
+    sketch.rule(
+        "slow",
+        every_of(2000, every_of(2000, every_of(2000, yes()))),
+    );
+    let limits = Limits {
+        time_limit: Some(Duration::from_secs(1)),
+        ..Limits::default()
+    };
+    let began = Instant::now();
+    let outcome = explore(&sketch.model(), &limits);
+    assert!(
+        began.elapsed() < Duration::from_secs(20),
+        "8 * 10^9 steps would take minutes: {:?}",
+        began.elapsed()
+    );
+    assert_eq!(outcome.status, Status::Unfinished);
+    assert_eq!(outcome.reason.as_deref(), Some("time limit of 1 s"));
+    assert_eq!(outcome.rules[0].verdict, Verdict::Unknown);
+    assert_eq!(
+        outcome.states, 0,
+        "no state had its rules judged, so none is counted"
+    );
+}
+
+fn huge_input_space() -> Model {
+    let mut sketch = Sketch::new();
+    let n = sketch.number("n", 0, 999, &[0]);
+    let thousand: Vec<Value> = (0..1000).map(Value::Int).collect();
+    sketch.action_with(
+        "pick",
+        &[
+            ("a", thousand.clone()),
+            ("b", thousand.clone()),
+            ("c", thousand),
+        ],
+        yes(),
+        &[(&n, Expr::Local(0))],
+    );
+    sketch.end("any", yes());
+    sketch.model()
+}
+
+#[test]
+fn an_action_with_a_billion_input_combinations_stops_at_a_small_state_limit_at_once() {
+    let began = Instant::now();
+    let outcome = explore(&huge_input_space(), &with_states(10));
+    assert!(
+        began.elapsed() < Duration::from_secs(10),
+        "{:?}",
+        began.elapsed()
+    );
+    assert_eq!(outcome.status, Status::Unfinished);
+    assert_eq!(outcome.reason.as_deref(), Some("state limit of 10"));
+    assert_eq!(outcome.states, 10);
+}
+
+#[test]
+fn an_action_with_a_billion_input_combinations_stops_at_the_time_limit() {
+    let limits = Limits {
+        time_limit: Some(Duration::from_secs(1)),
+        ..Limits::default()
+    };
+    let began = Instant::now();
+    let outcome = explore(&huge_input_space(), &limits);
+    assert!(
+        began.elapsed() < Duration::from_secs(20),
+        "{:?}",
+        began.elapsed()
+    );
+    assert_eq!(outcome.status, Status::Unfinished);
+    assert_eq!(outcome.reason.as_deref(), Some("time limit of 1 s"));
+}
+
+#[test]
+fn a_number_computed_beyond_32_bits_is_noted_in_the_outcome() {
+    let (mut sketch, n) = counter(3);
+    sketch.end("full", is(&n, 3));
+    let square = Expr::Apply(
+        Op::Math(Math::Multiply),
+        vec![plus(&n, 50_000), plus(&n, 50_000)],
+    );
+    sketch.rule(
+        "big",
+        Expr::Apply(Op::Order(Order::Greater), vec![square, int(0)]),
+    );
+    assert!(explore(&sketch.model(), &Limits::default()).computes_beyond_32_bits);
+    let (mut small, top) = counter(3);
+    small.end("full", is(&top, 3));
+    assert!(!explore(&small.model(), &Limits::default()).computes_beyond_32_bits);
+}
+
+fn grows_after_a_stuck_state() -> Model {
+    let mut sketch = Sketch::new();
+    let j = sketch.number("j", 0, 1, &[0]);
+    let q = sketch.number("q", 0, 99, &[0]);
+    sketch.action("grow", both(is(&j, 0), below(&q, 99)), &[(&q, plus(&q, 1))]);
+    sketch.action("step", is(&j, 0), &[(&j, int(1))]);
+    sketch.model()
+}
+
+#[test]
+fn a_model_with_a_stuck_state_found_before_the_state_limit_is_fail_and_says_it_stopped_early() {
+    let outcome = explore(&grows_after_a_stuck_state(), &with_states(6));
+    assert_eq!(outcome.status, Status::Fail, "the stuck state was found");
+    assert_eq!(outcome.reason.as_deref(), Some("state limit of 6"));
+    assert_eq!(outcome.findings.len(), 1, "{:?}", outcome.findings);
+}
+
+#[test]
+fn a_model_with_a_fault_found_before_the_state_limit_is_fail_and_says_it_stopped_early() {
+    let mut sketch = Sketch::new();
+    let o = sketch.field(
+        "o",
+        Domain::Optional(Box::new(Domain::Int { lo: 0, hi: 1 })),
+        vec![Value::Null],
+    );
+    let j = sketch.number("j", 0, 99, &[0]);
+    let read = Expr::Apply(Op::Unwrap, vec![o]);
+    sketch.action("faulty", apply(Op::Order(Order::Less), &read, int(1)), &[]);
+    sketch.action("step", below(&j, 99), &[(&j, plus(&j, 1))]);
+    let outcome = explore(&sketch.model(), &with_states(5));
+    assert_eq!(outcome.status, Status::Fail);
+    assert_eq!(outcome.reason.as_deref(), Some("state limit of 5"));
+    assert_eq!(outcome.findings.len(), 1, "{:?}", outcome.findings);
+}
+
+#[test]
+fn a_model_stopped_by_a_limit_with_nothing_broken_is_unfinished() {
+    let (mut sketch, n) = counter(99);
+    sketch.end("full", is(&n, 99));
+    unfinished_at(
+        &explore(&sketch.model(), &with_states(10)),
+        10,
+        "state limit of 10",
+    );
+}
+
+#[test]
+fn a_state_out_of_range_is_counted_judged_by_no_rule_and_not_searched_from() {
+    let mut sketch = Sketch::new();
+    let n = sketch.number("n", 0, 2, &[0]);
+    sketch.action("jump", is(&n, 0), &[(&n, int(5))]);
+    sketch.action("never", is(&n, 5), &[(&n, int(1))]);
+    sketch.rule("low", below(&n, 3));
+    let outcome = explore(&sketch.model(), &Limits::default());
+    assert_eq!(
+        outcome.states, 2,
+        "the start state and the state out of range"
+    );
+    assert_eq!(
+        outcome.rules[0].verdict,
+        Verdict::Holds,
+        "no rule is judged in it"
+    );
+    let kinds: Vec<_> = outcome.findings.iter().map(|found| found.kind).collect();
+    assert_eq!(
+        kinds,
+        [FindingKind::OutOfRange],
+        "and nothing is stuck or faulted after it"
+    );
+    assert_eq!(
+        outcome.findings[0].path.steps.len(),
+        1,
+        "with the path to it"
+    );
 }

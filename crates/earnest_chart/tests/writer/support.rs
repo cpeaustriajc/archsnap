@@ -109,6 +109,7 @@ pub(crate) fn outcome(status: Status, visited: usize) -> Outcome {
         rules: Vec::new(),
         findings: Vec::new(),
         reason: None,
+        computes_beyond_32_bits: false,
         graph: None,
     }
 }

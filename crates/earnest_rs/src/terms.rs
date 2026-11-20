@@ -1,4 +1,6 @@
-use crate::reader::{OUTSIDE, Reader, Sign, at, path_text, start_of, unwrapped, why_outside};
+use crate::reader::{
+    OUTSIDE, Reader, Sign, at, name_of, path_text, start_of, unwrapped, why_outside,
+};
 use earnest_ast::{Binary, HelperKind, Reach, Shape, ShapeKind, Term, TermKind, Unary};
 use earnest_value::IntType;
 use proc_macro2::Span;
@@ -240,7 +242,7 @@ impl Reader<'_> {
         match &read.member {
             Member::Named(field) => at(
                 start_of(&read.base),
-                TermKind::Member(Box::new(target), field.to_string()),
+                TermKind::Member(Box::new(target), name_of(field)),
             ),
             Member::Unnamed(index) => {
                 let feature = format!(".{}", index.index);
@@ -255,7 +257,7 @@ impl Reader<'_> {
 
     fn method_call(&mut self, call: &ExprMethodCall) -> Term {
         let span = start_of(&call.receiver);
-        let name = call.method.to_string();
+        let name = name_of(&call.method);
         if name == "clone" && call.args.is_empty() {
             return self.term(&call.receiver);
         }
@@ -408,7 +410,7 @@ impl Reader<'_> {
         };
         match plain {
             Pat::Ident(named) if named.subpat.is_none() && named.by_ref.is_none() => {
-                (named.ident.to_string(), ty)
+                (name_of(&named.ident), ty)
             }
             Pat::Wild(_) => ("_".to_owned(), ty),
             other => {
@@ -425,6 +427,12 @@ impl Reader<'_> {
             .iter()
             .map(|input| self.parameter(input).0)
             .collect();
+        let spans: Vec<(String, Span)> = parameters
+            .iter()
+            .cloned()
+            .zip(closure.inputs.iter().map(Spanned::span))
+            .collect();
+        self.refuse_repeats(&spans, "parameter", "E0415");
         let kept = self.bound.len();
         self.bound.extend(parameters.iter().cloned());
         let body = self.term(&closure.body);
@@ -561,7 +569,7 @@ impl Reader<'_> {
             self.refuse_conditional(&field.attrs);
             let value = self.term(&field.expr);
             match &field.member {
-                Member::Named(field_name) => fields.push((field_name.to_string(), value)),
+                Member::Named(field_name) => fields.push((name_of(field_name), value)),
                 Member::Unnamed(index) => {
                     let feature = index.index.to_string();
                     self.refuse(index.span, &feature, "a record's fields have names");
@@ -577,7 +585,7 @@ impl Reader<'_> {
             .path
             .segments
             .last()
-            .map(|segment| segment.ident.to_string())
+            .map(|segment| name_of(&segment.ident))
             .unwrap_or_default();
         let message = if PRINTING.contains(&name.as_str()) {
             "printing is input and output, which is outside the library"

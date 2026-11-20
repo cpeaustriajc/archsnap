@@ -212,6 +212,7 @@ fn rewritten<'a>(
     now: Option<RuleText<'a>>,
 ) -> RuleChange<'a> {
     RuleChange {
+        file: "src/cart.model.ts",
         model: "Tank",
         id,
         change,
@@ -274,18 +275,18 @@ fn a_report_with_rule_changes_ends_with_them_in_the_form_of_the_text_output() {
 
 ```text
 rule changes since origin/main
-  added      Tank.fresh  "The level is never seven"
-  removed    Tank.gone  "The level is never five"
-  loosened   Tank.capped
+  added      Tank.fresh  "The level is never seven"  src/cart.model.ts
+  removed    Tank.gone  "The level is never five"  src/cart.model.ts
+  loosened   Tank.capped  src/cart.model.ts
     was  "The level is at most two"  s.level <= 2
     now  "The level is at most three"  s.level <= 3
-  tightened  Tank.floor
+  tightened  Tank.floor  src/cart.model.ts
     was  "The level is at least zero"  s.level >= 0
     now  "The level is at least one"  s.level >= 1
-  changed    Tank.steady
+  changed    Tank.steady  src/cart.model.ts
     was  "The level stays within the tank"  s.level <= 3
     now  "The level stays within the tank"  s.level < 4
-  reworded   Tank.named
+  reworded   Tank.named  src/cart.model.ts
     was  "The level is small"  s.level < 4
     now  "The level is tiny"  s.level < 4
 ```"#;
@@ -331,8 +332,8 @@ fn a_rule_change_prints_whichever_sides_it_has() {
         rule_change_lines(&since),
         [
             "rule changes since main",
-            "  added      Tank.bare",
-            "  changed    Tank.half",
+            "  added      Tank.bare  src/cart.model.ts",
+            "  changed    Tank.half  src/cart.model.ts",
             "    now  \"Now\"  (s) => s.level < 4",
         ]
     );
@@ -342,6 +343,7 @@ fn a_rule_change_prints_whichever_sides_it_has() {
 fn an_unfinished_model_says_how_far_it_got_and_why_it_stopped() {
     let ledger = Outcome {
         reason: Some("state limit of 1000".to_owned()),
+        computes_beyond_32_bits: false,
         ..outcome(Status::Unfinished, 1000)
     };
     let sections = [Section {
@@ -466,6 +468,7 @@ fn text_a_developer_wrote_cannot_open_or_close_a_block_or_a_heading() {
             path,
         }],
         reason: Some(hostile.to_owned()),
+        computes_beyond_32_bits: false,
         ..outcome(Status::Fail, 2)
     };
     let sections = [Section {
@@ -474,6 +477,7 @@ fn text_a_developer_wrote_cannot_open_or_close_a_block_or_a_heading() {
         outcome: &model,
     }];
     let changes = [RuleChange {
+        file: hostile,
         model: hostile,
         id: hostile,
         change: ChangeKind::Loosened,
@@ -504,7 +508,7 @@ fault  {flat}
 
 ```text
 rule changes since {flat}
-  loosened   {flat}.{flat}
+  loosened   {flat}.{flat}  {flat}
     was  "{flat}"  {flat}
     now  "{flat}"  {flat}
 ```"#

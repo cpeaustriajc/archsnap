@@ -8,7 +8,7 @@ use crate::run::{Bounds, Graphs, Ran, Search, checked, explore_each};
 use crate::select::{Target, select, select_with_removed};
 use earnest_chart::{RuleChange, RuleChanges, Section, Unreadable, chart, report};
 use earnest_check::Status;
-use earnest_tla::{Files, write};
+use earnest_tla::{BEYOND_32_BITS_COMPUTED, Files, limits, write};
 use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
@@ -197,6 +197,14 @@ pub(crate) fn tla_command(arguments: &Tla) -> Result<Exit, String> {
         ));
         return Ok(Exit::Failed);
     }
+    for target in &targets {
+        for why in limits(&target.readable.model) {
+            to_stderr(&format!(
+                "warning: TLC can't confirm the model `{}`: {why}",
+                target.readable.model.name
+            ));
+        }
+    }
     let mut written = Vec::new();
     for each in &all {
         let pair = [
@@ -246,8 +254,12 @@ pub(crate) fn confirm_command(arguments: &Confirm) -> Result<Exit, String> {
             Ok((counting, rules)) => differences(&ours, &counting, &rules),
             Err(error) => vec![error],
         };
+        let mut beyond = limits(model);
+        if ran.outcome.computes_beyond_32_bits {
+            beyond.push(BEYOND_32_BITS_COMPUTED.to_owned());
+        }
         everything_agrees &= found.is_empty();
-        to_stdout(&confirm_lines(&ours, &found).join("\n"));
+        to_stdout(&confirm_lines(&ours, &found, &beyond).join("\n"));
     }
     let unreadable = warn_of_unreadable(&files);
     Ok(if everything_agrees {

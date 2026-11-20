@@ -12,6 +12,26 @@ const ONLY_IN_A_BODY: &str =
 const NO_LOOPS: &str =
     "a loop is outside the library; use `m.forall`, `m.exists`, `every`, `some` or `filter`";
 
+fn written_parameters(arrow: &ArrowFunctionExpression<'_>) -> Vec<(String, u32)> {
+    let mut names = Vec::with_capacity(arrow.params.items.len());
+    for parameter in &arrow.params.items {
+        match &parameter.pattern {
+            BindingPattern::BindingIdentifier(name) => {
+                names.push((name.name.to_string(), name.span.start));
+            }
+            BindingPattern::ObjectPattern(pattern) => {
+                for property in &pattern.properties {
+                    if let BindingPattern::BindingIdentifier(local) = &property.value {
+                        names.push((local.name.to_string(), local.span.start));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
 pub(crate) fn body_span(arrow: &ArrowFunctionExpression<'_>) -> Span {
     arrow.body.span()
 }
@@ -100,9 +120,16 @@ impl Reader<'_> {
     }
 
     pub(crate) fn body(&mut self, arrow: &ArrowFunctionExpression<'_>) -> Term {
+        let parameters = written_parameters(arrow);
+        self.refuse_repeats(
+            &parameters,
+            "this parameter is named twice, and JavaScript refuses an arrow function whose \
+             parameters share a name",
+        );
         match &arrow.body {
             ArrowFunctionBody::FunctionBody(block) => {
-                self.block(&block.statements, block.span.end.saturating_sub(1))
+                let own: Vec<String> = parameters.into_iter().map(|(name, _)| name).collect();
+                self.block(&block.statements, block.span.end.saturating_sub(1), &own)
             }
             other => match other.as_expression() {
                 Some(value) => self.term(value),
@@ -125,18 +152,47 @@ impl Reader<'_> {
         Term::new(self.place(offset), TermKind::Null)
     }
 
-    fn block(&mut self, statements: &[Statement<'_>], closing: u32) -> Term {
+    pub(crate) fn refuse_repeats(&mut self, names: &[(String, u32)], message: &str) {
+        for (position, (name, offset)) in names.iter().enumerate() {
+            if names
+                .iter()
+                .take(position)
+                .any(|(earlier, _)| earlier == name)
+            {
+                self.refuse(*offset, name, message);
+            }
+        }
+    }
+
+    fn block(&mut self, statements: &[Statement<'_>], closing: u32, parameters: &[String]) -> Term {
         let mark = self.locals.len();
         let waiting = self.uninitialised.len();
+        let mut declared: Vec<(String, u32)> = Vec::new();
         for statement in statements {
             if let Statement::VariableDeclaration(variables) = statement
                 && variables.kind == VariableDeclarationKind::Const
             {
                 for declarator in &variables.declarations {
                     if let BindingPattern::BindingIdentifier(name) = &declarator.id {
+                        declared.push((name.name.to_string(), name.span.start));
                         self.uninitialised.push((name.name.to_string(), mark));
                     }
                 }
+            }
+        }
+        self.refuse_repeats(
+            &declared,
+            "this name is declared twice in one block, and JavaScript refuses a second `const` \
+             of one name",
+        );
+        for (name, offset) in &declared {
+            if parameters.contains(name) {
+                self.refuse(
+                    *offset,
+                    name,
+                    "this name is a parameter of the function, and JavaScript refuses a `const` \
+                     of the same name in its body",
+                );
             }
         }
         let folded = self.rest(statements, closing);
@@ -271,7 +327,7 @@ impl Reader<'_> {
         let yes = match &branch.consequent {
             Statement::ReturnStatement(returned) => self.returned(returned),
             Statement::BlockStatement(inner) => {
-                self.block(&inner.body, inner.span.end.saturating_sub(1))
+                self.block(&inner.body, inner.span.end.saturating_sub(1), &[])
             }
             other => {
                 self.refuse(

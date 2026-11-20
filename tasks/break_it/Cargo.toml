@@ -4,9 +4,17 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[features]
+tlc = []
+
 [[test]]
 name = "break_it"
 path = "tests/break_it/main.rs"
+
+[[test]]
+name = "tlc"
+path = "tests/tlc/main.rs"
+required-features = ["tlc"]
 
 [dev-dependencies]
 serde_json.workspace = true

@@ -1,7 +1,7 @@
 //! A tree is plain data: built by hand, compared by value.
 
 use earnest_ast::{
-    HelperKind, Reading, Shape, ShapeKind, Term, TermKind, ViewDraft, condition_text,
+    HelperKind, Quoting, Reading, Shape, ShapeKind, Term, TermKind, ViewDraft, condition_text,
 };
 use earnest_diagnostics::Place;
 use earnest_value::IntType;
@@ -41,11 +41,26 @@ fn a_model_without_a_view_has_no_title_labels_steps_or_colors() {
 #[test]
 fn the_text_of_a_condition_has_one_space_for_each_run_of_white_space() {
     assert_eq!(
-        condition_text("  s.n <= 2 &&\n\t\ts.n   >= 0\r\n"),
+        condition_text("  s.n <= 2 &&\n\t\ts.n   >= 0\r\n", Quoting::TypeScript),
         "s.n <= 2 && s.n >= 0"
     );
-    assert_eq!(condition_text("s.n<=2"), "s.n<=2");
-    assert_eq!(condition_text(" \n\t"), "");
+    assert_eq!(condition_text("s.n<=2", Quoting::Rust), "s.n<=2");
+    assert_eq!(condition_text(" \n\t", Quoting::Rust), "");
+    assert_eq!(
+        condition_text("s.n /* at most */ <= // two\n 2", Quoting::TypeScript),
+        "s.n <= 2",
+        "a comment is not part of the condition"
+    );
+    assert_eq!(
+        condition_text("s.t === \"a // b\" /* c */", Quoting::TypeScript),
+        "s.t === \"a // b\"",
+        "text in quotes is kept whole"
+    );
+    assert_eq!(
+        condition_text("self.n /* a /* b */ c */ <= 2", Quoting::Rust),
+        "self.n <= 2",
+        "a Rust block comment nests"
+    );
 }
 
 #[test]

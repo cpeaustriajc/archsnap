@@ -726,3 +726,78 @@ test("replay reports the remainder fault of an action", () => {
   const path = { start: state(1), steps: [{ action: "share", state: state(0) }] };
   expect(() => replay(Then, path, { exports: { share } })).toThrow(/remainder/);
 });
+
+test("m.some gives the value of an optional that is not null", () => {
+  expect([m.some(0), m.some(5), m.some("a"), m.some(false)]).toStrictEqual([0, 5, "a", false]);
+});
+
+test("m.some of null throws the fault that reads a null value", () => {
+  expect(() => m.some(null)).toThrow(/reads a value that is null/);
+});
+
+const NULL_FAULT = "reads a value that is null in this state";
+
+const optional = () => {
+  const Opt = m.model("Opt", {
+    o: m.int(0, 2).optional().initial(null),
+    n: m.int(0, 3).initial(0),
+  });
+  return { Opt };
+};
+
+test("a number read from a null optional is a fault in a rule, as the checker says", () => {
+  const { Opt } = optional();
+  const below = Opt.rule({ says: "Below", holds: (s) => m.some(s.o) < 3 });
+  const sum = Opt.rule({ says: "Sum", holds: (s) => m.some(s.o) + 1 > 0 });
+  const same = Opt.rule({ says: "Same", holds: (s) => m.some(s.o) === 7 });
+  const done = Opt.end({ says: "Done", when: () => true });
+  const found = explore(Opt, { exports: { below, sum, same, done } });
+  expect(found.rules.map((rule) => rule.verdict)).toStrictEqual(["unknown", "unknown", "unknown"]);
+  expect(found.findings.map((finding) => finding.message)).toStrictEqual([
+    `the rule \`below\` ${NULL_FAULT}`,
+  ]);
+});
+
+test("m.some faults in a when, an end, a then and a helper, as the checker does", () => {
+  const messages = (found: Exploration) => found.findings.map((finding) => finding.message);
+  const first = optional().Opt;
+  const inWhen = first.action("when", { when: (s) => m.some(s.o) > 0, then: () => ({}) });
+  expect(messages(explore(first, { exports: { inWhen } }))).toStrictEqual([
+    `the \`when\` of the action \`inWhen\` ${NULL_FAULT}`,
+  ]);
+  const second = optional().Opt;
+  const over = second.end({ says: "Over", when: (s) => m.some(s.o) === 0 });
+  expect(messages(explore(second, { exports: { over } }))).toStrictEqual([
+    `the end \`over\` ${NULL_FAULT}`,
+  ]);
+  const third = optional().Opt;
+  const bump = third.action("bump", { then: (s) => ({ n: m.some(s.o) + 1 }) });
+  expect(messages(explore(third, { exports: { bump } }))).toStrictEqual([
+    `the \`then\` of the action \`bump\` ${NULL_FAULT}`,
+  ]);
+  const read = (s: { readonly o: number | null }) => m.some(s.o) + 1;
+  const fourth = optional().Opt;
+  const viaHelper = fourth.rule({ says: "Helper", holds: (s) => read(s) > 0 });
+  const done = fourth.end({ says: "Done", when: () => true });
+  const found = explore(fourth, { exports: { viaHelper, done } });
+  expect(found.rules.map((rule) => rule.verdict)).toStrictEqual(["unknown"]);
+  expect(messages(found)).toStrictEqual([`the rule \`viaHelper\` ${NULL_FAULT}`]);
+});
+
+test("a step whose then reads null is not taken", () => {
+  const { Opt } = optional();
+  const bump = Opt.action("bump", { then: (s) => ({ n: m.some(s.o) + 1 }) });
+  const found = explore(Opt, { exports: { bump } });
+  expect(found.states).toBe(1);
+});
+
+test("replay reports the null fault of an action", () => {
+  const { Opt } = optional();
+  const bump = Opt.action("bump", { then: (s) => ({ n: m.some(s.o) + 1 }) });
+  const state = (n: number) => [
+    { name: "o", value: null },
+    { name: "n", value: n },
+  ];
+  const path = { start: state(0), steps: [{ action: "bump", state: state(1) }] };
+  expect(() => replay(Opt, path, { exports: { bump } })).toThrow(/null/);
+});

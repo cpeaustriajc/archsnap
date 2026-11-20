@@ -94,6 +94,7 @@ pub(crate) fn show(term: &Term) -> String {
             format!("(let {name} = {} in {})", show(value), show(body))
         }
         TermKind::Wrap(inner) => format!("some({})", show(inner)),
+        TermKind::Present(inner) => format!("present({})", show(inner)),
         TermKind::Across {
             reach,
             shape,

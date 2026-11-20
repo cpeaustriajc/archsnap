@@ -1,21 +1,22 @@
 use crate::bodies::Body;
-use crate::reader::{Reader, attribute, path_text, place_of, why_outside};
+use crate::reader::{Reader, attribute, name_of, path_text, place_of, why_outside};
 use earnest_ast::{
     ActionBody, ActionDraft, Draft, EndDraft, FieldDraft, HelperDraft, HelperKind, Language,
-    Reading, RuleDraft, Shape, Term, TermKind, ViewDraft, condition_text, nesting_problem,
+    Quoting, Reading, RuleDraft, Shape, Term, TermKind, ViewDraft, condition_text, nesting_problem,
 };
 use proc_macro2::{Ident, Span};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{
-    Attribute, Block, Expr, Field, Fields, FnArg, ImplItem, ImplItemFn, Item, ItemEnum, ItemFn,
-    ItemImpl, ItemStruct, ItemUse, LitStr, Pat, PatType, Path, ReturnType, Signature, Token, Type,
-    UseTree,
+    Attribute, Block, Expr, Field, Fields, FieldsNamed, FnArg, ImplItem, ImplItemFn, Item,
+    ItemEnum, ItemFn, ItemImpl, ItemStruct, ItemUse, LitStr, Pat, PatType, Path, ReturnType,
+    Signature, Token, Type, UseTree, Visibility,
 };
 
 const ROLES: [&str; 3] = ["action", "rule", "end"];
 const LIBRARY_NAMES: [&str; 7] = ["forall", "exists", "Some", "None", "Set", "Seq", "Map"];
 const STATE: &str = "self";
+const WAIT: &str = "waiting is outside the library: model it with a `Request` or a `Timer`";
 const ONLY_MODELS: &str =
     "a model file holds only models, the types they use, constants and helper functions";
 
@@ -38,7 +39,7 @@ fn derives(attributes: &[Attribute], wanted: &str) -> bool {
                     listed.iter().any(|path| {
                         path.segments
                             .last()
-                            .is_some_and(|segment| segment.ident == wanted)
+                            .is_some_and(|segment| name_of(&segment.ident) == wanted)
                     })
                 })
         })
@@ -68,7 +69,7 @@ fn names_a_role(attribute: &Attribute) -> bool {
         && path
             .segments
             .last()
-            .is_some_and(|segment| ROLES.iter().any(|role| segment.ident == role))
+            .is_some_and(|segment| ROLES.contains(&name_of(&segment.ident).as_str()))
 }
 
 fn marks_model(attributes: &[Attribute]) -> bool {
@@ -77,7 +78,7 @@ fn marks_model(attributes: &[Attribute]) -> bool {
             .path()
             .segments
             .last()
-            .is_some_and(|segment| segment.ident == "model")
+            .is_some_and(|segment| name_of(&segment.ident) == "model")
     })
 }
 
@@ -111,9 +112,7 @@ fn keyword(item: &Item) -> (Span, &'static str) {
 
 fn owner_of(block: &ItemImpl) -> Option<String> {
     match block.self_ty.as_ref() {
-        Type::Path(named) if named.qself.is_none() => {
-            named.path.get_ident().map(std::string::ToString::to_string)
-        }
+        Type::Path(named) if named.qself.is_none() => named.path.get_ident().map(name_of),
         _ => None,
     }
 }
@@ -122,7 +121,7 @@ const BYTE_ORDER_MARK: char = '\u{feff}';
 
 pub(crate) fn read_file(file: &str, source: &str) -> Reading {
     let source = source.strip_prefix(BYTE_ORDER_MARK).unwrap_or(source);
-    if let Some(problem) = nesting_problem(file, source) {
+    if let Some(problem) = nesting_problem(file, source, Quoting::Rust) {
         return Reading {
             drafts: Vec::new(),
             problems: vec![problem],
@@ -178,7 +177,7 @@ impl Reader<'_> {
         let models: Vec<String> = found
             .models
             .iter()
-            .map(|state| state.ident.to_string())
+            .map(|state| name_of(&state.ident))
             .collect();
         for block in &found.blocks {
             if !owner_of(block).is_some_and(|owner| models.contains(&owner)) {
@@ -199,6 +198,8 @@ impl Reader<'_> {
 
     fn declare<'b>(&mut self, items: &'b [Item]) -> Found<'b> {
         let mut found = Found::default();
+        let mut types: Vec<(String, Span)> = Vec::new();
+        let mut values: Vec<(String, Span)> = Vec::new();
         for item in items {
             let attributes = attributes_of(item);
             if is_test_only(attributes) && !is_part_of_a_model(item) {
@@ -208,23 +209,27 @@ impl Reader<'_> {
             match item {
                 Item::Use(import) => self.import(import),
                 Item::Enum(choices) => {
+                    types.push((name_of(&choices.ident), choices.ident.span()));
                     self.refuse_library_name(&choices.ident, "enum");
                     self.declare_enum(choices);
                 }
                 Item::Struct(state) if derives(&state.attrs, "Model") => {
+                    types.push((name_of(&state.ident), state.ident.span()));
                     self.refuse_library_name(&state.ident, "struct");
-                    self.plain(state);
-                    self.models.insert(state.ident.to_string());
+                    self.name_of(state);
+                    self.models.insert(name_of(&state.ident));
                     found.models.push(state);
                 }
                 Item::Struct(record) => {
+                    types.push((name_of(&record.ident), record.ident.span()));
                     self.refuse_library_name(&record.ident, "struct");
                     self.declare_record(record);
                 }
                 Item::Impl(block) if marks_model(&block.attrs) => found.blocks.push(block),
                 Item::Impl(block) => self.refuse(block.impl_token.span, "impl", ONLY_MODELS),
                 Item::Const(constant) => {
-                    let name = constant.ident.to_string();
+                    let name = name_of(&constant.ident);
+                    values.push((name.clone(), constant.ident.span()));
                     self.refuse_library_name(&constant.ident, "const");
                     if let Some(number) = self.whole_number(&constant.expr) {
                         self.numbers.insert(name.clone(), number);
@@ -234,7 +239,8 @@ impl Reader<'_> {
                         .push((name, constant.ty.as_ref(), constant.expr.as_ref()));
                 }
                 Item::Fn(function) => {
-                    let name = function.sig.ident.to_string();
+                    let name = name_of(&function.sig.ident);
+                    values.push((name.clone(), function.sig.ident.span()));
                     self.refuse_library_name(&function.sig.ident, "fn");
                     self.functions.insert(name);
                     found.functions.push(function);
@@ -245,6 +251,8 @@ impl Reader<'_> {
                 }
             }
         }
+        self.refuse_repeats(&types, "type", "E0428");
+        self.refuse_repeats(&values, "item", "E0428");
         found
     }
 
@@ -255,7 +263,16 @@ impl Reader<'_> {
             UseTree::Rename(renamed) => Some(&renamed.ident),
             UseTree::Glob(_) | UseTree::Group(_) => None,
         };
-        if root.is_some_and(|name| name == "earnest") {
+        if root.is_some_and(|name| name_of(name) == "earnest") {
+            if !matches!(import.vis, Visibility::Inherited) {
+                let path = self.short_text(import.tree.span()).replace(' ', "");
+                self.refuse(
+                    import.tree.span(),
+                    &format!("pub use {path}"),
+                    "a model file imports the library directly, with a plain `use earnest::...`: \
+                     another file that re-exports it would hide the library from the checker",
+                );
+            }
             self.refuse_renames(&import.tree);
             return;
         }
@@ -285,7 +302,7 @@ impl Reader<'_> {
     }
 
     fn refuse_library_name(&mut self, name: &Ident, what: &str) {
-        if LIBRARY_NAMES.contains(&name.to_string().as_str()) {
+        if LIBRARY_NAMES.contains(&name_of(name).as_str()) {
             self.refuse(
                 name.span(),
                 &format!("{what} {name}"),
@@ -297,7 +314,7 @@ impl Reader<'_> {
         }
     }
 
-    fn plain(&mut self, state: &ItemStruct) {
+    fn name_of(&mut self, state: &ItemStruct) {
         if !state.generics.params.is_empty() {
             self.refuse(
                 state.generics.span(),
@@ -308,7 +325,7 @@ impl Reader<'_> {
     }
 
     fn declare_enum(&mut self, choices: &ItemEnum) {
-        let name = choices.ident.to_string();
+        let name = name_of(&choices.ident);
         if !derives(&choices.attrs, "Domain") {
             self.refuse(
                 choices.enum_token.span,
@@ -318,6 +335,12 @@ impl Reader<'_> {
             return;
         }
         let mut variants = Vec::with_capacity(choices.variants.len());
+        let written: Vec<(String, Span)> = choices
+            .variants
+            .iter()
+            .map(|variant| (name_of(&variant.ident), variant.ident.span()))
+            .collect();
+        self.refuse_repeats(&written, "variant", "E0428");
         for variant in &choices.variants {
             self.refuse_conditional(&variant.attrs);
             if !matches!(variant.fields, Fields::Unit) {
@@ -327,13 +350,13 @@ impl Reader<'_> {
                     "a variant with data has no one name to be known by: keep every variant plain",
                 );
             }
-            variants.push(variant.ident.to_string());
+            variants.push(name_of(&variant.ident));
         }
         self.enums.insert(name, variants);
     }
 
     fn declare_record(&mut self, record: &ItemStruct) {
-        let name = record.ident.to_string();
+        let name = name_of(&record.ident);
         if !derives(&record.attrs, "Domain") {
             self.refuse(
                 record.struct_token.span,
@@ -342,9 +365,10 @@ impl Reader<'_> {
             );
             return;
         }
-        self.plain(record);
+        self.name_of(record);
         match &record.fields {
             Fields::Named(fields) => {
+                self.refuse_repeated_fields(fields);
                 for field in &fields.named {
                     self.refuse_conditional(&field.attrs);
                 }
@@ -365,13 +389,16 @@ impl Reader<'_> {
         constants: &[(String, Term)],
         helpers: &[HelperDraft],
     ) -> Draft {
-        let name = state.ident.to_string();
+        let name = name_of(&state.ident);
         let fields = match &state.fields {
-            Fields::Named(named) => named
-                .named
-                .iter()
-                .filter_map(|field| self.field(field))
-                .collect(),
+            Fields::Named(named) => {
+                self.refuse_repeated_fields(named);
+                named
+                    .named
+                    .iter()
+                    .filter_map(|field| self.field(field))
+                    .collect()
+            }
             other => {
                 self.refuse(
                     other.span(),
@@ -386,10 +413,15 @@ impl Reader<'_> {
             .filter(|block| owner_of(block).as_deref() == Some(name.as_str()))
             .flat_map(|block| self.methods_of(block))
             .collect();
+        let written: Vec<(String, Span)> = own
+            .iter()
+            .map(|method| (name_of(&method.sig.ident), method.sig.ident.span()))
+            .collect();
+        self.refuse_repeats(&written, "method", "E0592");
         self.methods = own
             .iter()
             .filter(|method| role_of(&method.attrs).is_none())
-            .map(|method| method.sig.ident.to_string())
+            .map(|method| name_of(&method.sig.ident))
             .collect();
         let mut draft = Draft {
             name,
@@ -412,7 +444,7 @@ impl Reader<'_> {
     }
 
     fn field(&mut self, field: &Field) -> Option<FieldDraft> {
-        let name = field.ident.as_ref()?.to_string();
+        let name = name_of(field.ident.as_ref()?);
         self.refuse_conditional(&field.attrs);
         let mut shape = self.shape(&field.ty, &field.attrs);
         if let Some(initial) = attribute(&field.attrs, "initial") {
@@ -450,7 +482,7 @@ impl Reader<'_> {
 
     fn method(&mut self, method: &ImplItemFn, draft: &mut Draft) {
         let signature = &method.sig;
-        let id = signature.ident.to_string();
+        let id = name_of(&signature.ident);
         let place = place_of(signature.fn_token.span);
         self.refuse_conditional(&method.attrs);
         for attribute in method.attrs.iter().filter(|found| names_a_role(found)) {
@@ -528,7 +560,10 @@ impl Reader<'_> {
     fn body_text(&self, block: &Block) -> String {
         let open = block.brace_token.span.open().byte_range().end;
         let close = block.brace_token.span.close().byte_range().start;
-        condition_text(self.source.get(open..close).unwrap_or_default())
+        condition_text(
+            self.source.get(open..close).unwrap_or_default(),
+            Quoting::Rust,
+        )
     }
 
     fn sentence(&mut self, role: &str, attribute: &Attribute) -> String {
@@ -609,7 +644,7 @@ impl Reader<'_> {
                         "an input can't change: every operation gives back a new value",
                     );
                 }
-                named.ident.to_string()
+                name_of(&named.ident)
             }
             other => {
                 let feature = self.short_text(other.span());
@@ -621,8 +656,29 @@ impl Reader<'_> {
         (name, self.shape(&typed.ty, &typed.attrs))
     }
 
+    fn refuse_repeated_fields(&mut self, fields: &FieldsNamed) {
+        let written: Vec<(String, Span)> = fields
+            .named
+            .iter()
+            .filter_map(|field| field.ident.as_ref())
+            .map(|ident| (name_of(ident), ident.span()))
+            .collect();
+        self.refuse_repeats(&written, "field", "E0124");
+    }
+
     fn plain_function(&mut self, signature: &Signature) {
-        const WAIT: &str = "waiting is outside the library: model it with a `Request` or a `Timer`";
+        let written: Vec<(String, Span)> = signature
+            .inputs
+            .iter()
+            .filter_map(|input| match input {
+                FnArg::Typed(typed) => match typed.pat.as_ref() {
+                    Pat::Ident(named) => Some((name_of(&named.ident), named.ident.span())),
+                    _ => None,
+                },
+                FnArg::Receiver(_) => None,
+            })
+            .collect();
+        self.refuse_repeats(&written, "parameter", "E0415");
         if let Some(waits) = signature.asyncness {
             self.refuse(waits.span, "async", WAIT);
         }
@@ -660,10 +716,9 @@ impl Reader<'_> {
             Type::Reference(borrowed) => self.is_the_state(&borrowed.elem),
             Type::Paren(inner) => self.is_the_state(&inner.elem),
             Type::Group(inner) => self.is_the_state(&inner.elem),
-            Type::Path(named) => named
-                .path
-                .get_ident()
-                .is_some_and(|name| name == "Self" || self.models.contains(&name.to_string())),
+            Type::Path(named) => named.path.get_ident().is_some_and(|name| {
+                name_of(name) == "Self" || self.models.contains(&name_of(name))
+            }),
             _ => false,
         }
     }
@@ -683,7 +738,7 @@ impl Reader<'_> {
             self.refuse_conditional(&typed.attrs);
             match typed.pat.as_ref() {
                 Pat::Ident(named) if named.subpat.is_none() && named.by_ref.is_none() => {
-                    let name = named.ident.to_string();
+                    let name = name_of(&named.ident);
                     if !self.is_the_state(&typed.ty) {
                         typed_parameters.push((name.clone(), named.ident.span(), &typed.ty));
                     }
@@ -716,7 +771,7 @@ impl Reader<'_> {
         }
         HelperDraft {
             kind,
-            name: signature.ident.to_string(),
+            name: name_of(&signature.ident),
             parameters,
             body,
         }

@@ -16,7 +16,7 @@ mod shapes;
 mod show;
 mod terms;
 
-use earnest_ast::{MOST_NESTING, Reading, Shape, TOO_DEEP, nesting_problem};
+use earnest_ast::{MOST_NESTING, Quoting, Reading, Shape, TOO_DEEP, nesting_problem};
 use earnest_diagnostics::{Place, Problem};
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
@@ -37,6 +37,7 @@ pub(crate) struct Reader<'s> {
     models: Vec<String>,
     locals: Vec<(String, String)>,
     uninitialised: Vec<(String, usize)>,
+    step_places: Vec<(String, u32)>,
     depth: usize,
 }
 
@@ -58,7 +59,7 @@ pub(crate) struct Reader<'s> {
 /// still fail in the lowering, which is where an undefined name is found.
 #[must_use]
 pub fn read(file: &str, source: &str) -> Reading {
-    if let Some(problem) = nesting_problem(file, source) {
+    if let Some(problem) = nesting_problem(file, source, Quoting::TypeScript) {
         return Reading {
             drafts: Vec::new(),
             problems: vec![problem],
@@ -95,8 +96,11 @@ pub fn read(file: &str, source: &str) -> Reading {
 /// library), and when the file holds the specifier written plainly in either kind of quote.
 /// It is also true when the file can't be parsed, makes a dynamic `import()` or calls
 /// `require`, and mentions `earnest` anywhere: the file can't be shown to leave the library
-/// alone, and the reader then refuses what it can't read. `file` picks the dialect as it does
-/// for [`read`].
+/// alone, and the reader then refuses what it can't read. A file nested too deep to parse is
+/// a model file only when it mentions `earnest`, because its text can't be resolved. A file
+/// that reaches the library in a way its text does not show, such as a joined specifier, is
+/// not found here: the caller decides by the file's name and by whether it was asked for.
+/// `file` picks the dialect as it does for [`read`].
 #[must_use]
 pub fn reaches_library(file: &str, source: &str) -> bool {
     let plainly = names::LIBRARY_QUOTES
@@ -109,8 +113,8 @@ pub fn reaches_library(file: &str, source: &str) -> bool {
     if !mentions && !source.contains('\\') {
         return false;
     }
-    if nesting_problem(file, source).is_some() {
-        return true;
+    if nesting_problem(file, source, Quoting::TypeScript).is_some() {
+        return mentions;
     }
     let allocator = Allocator::default();
     let dialect = SourceType::from_path(file).unwrap_or_else(|_| SourceType::ts());
@@ -144,6 +148,7 @@ impl<'s> Reader<'s> {
             models: Vec::new(),
             locals: Vec::new(),
             uninitialised: Vec::new(),
+            step_places: Vec::new(),
             depth: 0,
         }
     }

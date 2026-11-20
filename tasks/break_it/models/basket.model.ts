@@ -19,12 +19,12 @@ export const clear = Basket.action("the buyer empties the basket", {
 
 export const few = Basket.rule({
 	says: "The basket holds at most one",
-	holds: (s) => s.chosen!.qty <= 1,
+	holds: (s) => m.some(s.chosen).qty <= 1,
 });
 
 export const early = Basket.rule({
 	says: "A late basket holds nothing",
-	holds: (s) => s.n <= 1 || s.chosen!.qty === 0,
+	holds: (s) => s.n <= 1 || m.some(s.chosen).qty === 0,
 });
 
 export const emptied = Basket.end({

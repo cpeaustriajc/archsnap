@@ -24,6 +24,7 @@
 
 mod helper;
 mod kind;
+mod limits;
 mod names;
 mod scribe;
 
@@ -31,6 +32,7 @@ use earnest_ir::{Action, Expr, Model};
 use earnest_value::Value;
 use helper::{EVERY_HELPER, Helper};
 use kind::Kind;
+pub use limits::BEYOND_32_BITS_COMPUTED;
 use names::{EVERY_VARIABLE, IN_RANGE, Names, STARTS, STEPS, STOP};
 use scribe::{Scope, Scribe, Variable, Written, names_written, set_of};
 use std::collections::BTreeSet;
@@ -136,6 +138,15 @@ impl Files {
 const INDENT: &str = "    ";
 const EXTENDED: &str = "EXTENDS Integers, Sequences, FiniteSets, TLC";
 const FILLER: &str = "nothing";
+
+/// Why TLC can't confirm `model`, from what the model declares: a number outside TLC's 32-bit
+/// integers, or a text that is not ASCII, which TLC may count as equal to another. Empty when
+/// nothing declared is beyond TLC. A number the model computes while it runs is not seen
+/// here: the search notes it, and [`BEYOND_32_BITS_COMPUTED`] is the sentence for it.
+#[must_use]
+pub fn limits(model: &Model) -> Vec<String> {
+    limits::declared(model)
+}
 
 /// The TLA+ module and TLC configuration for `model`.
 ///

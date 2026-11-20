@@ -11,7 +11,7 @@ mod color;
 mod nesting;
 
 pub use color::{COLORED_PARTS, is_color};
-pub use nesting::{MOST_NESTING, TOO_DEEP, nesting_problem};
+pub use nesting::{MOST_NESTING, Quoting, TOO_DEEP, nesting_problem};
 
 use earnest_diagnostics::{Place, Problem};
 use earnest_value::IntType;
@@ -161,6 +161,9 @@ pub enum TermKind {
     },
     /// `Some(x)` in Rust. An action's `Some(Self { .. })` is also read as this.
     Wrap(Box<Term>),
+    /// `m.some(x)` in TypeScript: the value inside an optional. It is a fault where the
+    /// optional is `null`, and the value itself when it is not optional.
+    Present(Box<Term>),
     /// `m.forall(T, f)` or `m.exists(T, f)` over every value of a declaration.
     Across {
         /// Whether all values or at least one must pass.
@@ -355,16 +358,18 @@ pub struct RuleDraft {
     pub text: String,
 }
 
-/// The normal form of a condition's source text, the same for every reader: each run of white
-/// space is one space and there is none at either end.
+/// The normal form of a condition's source text, the same for every reader: each comment is
+/// dropped, each run of white space is one space and there is none at either end.
 ///
 /// A reader passes the source of a rule's condition through this before it stores it in
 /// [`RuleDraft::text`], so an edit that only moves white space does not count as a change of
-/// the rule. White space inside a text literal is folded too, so two texts can be equal when
-/// the conditions are not.
+/// the rule, and neither does a comment. `quoting` says which language's comments and quoted
+/// text the source has. White space inside a text literal is folded too, so two texts can be
+/// equal when the conditions are not.
 #[must_use]
-pub fn condition_text(source: &str) -> String {
-    let words: Vec<&str> = source.split_whitespace().collect();
+pub fn condition_text(source: &str, quoting: Quoting) -> String {
+    let bare = nesting::without_comments(source, quoting);
+    let words: Vec<&str> = bare.split_whitespace().collect();
     words.join(" ")
 }
 

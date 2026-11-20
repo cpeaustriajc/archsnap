@@ -45,6 +45,9 @@ pub struct RuleText<'a> {
 /// `ruleChanges` in the JSON output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuleChange<'a> {
+    /// The path of the file that holds the model, so two models of one name in two files are
+    /// told apart. It is the last field of the rule's line.
+    pub file: &'a str,
     /// The name of the model the rule belongs to.
     pub model: &'a str,
     /// The rule's id.
@@ -101,11 +104,12 @@ pub fn rule_change_lines(changes: &RuleChanges<'_>) -> Vec<String> {
             | ChangeKind::Changed
             | ChangeKind::Reworded => None,
         };
+        let file = one_line(each.file);
         if let Some(text) = only {
-            lines.push(format!("{head}  {}", quoted(text.says)));
+            lines.push(format!("{head}  {}  {file}", quoted(text.says)));
             continue;
         }
-        lines.push(head);
+        lines.push(format!("{head}  {file}"));
         if matches!(each.change, ChangeKind::Added | ChangeKind::Removed) {
             continue;
         }

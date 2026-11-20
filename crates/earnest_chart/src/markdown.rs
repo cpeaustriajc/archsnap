@@ -1,7 +1,16 @@
 const FENCE: &str = "```";
 
-pub(crate) fn one_line(text: &str) -> String {
-    text.split(['\n', '\r'])
+fn breaks_a_line(character: char) -> bool {
+    character.is_control() || matches!(character, '\u{2028}' | '\u{2029}')
+}
+
+/// The text on one line: each line break or other control character is one space, and the
+/// white space around it is dropped. A name that is printed on a line of its own, such as a
+/// model's or a file's, goes through this so it can't start a line that reads as another
+/// result.
+#[must_use]
+pub fn one_line(text: &str) -> String {
+    text.split(breaks_a_line)
         .map(str::trim)
         .filter(|piece| !piece.is_empty())
         .collect::<Vec<_>>()
@@ -54,6 +63,15 @@ mod tests {
             "source over two lines"
         );
         assert_eq!(one_line("two  spaces"), "two  spaces", "no line break");
+    }
+
+    #[test]
+    fn every_control_character_and_line_separator_is_one_space() {
+        assert_eq!(
+            one_line("a\u{b}b\u{c}c\u{85}d\u{2028}e\u{2029}f\tg\u{1b}h"),
+            "a b c d e f g h",
+            "vertical tab, form feed, next line, separators, tab and escape"
+        );
     }
 
     #[test]

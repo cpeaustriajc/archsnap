@@ -168,6 +168,7 @@ impl Search<'_> {
             rules,
             findings,
             reason: self.reason.clone(),
+            computes_beyond_32_bits: self.wide,
             graph: self.limits.keep_graph.then(|| self.graph()),
         }
     }

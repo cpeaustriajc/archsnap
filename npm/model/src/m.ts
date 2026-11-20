@@ -19,7 +19,7 @@ export {
   timer,
 } from "./declarations.ts";
 export { model } from "./model.ts";
-export { mapOf, rem, seqOf, setOf } from "./values.ts";
+export { mapOf, rem, seqOf, setOf, some } from "./values.ts";
 
 /**
  * The type a model's state has, or the type of a declaration's values:

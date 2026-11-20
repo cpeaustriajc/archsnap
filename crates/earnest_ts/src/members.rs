@@ -2,8 +2,8 @@ use crate::Reader;
 use crate::bodies::body_span;
 use crate::terms::bare;
 use earnest_ast::{
-    ActionBody, ActionDraft, COLORED_PARTS, Draft, EndDraft, LabelDraft, RuleDraft, Shape, Term,
-    TermKind, ViewDraft, condition_text, is_color,
+    ActionBody, ActionDraft, COLORED_PARTS, Draft, EndDraft, LabelDraft, Quoting, RuleDraft, Shape,
+    Term, TermKind, ViewDraft, condition_text, is_color,
 };
 use oxc_ast::ast::{
     Argument, ArrowFunctionExpression, BindingPattern, CallExpression, Expression, ObjectPattern,
@@ -265,7 +265,7 @@ impl Reader<'_> {
         Some(StateFunction {
             state_name: parameters.into_iter().next(),
             term,
-            text: condition_text(self.text(body_span(arrow))),
+            text: condition_text(self.text(body_span(arrow)), Quoting::TypeScript),
         })
     }
 
@@ -354,7 +354,8 @@ impl Reader<'_> {
 
     fn texts(&mut self, wrapped: &Expression<'_>) -> Vec<(String, String)> {
         let mut found = Vec::new();
-        for (name, _, value) in self.entries(wrapped) {
+        for (name, start, value) in self.entries(wrapped) {
+            self.step_places.push((name.clone(), start));
             found.push((name, self.sentence(value)));
         }
         found

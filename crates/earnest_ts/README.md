@@ -25,3 +25,8 @@ number a model writes or bounds a declaration with is refused past 2^53 - 1, the
 a JavaScript number holds, and a `const` of a block that is read before its declaration is refused,
 as JavaScript does not give it the constant of the same name outside. A file that nests more than
 1000 levels deep is refused before the parser runs.
+
+A rule, an action and an end must be bound to an exported constant, because the id is the name it
+is exported under; the reader refuses one bound to a constant that is not exported. A name is
+declared once in its scope, as JavaScript requires, and `m.some(value)` is read as the value
+inside an optional while a postfix `!` is refused.

@@ -13,12 +13,12 @@ export const pick = Box.action("the buyer picks an item", {
 
 export const more = Box.action("the buyer takes one more", {
 	when: (s) => s.chosen !== null && s.chosen.qty < 2,
-	then: (s) => ({ chosen: { ...s.chosen!, qty: s.chosen!.qty + 1 } }),
+	then: (s) => ({ chosen: { ...m.some(s.chosen), qty: m.some(s.chosen).qty + 1 } }),
 });
 
 export const heat = Box.action("the item is heated", {
 	when: (s) => s.chosen !== null && !s.chosen.hot,
-	then: (s) => ({ chosen: { ...s.chosen!, hot: true } }),
+	then: (s) => ({ chosen: { ...m.some(s.chosen), hot: true } }),
 });
 
 export const cold = Box.rule({

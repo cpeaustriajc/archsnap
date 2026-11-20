@@ -791,6 +791,26 @@ export class RemainderFault extends Error {
   }
 }
 
+/** Thrown by `some` for a `null`; `explore` and `replay` report it as a read of a null value. */
+export class NullFault extends Error {
+  constructor() {
+    super("reads a value that is null");
+    this.name = "NullFault";
+  }
+}
+
+/**
+ * Writes the value inside an optional: `m.some(s.chosen).qty`. A `null` is a fault, as in
+ * `earnest verify`, because JavaScript would go on with `null` as a number. Use it where
+ * TypeScript would want a postfix `!`, which a model file may not have.
+ */
+export const some = <T>(value: T | null): T => {
+  if (value === null || value === undefined) {
+    throw new NullFault();
+  }
+  return value;
+};
+
 /**
  * Writes the remainder of `a` divided by `b`: `m.rem(7, 3)` is 1. A negative `a` or a `b`
  * below 1 is a fault, as in `earnest verify`, because languages disagree on the result there.

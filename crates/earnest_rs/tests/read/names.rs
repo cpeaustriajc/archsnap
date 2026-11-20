@@ -265,3 +265,133 @@ fn bumped(n: u8) -> u8 {
         "in `let n = n + 1;` the right side is the parameter, as in Rust"
     );
 }
+
+fn found_features(source: &str) -> Vec<String> {
+    read("src/case.rs", source)
+        .problems
+        .into_iter()
+        .map(|problem| problem.feature)
+        .collect()
+}
+
+#[test]
+fn two_constants_functions_or_types_of_one_name_are_refused() {
+    assert_eq!(
+        found_features(&gate("", "const MOST: u8 = 3;\nconst MOST: u8 = 1;\n")),
+        ["`item MOST`"],
+        "two constants"
+    );
+    assert_eq!(
+        found_features(&gate("", "fn f() -> u8 { 1 }\nfn f() -> u8 { 2 }\n")),
+        ["`item f`"],
+        "two functions"
+    );
+    assert_eq!(
+        found_features(&gate("", "const f: u8 = 1;\nfn f() -> u8 { 2 }\n")),
+        ["`item f`"],
+        "a constant and a function share the value namespace"
+    );
+    assert_eq!(
+        found_features(&gate(
+            "",
+            "#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Domain)]\npub enum Level { Low }\n"
+        )),
+        ["`type Level`"],
+        "an enum and an enum"
+    );
+    assert_eq!(
+        found_features(&gate("", "const Level: u8 = 1;\n")),
+        Vec::<String>::new(),
+        "a constant and a type do not share a namespace"
+    );
+}
+
+#[test]
+fn two_methods_of_one_name_are_refused_also_across_roles() {
+    let twice = format!("{}{}", rule("true"), rule("false"));
+    assert_eq!(found_features(&gate(&twice, "")), ["`method known`"]);
+    let helper = "    fn known(&self) -> bool { true }\n";
+    assert_eq!(
+        found_features(&gate(&format!("{}{helper}", rule("true")), "")),
+        ["`method known`"]
+    );
+}
+
+#[test]
+fn a_parameter_named_twice_is_refused() {
+    assert_eq!(
+        found_features(&gate("", "fn f(a: u8, a: u8) -> u8 { a }\n")),
+        ["`parameter a`"]
+    );
+    assert!(
+        found_features(&gate(&rule("[1_u8, 2].every(|x, x| true)"), ""))
+            .contains(&"`parameter x`".to_owned())
+    );
+}
+
+#[test]
+fn a_let_may_shadow_and_an_unrelated_pair_of_names_is_read() {
+    let body = "let n = 1_u8;\n        let n = n + 1;\n        n < 5";
+    assert_eq!(found_features(&gate(&rule(body), "")), Vec::<String>::new());
+}
+
+#[test]
+fn a_raw_identifier_is_the_plain_name_in_an_id_and_in_a_field() {
+    let source = "\
+use earnest::model::{Model, model};
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Model)]
+pub struct Raw {
+    #[range(0, 3)]
+    #[initial(0)]
+    r#type: u8,
+}
+
+#[model]
+impl Raw {
+    #[action(\"loop\")]
+    fn r#loop(&self) -> Option<Self> {
+        Some(Self { r#type: self.r#type + 1 })
+    }
+
+    #[rule(\"low\")]
+    fn r#fn(&self) -> bool {
+        self.r#type <= 1
+    }
+}
+";
+    let reading = read("raw.rs", source);
+    assert_eq!(reading.problems, [], "no problem");
+    let draft = &reading.drafts[0];
+    assert_eq!(draft.fields[0].name, "type");
+    assert_eq!(draft.actions[0].id, "loop");
+    assert_eq!(draft.rules[0].id, "fn");
+    let twice = source.replace("fn r#fn", "fn r#loop");
+    assert!(
+        found_features(&twice)
+            .iter()
+            .any(|found| found.contains("method loop")),
+        "`r#loop` and `loop` are one name"
+    );
+}
+
+#[test]
+fn a_re_export_of_the_library_is_refused_with_the_way_to_import_it() {
+    for import in [
+        "pub use earnest::model::*;",
+        "pub(crate) use earnest::model::{Model, model};",
+        "pub use r#earnest::model::*;",
+        "pub use ::earnest::model::Model;",
+    ] {
+        let source = format!("{import}\n");
+        let found = read("src/kit.rs", &source).problems;
+        assert_eq!(found.len(), 1, "`{import}` is refused once: {found:?}");
+        assert!(
+            found[0].message.contains("imports the library directly"),
+            "the sentence says what to do: {}",
+            found[0].message
+        );
+    }
+    let plain = read("src/ok.rs", "use earnest::model::{Model, model};\n");
+    assert_eq!(plain.problems, [], "a plain `use` is read");
+}

@@ -4,6 +4,8 @@
 //! passes once the finding is fixed. `tasks/break_it/README.md` has the hand derivation of each
 //! expected result.
 
+mod fourth_a;
+mod fourth_b;
 mod second;
 mod support;
 mod third;

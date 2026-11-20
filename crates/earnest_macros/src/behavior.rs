@@ -1,4 +1,4 @@
-use crate::choices::{Slot, domain_choices, for_each_combination};
+use crate::choices::{Fastest, Slot, domain_choices, for_each_combination};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::ext::IdentExt;
@@ -145,6 +145,7 @@ fn steps_of(method: &mut ImplItemFn, sentence: &LitStr) -> syn::Result<TokenStre
     });
     let loops = for_each_combination(
         &slots,
+        Fastest::First,
         quote! {
             if let ::core::option::Option::Some(earnest_next) = Self::#name(self #(, #copies)*) {
                 earnest_steps.push(::earnest::model::Step {

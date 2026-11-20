@@ -27,7 +27,9 @@ pub(crate) fn why_outside(root: &str, property: Option<&str>) -> &'static str {
         }
         ("Date" | "performance", _) => "the system clock is outside the library",
         ("Math", Some("random")) | ("crypto", _) => "a random value is outside the library",
-        ("Math", _) => "`Math` is outside the library; write the sum with `+`, `-`, `*` and `%`",
+        ("Math", _) => {
+            "`Math` is outside the library; write the sum with `+`, `-`, `*` and `m.rem(a, b)`"
+        }
         ("console", _) => "printing is outside the library",
         ("setTimeout" | "setInterval", _) => {
             "a real timer is outside the library; declare one with `m.timer()`"

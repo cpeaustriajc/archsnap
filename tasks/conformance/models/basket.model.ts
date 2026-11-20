@@ -14,7 +14,7 @@ export const clear = Basket.action("the buyer clears the choice", {
 
 export const price = Basket.action("the till prices the choice", {
 	when: (s) => s.total === 0,
-	then: (s) => ({ total: s.chosen!.qty }),
+	then: (s) => ({ total: m.some(s.chosen).qty }),
 });
 
 export const capped = Basket.rule({

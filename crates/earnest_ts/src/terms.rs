@@ -19,7 +19,6 @@ pub(crate) fn bare<'p, 'a>(expr: &'p Expression<'a>) -> &'p Expression<'a> {
     loop {
         current = match current {
             Expression::ParenthesizedExpression(inner) => &inner.expression,
-            Expression::TSNonNullExpression(inner) => &inner.expression,
             Expression::TSAsExpression(inner) => &inner.expression,
             Expression::TSSatisfiesExpression(inner) => &inner.expression,
             Expression::TSTypeAssertion(inner) => &inner.expression,
@@ -186,6 +185,15 @@ impl Reader<'_> {
             }
             Expression::ClassExpression(_) => ("class", "a class is outside the library"),
             Expression::ThisExpression(_) => ("this", "`this` is outside the library"),
+            Expression::TSNonNullExpression(inner) => {
+                self.term(&inner.expression);
+                (
+                    "!",
+                    "a postfix `!` is a fault in the checker where the value is null, and nothing \
+                     in JavaScript: write `m.some(value)`, which gives the value and is the same \
+                     fault in Node",
+                )
+            }
             Expression::ChainExpression(_) => (
                 "?.",
                 "optional chaining is outside the library; compare with `null` first",
@@ -468,6 +476,14 @@ impl Reader<'_> {
             "setOf" => TermKind::SetOf(self.arguments(call)),
             "seqOf" => TermKind::SeqOf(self.arguments(call)),
             "mapOf" => self.map_of(call),
+            "some" => match self.arguments(call).as_slice() {
+                [value] => TermKind::Present(Box::new(value.clone())),
+                _ => self.refused(
+                    call.span.start,
+                    &format!("{library}.some"),
+                    "`m.some` takes one value, an optional: `m.some(s.chosen)`",
+                ),
+            },
             "rem" => match self.arguments(call).as_slice() {
                 [left, right] => TermKind::Binary(
                     Binary::Remainder,
@@ -646,9 +662,9 @@ mod tests {
     #[test]
     fn a_choice_and_a_non_null_mark() {
         assert_eq!(
-            holds("(s) => s.n === 0 ? s.box!.isFull : false"),
-            "(? (=== s.n 0) s.box.isFull false)",
-            "`? :` and `!` after a value"
+            holds("(s) => s.n === 0 ? m.some(s.box).isFull : false"),
+            "(? (=== s.n 0) present(s.box).isFull false)",
+            "`? :` and `m.some` of a value"
         );
     }
 

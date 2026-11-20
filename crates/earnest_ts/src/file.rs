@@ -42,6 +42,31 @@ struct Top<'p, 'a> {
     drafts: Vec<Draft>,
     owners: Vec<(String, usize)>,
     pending: Vec<Pending<'p, 'a>>,
+    exported: Vec<String>,
+}
+
+fn exported_names(program: &Program<'_>) -> Vec<String> {
+    let mut names = Vec::new();
+    for statement in &program.body {
+        match statement {
+            Statement::ExportDeclaration(export) => {
+                if let Declaration::VariableDeclaration(variables) = &export.declaration {
+                    for declarator in &variables.declarations {
+                        if let BindingPattern::BindingIdentifier(name) = &declarator.id {
+                            names.push(name.name.to_string());
+                        }
+                    }
+                }
+            }
+            Statement::ExportNamedDeclaration(listed) if !listed.export_kind.is_type() => {
+                for specifier in &listed.specifiers {
+                    names.push(specifier.local.name().to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    names
 }
 
 fn callee_parts<'p>(call: &'p CallExpression<'_>) -> Option<(&'p str, &'p str)> {
@@ -56,12 +81,16 @@ fn callee_parts<'p>(call: &'p CallExpression<'_>) -> Option<(&'p str, &'p str)> 
 
 impl Reader<'_> {
     pub(crate) fn program(&mut self, program: &Program<'_>) -> Vec<Draft> {
-        let mut top = Top::default();
+        let mut top = Top {
+            exported: exported_names(program),
+            ..Top::default()
+        };
         for statement in &program.body {
             self.statement(statement, &mut top);
         }
         let mut constants = Vec::new();
         let mut helpers = Vec::new();
+        let mut steps: Vec<(usize, String, u32)> = Vec::new();
         for item in top.pending {
             match item {
                 Pending::Helper { name, arrow } => {
@@ -83,9 +112,29 @@ impl Reader<'_> {
                     call,
                 } => {
                     if let Some(draft) = top.drafts.get_mut(model) {
+                        self.step_places.clear();
                         self.member_of(draft, kind, id, start, call);
+                        steps.extend(
+                            self.step_places
+                                .drain(..)
+                                .map(|(name, offset)| (model, name, offset)),
+                        );
                     }
                 }
+            }
+        }
+        for (model, name, offset) in steps {
+            let known = top
+                .drafts
+                .get(model)
+                .is_some_and(|draft| draft.actions.iter().any(|action| action.id == name));
+            if !known {
+                self.refuse(
+                    offset,
+                    &name,
+                    "a view's `step` labels an action of the model by its id, and this model has \
+                     no action with this id: the chart would leave the label out",
+                );
             }
         }
         for draft in &mut top.drafts {
@@ -216,6 +265,19 @@ impl Reader<'_> {
                 );
                 continue;
             }
+            if self
+                .top_names
+                .iter()
+                .any(|known| known == name.name.as_str())
+            {
+                self.refuse(
+                    name.span.start,
+                    name.name.as_str(),
+                    "this name is declared twice in the file, and JavaScript refuses a second \
+                     `const` of one name, so the file never runs and has no value to read",
+                );
+                continue;
+            }
             self.top_names.push(name.name.to_string());
             self.top_level(name.name.as_str(), init, start, top);
         }
@@ -252,7 +314,23 @@ impl Reader<'_> {
             }
             let owner = top.owners.iter().find(|(known, _)| known == root);
             if let Some((_, model)) = owner {
-                match MemberKind::named(part) {
+                let unexported = !top.exported.iter().any(|known| known == name);
+                let part_kind = MemberKind::named(part);
+                if unexported
+                    && matches!(
+                        part_kind,
+                        Some(MemberKind::Action | MemberKind::Rule | MemberKind::End)
+                    )
+                {
+                    self.refuse(
+                        call.span.start,
+                        name,
+                        "a rule, an action or an end is an exported constant, because its id is \
+                         the name it is exported under: write `export const name = ...`",
+                    );
+                    return;
+                }
+                match part_kind {
                     Some(kind) => top.pending.push(Pending::Member {
                         model: *model,
                         kind,

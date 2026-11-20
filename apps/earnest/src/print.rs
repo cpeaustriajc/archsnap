@@ -1,7 +1,7 @@
 use crate::changes::Difference;
 use crate::reading::ModelFile;
 use crate::run::{Checked, ModelResult, Status};
-use earnest_chart::{RuleChange, RuleChanges, rule_change_lines};
+use earnest_chart::{RuleChange, RuleChanges, one_line, rule_change_lines};
 use earnest_diagnostics::Problem;
 use serde::Serialize;
 use std::io::{self, Write};
@@ -119,7 +119,7 @@ fn model_line(result: &ModelResult) -> String {
     };
     let mut fields = vec![
         format!("{:<STATUS_WIDTH$}", result.status.word()),
-        result.name.clone(),
+        one_line(&result.name),
         format!("{} states{so_far}", result.states),
         format!("{} ms", result.milliseconds),
     ];
@@ -136,7 +136,11 @@ pub(crate) fn problem_lines(file: &ModelFile) -> Vec<String> {
         .map(|problem| {
             format!(
                 "{}:{}:{}{INDENT}{}{INDENT}{}",
-                problem.file, problem.line, problem.column, problem.feature, problem.message
+                one_line(&problem.file),
+                problem.line,
+                problem.column,
+                one_line(&problem.feature),
+                one_line(&problem.message)
             )
         })
         .collect()
@@ -145,7 +149,8 @@ pub(crate) fn problem_lines(file: &ModelFile) -> Vec<String> {
 pub(crate) fn unreadable_lines(file: &ModelFile) -> Vec<String> {
     let mut lines = vec![format!(
         "{:<STATUS_WIDTH$}{INDENT}{}",
-        "unreadable", file.path
+        "unreadable",
+        one_line(&file.path)
     )];
     lines.extend(
         problem_lines(file)
@@ -295,6 +300,7 @@ unfinished  Z  1000 states so far  3 ms  (state limit of 1000)  (cached)
     fn the_rule_changes_come_before_the_summary() {
         let (files, checked) = (files(), checked());
         let changes = [Difference {
+            file: "tank.model.ts".to_owned(),
             model: "A".to_owned(),
             id: "fresh".to_owned(),
             change: Kind::Added,
@@ -318,7 +324,7 @@ unfinished  Z  1000 states so far  3 ms  (state limit of 1000)  (cached)
             tail,
             [
                 "3 models: 0 pass, 1 fail, 1 unfinished, 1 unreadable",
-                "  added      A.fresh  \"New\"",
+                "  added      A.fresh  \"New\"  tank.model.ts",
                 "rule changes since origin/main",
             ]
         );
@@ -403,6 +409,46 @@ unfinished  Z  1000 states so far  3 ms  (state limit of 1000)  (cached)
         assert!(
             !verified.json().unwrap().contains("detail"),
             "the text lines are not part of the JSON"
+        );
+    }
+
+    #[test]
+    fn a_model_or_file_name_with_a_line_break_stays_on_one_line() {
+        let named = Checked {
+            result: result(
+                "First\nSecond\u{b}Third",
+                "first\nsecond.model.ts",
+                Status::Pass,
+            ),
+            detail: Vec::new(),
+        };
+        let unreadable = file("first\nsecond.model.ts", "export const now = Date.now();\n");
+        let files = [unreadable];
+        let checked = [named];
+        let text = Verified {
+            files: &files,
+            checked: &checked,
+            since: None,
+        }
+        .text();
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.starts_with("pass") && line.contains("First Second Third")),
+            "the model is one line: {text}"
+        );
+        assert!(
+            lines.iter().any(
+                |line| line.starts_with("unreadable") && line.contains("first second.model.ts")
+            ),
+            "the file is one line: {text}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("first second.model.ts:") && line.contains("`Date.now`")),
+            "each problem names the file on its one line: {text}"
         );
     }
 

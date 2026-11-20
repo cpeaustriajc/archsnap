@@ -1,5 +1,5 @@
 use earnest_diagnostics::{Place, Problem};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
@@ -8,6 +8,7 @@ use std::str::Utf8Error;
 
 const SKIPPED_FOLDERS: [&str; 4] = ["node_modules", "target", "dist", "build"];
 const TYPESCRIPT_EXTENSIONS: [&str; 3] = ["ts", "mts", "tsx"];
+const MODEL_SUFFIXES: [&str; 3] = [".model.ts", ".model.mts", ".model.tsx"];
 const RUST_EXTENSION: &str = "rs";
 const HERE: &str = ".";
 pub(crate) const IN_EVERY_MODEL_FILE: &str = "earnest";
@@ -15,6 +16,12 @@ const UTF16_LITTLE_ENDIAN: [u8; 2] = [0xFF, 0xFE];
 const UTF16_BIG_ENDIAN: [u8; 2] = [0xFE, 0xFF];
 const NOT_UTF8: &str = "the file is not UTF-8 text, so the checker can't read it: save it as UTF-8";
 const TOP_OF_FILE: Place = Place { line: 1, column: 1 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Origin {
+    Named,
+    Searched,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Language {
@@ -54,7 +61,8 @@ impl Found {
 }
 
 pub(crate) fn language_of(path: &Path) -> Option<Language> {
-    let extension = path.extension().and_then(OsStr::to_str)?;
+    let name = path.file_name().and_then(OsStr::to_str)?;
+    let (_, extension) = name.rsplit_once('.')?;
     if TYPESCRIPT_EXTENSIONS.contains(&extension) {
         Some(Language::TypeScript)
     } else if extension == RUST_EXTENSION {
@@ -70,6 +78,18 @@ pub(crate) fn is_model_source(language: Language, path: &str, source: &str) -> b
         Language::Rust => earnest_rs::uses_library(text),
     };
     reaches(source) || (source.contains('\0') && reaches(&source.replace('\0', "")))
+}
+
+pub(crate) fn is_model_name(path: &str) -> bool {
+    let name = Path::new(path)
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or_default();
+    MODEL_SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
+}
+
+pub(crate) fn is_model_file(language: Language, path: &str, source: &str) -> bool {
+    is_model_name(path) || is_model_source(language, path, source)
 }
 
 fn is_skipped_folder(name: &OsStr) -> bool {
@@ -130,15 +150,22 @@ fn utf16_text(bytes: &[u8]) -> Option<String> {
     Some(String::from_utf16_lossy(&units))
 }
 
-fn not_utf8(path: &Path, language: Language, bytes: &[u8], error: Utf8Error) -> Option<Problem> {
+fn not_utf8(
+    path: &Path,
+    language: Language,
+    bytes: &[u8],
+    error: Utf8Error,
+    origin: Origin,
+) -> Option<Problem> {
     let shown = path.to_string_lossy();
+    let certain = origin == Origin::Named || is_model_name(&shown);
     let in_utf16 =
         utf16_text(bytes).is_some_and(|decoded| is_model_source(language, &shown, &decoded));
     if in_utf16 {
         return Some(Problem::new(&shown, TOP_OF_FILE, "`UTF-16`", NOT_UTF8));
     }
     let lossy = String::from_utf8_lossy(bytes);
-    if !is_model_source(language, &shown, &lossy) {
+    if !certain && !is_model_source(language, &shown, &lossy) {
         return None;
     }
     let (before, after) = bytes.split_at_checked(error.valid_up_to())?;
@@ -152,18 +179,34 @@ fn not_utf8(path: &Path, language: Language, bytes: &[u8], error: Utf8Error) -> 
     ))
 }
 
-fn model_file(path: &Path) -> Option<Found> {
-    let language = language_of(path)?;
+fn not_a_known_language(path: &Path) -> Found {
+    Found::unread(
+        path,
+        Problem::new(
+            &path.to_string_lossy(),
+            TOP_OF_FILE,
+            &in_backticks(path),
+            "the file was named on the command line, but it is not TypeScript (`.ts`, `.mts`, \
+             `.tsx`) or Rust (`.rs`), so the checker does not know how to read it",
+        ),
+    )
+}
+
+fn model_file(path: &Path, origin: Origin) -> Option<Found> {
+    let Some(language) = language_of(path) else {
+        return (origin == Origin::Named).then(|| not_a_known_language(path));
+    };
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) => return Some(Found::unread(path, cant_be_opened(path, "file", &error))),
     };
     match String::from_utf8(bytes) {
-        Ok(source) => is_model_source(language, &path.to_string_lossy(), &source)
-            .then(|| Found::model(&path.to_string_lossy(), language, &source)),
+        Ok(source) => (origin == Origin::Named
+            || is_model_file(language, &path.to_string_lossy(), &source))
+        .then(|| Found::model(&path.to_string_lossy(), language, &source)),
         Err(refused) => {
             let error = refused.utf8_error();
-            not_utf8(path, language, refused.as_bytes(), error)
+            not_utf8(path, language, refused.as_bytes(), error, origin)
                 .map(|problem| Found::unread(path, problem))
         }
     }
@@ -188,7 +231,8 @@ fn walk(folder: &Path, shown: &Path, found: &mut BTreeMap<PathBuf, Found>) {
         let name = entry.file_name();
         let shown_entry = shown.join(&name);
         let Ok(kind) = entry.file_type() else {
-            found.extend(model_file(&shown_entry).map(|file| (shown_entry, file)));
+            found
+                .extend(model_file(&shown_entry, Origin::Searched).map(|file| (shown_entry, file)));
             continue;
         };
         if kind.is_dir() {
@@ -196,7 +240,8 @@ fn walk(folder: &Path, shown: &Path, found: &mut BTreeMap<PathBuf, Found>) {
                 walk(&entry.path(), &shown_entry, found);
             }
         } else if kind.is_file() || (kind.is_symlink() && !entry.path().is_dir()) {
-            found.extend(model_file(&shown_entry).map(|file| (shown_entry, file)));
+            found
+                .extend(model_file(&shown_entry, Origin::Searched).map(|file| (shown_entry, file)));
         }
     }
 }
@@ -205,6 +250,7 @@ pub(crate) fn discover(roots: &[PathBuf]) -> Result<Vec<Found>, String> {
     let here = [PathBuf::from(HERE)];
     let roots = if roots.is_empty() { &here } else { roots };
     let mut found = BTreeMap::new();
+    let mut named = BTreeSet::new();
     for root in roots {
         if root.is_dir() {
             let shown = if root == Path::new(HERE) {
@@ -214,7 +260,10 @@ pub(crate) fn discover(roots: &[PathBuf]) -> Result<Vec<Found>, String> {
             };
             walk(root, shown, &mut found);
         } else if root.is_file() {
-            found.extend(model_file(root).map(|file| (root.clone(), file)));
+            let canonical = fs::canonicalize(root).unwrap_or_else(|_| root.clone());
+            if named.insert(canonical) {
+                found.extend(model_file(root, Origin::Named).map(|file| (root.clone(), file)));
+            }
         } else {
             return Err(format!(
                 "`{}` is not a file or a folder",
@@ -650,5 +699,89 @@ mod tests {
             "the sentence says why: {}",
             problem.message
         );
+    }
+
+    const JOINED: &str =
+        "const { m } = await import(\"@ear\" + \"nest/model\");\nexport const one = 1;\n";
+
+    #[test]
+    fn a_model_named_file_is_a_model_file_whatever_it_imports() {
+        let folder = folder_with(&[
+            ("joined.model.ts", JOINED),
+            ("joined.ts", JOINED),
+            ("plain.model.mts", "export const one = 1;\n"),
+        ]);
+        assert_eq!(
+            names_under(folder.path(), &[folder.path().to_path_buf()]),
+            ["joined.model.ts", "plain.model.mts"],
+            "the `.model.` name decides; a plain name that hides its import is not found"
+        );
+    }
+
+    #[test]
+    fn a_file_named_on_the_command_line_is_a_model_file_whatever_it_imports() {
+        let folder = folder_with(&[("joined.ts", JOINED), ("plain.rs", "pub fn one() {}\n")]);
+        let roots = [
+            folder.path().join("joined.ts"),
+            folder.path().join("plain.rs"),
+        ];
+        assert_eq!(
+            names_under(folder.path(), &roots),
+            ["joined.ts", "plain.rs"],
+            "both are read"
+        );
+    }
+
+    #[test]
+    fn a_name_that_is_only_an_extension_is_a_file_of_that_language() {
+        for (name, language) in [
+            (".ts", Language::TypeScript),
+            (".mts", Language::TypeScript),
+            (".tsx", Language::TypeScript),
+            (".rs", Language::Rust),
+        ] {
+            assert_eq!(language_of(Path::new(name)), Some(language), "{name}");
+        }
+        let folder = folder_with(&[(".ts", JOINED)]);
+        assert_eq!(
+            names_under(folder.path(), &[folder.path().join(".ts")]),
+            [".ts"],
+            "named, it is read"
+        );
+    }
+
+    #[test]
+    fn a_named_file_of_no_known_language_is_unreadable_with_a_sentence() {
+        let folder = folder_with(&[("notes.md", "# notes\n")]);
+        let unread = unread_under(folder.path(), &[folder.path().join("notes.md")]);
+        assert_eq!(unread.len(), 1, "{unread:?}");
+        assert!(
+            unread[0].1.message.contains("does not know how to read it"),
+            "{}",
+            unread[0].1.message
+        );
+        assert!(
+            names_under(folder.path(), &[folder.path().to_path_buf()]).is_empty(),
+            "found in a folder, it is not a model file"
+        );
+    }
+
+    #[test]
+    fn the_same_file_under_two_spellings_is_listed_once() {
+        let folder = folder_with(&[("a.model.ts", TYPESCRIPT)]);
+        let root = folder.path();
+        let direct = root.join("a.model.ts");
+        let roundabout = root.join("sub/../a.model.ts");
+        fs::create_dir_all(root.join("sub")).expect("a folder");
+        let found = discover(&[direct, roundabout]).expect("both exist");
+        assert_eq!(found.len(), 1, "one file: {found:?}");
+    }
+
+    #[test]
+    fn a_model_named_file_that_is_not_utf8_is_unreadable() {
+        let folder = folder_with(&[]);
+        fs::write(folder.path().join("odd.model.ts"), [b'a', 0xE9, b';']).expect("a file");
+        let unread = unread_under(folder.path(), &[folder.path().to_path_buf()]);
+        assert_eq!(unread.len(), 1, "{unread:?}");
     }
 }

@@ -1,7 +1,8 @@
 use earnest_ast::{MOST_NESTING, TOO_DEEP, Term, TermKind};
 use earnest_diagnostics::{Place, Problem};
-use proc_macro2::Span;
+use proc_macro2::{Ident, Span};
 use std::collections::{BTreeMap, BTreeSet};
+use syn::ext::IdentExt;
 use syn::spanned::Spanned;
 use syn::{Attribute, Expr, ExprLit, FieldsNamed, Lit, Path, UnOp};
 
@@ -68,11 +69,15 @@ pub(crate) fn at(span: Span, kind: TermKind) -> Term {
     Term::new(place_of(span), kind)
 }
 
+pub(crate) fn name_of(ident: &Ident) -> String {
+    ident.unraw().to_string()
+}
+
 pub(crate) fn path_text(path: &Path) -> String {
     let names: Vec<String> = path
         .segments
         .iter()
-        .map(|segment| segment.ident.to_string())
+        .map(|segment| name_of(&segment.ident))
         .collect();
     names.join("::")
 }
@@ -133,6 +138,25 @@ impl<'a> Reader<'a> {
         ));
     }
 
+    pub(crate) fn refuse_repeats(&mut self, names: &[(String, Span)], what: &str, code: &str) {
+        for (position, (name, span)) in names.iter().enumerate() {
+            let seen_before = names
+                .iter()
+                .take(position)
+                .any(|(earlier, _)| earlier == name);
+            if name != "_" && seen_before {
+                self.refuse(
+                    *span,
+                    &format!("{what} {name}"),
+                    &format!(
+                        "`{name}` is a {what} that is written twice in one place, and Rust refuses \
+                         the file ({code}): it has no meaning to check"
+                    ),
+                );
+            }
+        }
+    }
+
     pub(crate) fn refuse_conditional(&mut self, attributes: &[Attribute]) {
         for attribute in attributes {
             let path = attribute.path();
@@ -189,7 +213,7 @@ impl<'a> Reader<'a> {
             Expr::Group(inner) => self.whole_number(&inner.expr),
             Expr::Path(name) => {
                 let ident = name.path.get_ident()?;
-                self.numbers.get(&ident.to_string()).copied()
+                self.numbers.get(&name_of(ident)).copied()
             }
             _ => None,
         }

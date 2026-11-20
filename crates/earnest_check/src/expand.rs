@@ -1,6 +1,8 @@
 use earnest_ir::{Action, Fault, Frame, Model, eval, truth};
 use earnest_value::Value;
+use rustc_hash::FxHashSet;
 use std::sync::Arc;
+use std::time::Instant;
 
 pub(crate) type State = Arc<[Value]>;
 
@@ -27,12 +29,46 @@ pub(crate) struct Expanded {
     pub(crate) trouble: Option<(Whence, Fault)>,
     pub(crate) ended: bool,
     pub(crate) stuck: bool,
+    pub(crate) clock: Clock,
+    pub(crate) width: Width,
     pub(crate) successors: Vec<Successor>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Clock {
+    #[default]
+    Running,
+    Stopped,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Width {
+    #[default]
+    Narrow,
+    Beyond32Bits,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Budget {
+    pub(crate) deadline: Option<Instant>,
+    pub(crate) successors: usize,
+}
+
+impl Width {
+    fn of(frame: &Frame<'_>) -> Self {
+        if frame.computed_beyond_32_bits() {
+            Self::Beyond32Bits
+        } else {
+            Self::Narrow
+        }
+    }
 }
 
 impl Expanded {
     fn note(&mut self, whence: Whence, fault: Fault) {
-        if self.trouble.is_none() {
+        if fault == Fault::Stopped {
+            self.clock = Clock::Stopped;
+        } else if self.trouble.is_none() {
             self.trouble = Some((whence, fault));
         }
     }
@@ -91,9 +127,20 @@ fn expand_action(
     state: &[Value],
     frame: &mut Frame<'_>,
     found: &mut Expanded,
+    budget: Budget,
 ) -> Stopping {
     let mut stopping = Stopping::default();
-    for input in 0..input_count(action) {
+    let mut seen: FxHashSet<State> = FxHashSet::default();
+    let combinations = input_count(action);
+    let repeats = combinations > 1;
+    for input in 0..combinations {
+        if frame.out_of_time() {
+            found.clock = Clock::Stopped;
+            break;
+        }
+        if found.successors.len() > budget.successors {
+            break;
+        }
         set_inputs(action, input, frame);
         match truth(&action.guard, frame) {
             Ok(true) => {}
@@ -106,11 +153,15 @@ fn expand_action(
         }
         stopping.enabled = true;
         match next_state(action, state, frame) {
-            Ok(next) => found.successors.push(Successor {
-                action: position,
-                input,
-                next,
-            }),
+            Ok(next) => {
+                if !repeats || seen.insert(Arc::clone(&next)) {
+                    found.successors.push(Successor {
+                        action: position,
+                        input,
+                        next,
+                    });
+                }
+            }
             Err(fault) => found.note(Whence::Update(position), fault),
         }
     }
@@ -138,6 +189,7 @@ pub(crate) fn expand_state(
     slots: usize,
     state: &[Value],
     asked: Asked,
+    budget: Budget,
 ) -> Expanded {
     let mut found = Expanded {
         outside: model
@@ -150,7 +202,7 @@ pub(crate) fn expand_state(
     if found.outside.is_some() {
         return found;
     }
-    let mut frame = Frame::new(state, slots);
+    let mut frame = Frame::new(state, slots).until(budget.deadline);
     for (position, rule) in model.rules.iter().enumerate() {
         if only_rule.is_some_and(|wanted| wanted != rule.id) {
             continue;
@@ -164,20 +216,25 @@ pub(crate) fn expand_state(
             }
         }
     }
-    if asked == Asked::RulesOnly {
+    found.width = Width::of(&frame);
+    if asked == Asked::RulesOnly || found.clock == Clock::Stopped {
         return found;
     }
     let mut moving = Stopping::default();
     for (position, action) in model.actions.iter().enumerate() {
-        let each = expand_action(position, action, state, &mut frame, &mut found);
+        let each = expand_action(position, action, state, &mut frame, &mut found, budget);
         moving.enabled |= each.enabled;
         moving.unsure |= each.unsure;
+        if found.clock == Clock::Stopped {
+            return found;
+        }
     }
     if !moving.enabled {
         let ending = marked_end(model, &mut frame, &mut found);
         found.ended = ending.enabled;
         found.stuck = !ending.enabled && !ending.unsure && !moving.unsure;
     }
+    found.width = Width::of(&frame);
     found
 }
 

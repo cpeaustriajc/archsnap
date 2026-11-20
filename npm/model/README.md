@@ -80,7 +80,10 @@ a missing entry. `earnest verify` refuses the same.
 
 `m.rem(a, b)` is the remainder of whole numbers: `%` is not allowed in a model file, and `m.rem` of a
 negative `a` or a `b` below 1 is a fault that `explore` and `replay` report as `earnest verify`
-does. `m.setOf(a, b)`, `m.seqOf(a, b)` and `m.mapOf([k, v])` write collection values; a queue's
+does. `m.some(value)` is the value inside an optional: `%`'s sibling for `!`, which a model
+file may not write. `m.some(null)` is a fault that `explore` and `replay` report as `earnest
+verify` does ("reads a value that is null"), where JavaScript would go on with `null` as 0, so
+a number read from an optional goes through it. `m.setOf(a, b)`, `m.seqOf(a, b)` and `m.mapOf([k, v])` write collection values; a queue's
 `.initial` takes `m.seqOf(...)`. `m.forall(T, f)` and `m.exists(T, f)` range over a declaration
 or a collection. Every declaration has `values()`, which lists what it declares in the order the
 checker tries them, `has(value)`, `starts()`, `count` and `fromJson(json)`.
@@ -142,8 +145,11 @@ by its `label`, the action's sentence.
 - Set members and map keys are printed in one fixed order: `null`, booleans, numbers, text in
   code-unit order, records, collections. The checker's order may differ; compare sets as sets.
   `replay` does.
-- A fault is a `TypeError` thrown by the model: reading a field of `null` reports "reads a value
-  that is null", any other reports "uses a value of the wrong kind".
+- A fault is a `TypeError` thrown by the model, `m.rem` of a negative number, or `m.some(null)`:
+  reading a field of `null` or `m.some(null)` reports "reads a value that is null", any other
+  `TypeError` reports "uses a value of the wrong kind". Where a model file reads a number from
+  an optional it must use `m.some`, because JavaScript would give `null < 3` as true and `null +
+  1` as 1; the checker refuses the postfix `!` that would hide it.
 - The library does not check that a file keeps to what a model file may contain. `earnest verify`
   does.
 

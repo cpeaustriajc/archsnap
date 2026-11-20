@@ -148,6 +148,10 @@ pub struct Outcome {
     /// Why the search stopped early, such as `state limit of 1000`. `None` when it visited
     /// every state.
     pub reason: Option<String>,
+    /// Whether any arithmetic the search evaluated gave a number outside 32 bits, which TLC's
+    /// integers can't hold. It is not serialized.
+    #[serde(skip)]
+    pub computes_beyond_32_bits: bool,
     /// The states and arrows for a chart, when the limits asked to keep them. It is not
     /// serialized.
     #[serde(skip)]

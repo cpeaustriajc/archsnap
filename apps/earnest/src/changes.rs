@@ -1,4 +1,6 @@
-use crate::discovery::{IN_EVERY_MODEL_FILE, Language, is_model_source, is_searched, language_of};
+use crate::discovery::{
+    IN_EVERY_MODEL_FILE, Language, is_model_file, is_model_name, is_searched, language_of,
+};
 use crate::reading::{ModelFile, read};
 use crate::run::Bounds;
 use crate::select::Target;
@@ -60,6 +62,8 @@ impl Wording {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct Difference {
+    #[serde(skip)]
+    pub(crate) file: String,
     pub(crate) model: String,
     pub(crate) id: String,
     pub(crate) change: Kind,
@@ -70,6 +74,7 @@ pub(crate) struct Difference {
 impl Difference {
     pub(crate) fn for_the_chart(&self) -> RuleChange<'_> {
         RuleChange {
+            file: &self.file,
             model: &self.model,
             id: &self.id,
             change: self.change.for_the_chart(),
@@ -144,14 +149,14 @@ fn understood(language: Language, file: &str, bytes: Vec<u8>) -> AtBase {
         Ok(source) => source,
         Err(refused) => {
             let lossy = String::from_utf8_lossy(refused.as_bytes());
-            return if is_model_source(language, file, &lossy) {
+            return if is_model_file(language, file, &lossy) {
                 AtBase::Unreadable
             } else {
                 AtBase::Absent
             };
         }
     };
-    if !is_model_source(language, file, &source) {
+    if !is_model_file(language, file, &source) {
         return AtBase::Absent;
     }
     let reading = read(language, file, &source);
@@ -166,20 +171,41 @@ fn at_base(base: &str, language: Language, file: &str) -> AtBase {
     bytes_at(base, file).map_or(AtBase::Absent, |bytes| understood(language, file, bytes))
 }
 
-fn models_listed_at(base: &str, folder: &Path) -> Vec<PathBuf> {
-    let mut search = git(folder);
-    search.args(["grep", "--files-with-matches", "--null", "--text"]);
-    search.args(["--fixed-strings", "-e", IN_EVERY_MODEL_FILE]);
-    let Ok(output) = search.arg(base).output() else {
-        return Vec::new();
-    };
+fn names_from(output: &std::process::Output) -> Vec<&str> {
     output
         .stdout
         .split(|byte| *byte == 0)
         .filter_map(|name| std::str::from_utf8(name).ok())
-        .filter_map(|name| name.strip_prefix(base)?.strip_prefix(':'))
-        .map(PathBuf::from)
+        .filter(|name| !name.is_empty())
         .collect()
+}
+
+fn models_listed_at(base: &str, folder: &Path) -> Vec<PathBuf> {
+    let mut search = git(folder);
+    search.args(["grep", "--files-with-matches", "--null", "--text"]);
+    search.args(["--fixed-strings", "-e", IN_EVERY_MODEL_FILE]);
+    let mut listed: Vec<PathBuf> = search
+        .arg(base)
+        .output()
+        .map(|output| {
+            names_from(&output)
+                .into_iter()
+                .filter_map(|name| name.strip_prefix(base)?.strip_prefix(':'))
+                .map(PathBuf::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut tree = git(folder);
+    tree.args(["ls-tree", "-r", "--name-only", "-z"]);
+    if let Ok(output) = tree.arg(base).args(["--", "."]).output() {
+        listed.extend(
+            names_from(&output)
+                .into_iter()
+                .filter(|name| is_model_name(name))
+                .map(PathBuf::from),
+        );
+    }
+    listed
 }
 
 fn models_only_at_base(base: &str, roots: &[PathBuf], present: &BTreeSet<PathBuf>) -> Vec<PathBuf> {
@@ -306,7 +332,7 @@ fn told_apart(
         .collect()
 }
 
-fn one_sided(model: &str, rule: &RuleDraft, change: Kind) -> Difference {
+fn one_sided(file: &str, model: &str, rule: &RuleDraft, change: Kind) -> Difference {
     let wording = Some(Wording::of(rule));
     let (was, now) = match change {
         Kind::Removed => (wording, None),
@@ -315,6 +341,7 @@ fn one_sided(model: &str, rule: &RuleDraft, change: Kind) -> Difference {
         }
     };
     Difference {
+        file: file.to_owned(),
         model: model.to_owned(),
         id: rule.id.clone(),
         change,
@@ -336,11 +363,12 @@ pub(crate) fn model_changes(old: Option<&Draft>, new: &Draft, bounds: Bounds) ->
         .rules
         .iter()
         .filter(|now| was_of(&now.id).is_none())
-        .map(|now| one_sided(&new.name, now, Kind::Added))
+        .map(|now| one_sided(&new.file, &new.name, now, Kind::Added))
         .collect();
     for ((was, now), kind) in kept.iter().zip(kinds) {
         if let Some(change) = kind {
             changes.push(Difference {
+                file: new.file.clone(),
                 model: new.name.clone(),
                 id: now.id.clone(),
                 change,
@@ -355,7 +383,7 @@ pub(crate) fn model_changes(old: Option<&Draft>, new: &Draft, bounds: Bounds) ->
         old_rules
             .iter()
             .filter(|was| !new.rules.iter().any(|now| now.id == was.id))
-            .map(|was| one_sided(&new.name, was, Kind::Removed)),
+            .map(|was| one_sided(&new.file, &new.name, was, Kind::Removed)),
     );
     changes
 }
@@ -409,7 +437,7 @@ pub(crate) fn removed_with_their_model(
             draft
                 .rules
                 .iter()
-                .map(|rule| one_sided(&draft.name, rule, Kind::Removed))
+                .map(|rule| one_sided(&draft.file, &draft.name, rule, Kind::Removed))
         })
         .collect()
 }
@@ -632,11 +660,23 @@ mod tests {
     fn a_state_where_a_condition_has_no_value_tells_nothing_apart() {
         assert_eq!(
             kind(
-                "(s) => s.valve! === \"open\" || s.level <= 3",
-                "(s) => s.level <= 3 || s.valve! === \"open\""
+                "(s) => m.some(s.valve) === \"open\" || s.level <= 3",
+                "(s) => s.level <= 3 || m.some(s.valve) === \"open\""
             ),
             Kind::Changed,
             "the old condition reads a null valve in every state"
+        );
+    }
+
+    #[test]
+    fn a_state_where_the_new_condition_has_no_value_is_a_change_too() {
+        assert_eq!(
+            kind(
+                "(s) => s.level <= 3 || s.valve === \"open\"",
+                "(s) => m.some(s.valve) === \"open\" || s.level <= 3"
+            ),
+            Kind::Changed,
+            "the new condition reads a null valve where the old one holds"
         );
     }
 
@@ -675,6 +715,7 @@ mod tests {
             changes,
             [
                 Difference {
+                    file: "tank.model.ts".to_owned(),
                     model: "Tank".to_owned(),
                     id: "fresh".to_owned(),
                     change: Kind::Added,
@@ -685,6 +726,7 @@ mod tests {
                     }),
                 },
                 Difference {
+                    file: "tank.model.ts".to_owned(),
                     model: "Tank".to_owned(),
                     id: "gone".to_owned(),
                     change: Kind::Removed,
@@ -731,6 +773,7 @@ mod tests {
     #[test]
     fn a_change_serializes_as_the_json_output_documents() {
         let change = Difference {
+            file: "tank.model.ts".to_owned(),
             model: "Cart".to_owned(),
             id: "oneAddAtATime".to_owned(),
             change: Kind::Loosened,
@@ -902,6 +945,13 @@ mod tests {
     }
 
     fn changes_since_the_base(root: &Path, model: Option<&str>) -> Vec<(String, String, Kind)> {
+        differences_since_the_base(root, model)
+            .into_iter()
+            .map(|change| (change.model, change.id, change.change))
+            .collect()
+    }
+
+    fn differences_since_the_base(root: &Path, model: Option<&str>) -> Vec<Difference> {
         let roots = [root.to_path_buf()];
         let files: Vec<ModelFile> = discover(&roots)
             .expect("the root exists")
@@ -925,15 +975,52 @@ mod tests {
             "every file is readable at the base: {:?}",
             compared.warnings("HEAD")
         );
-        compared
-            .changes
-            .into_iter()
-            .map(|change| (change.model, change.id, change.change))
-            .collect()
+        compared.changes
     }
 
     fn change(model: &str, id: &str, kind: Kind) -> (String, String, Kind) {
         (model.to_owned(), id.to_owned(), kind)
+    }
+
+    #[test]
+    fn a_comment_or_white_space_alone_is_not_a_change() {
+        let found = kinds(
+            &[("rule", "same", "(s) => s.level <= 2")],
+            &[(
+                "rule",
+                "same",
+                "(s) =>\n  s.level /* at most */ <= /* two */ 2",
+            )],
+        );
+        assert_eq!(found, [], "the meaning is the same, so nothing is listed");
+    }
+
+    #[test]
+    fn every_change_names_its_file_so_models_of_one_name_are_told_apart() {
+        let folder = repository_with_a_base_commit();
+        let root = folder.path();
+        put(root, "kept.model.ts", &model_file(&[("Tank", "capped")]));
+        fs::remove_dir_all(root.join("old")).expect("a folder can be deleted");
+        put(root, "new/name.model.ts", &model_file(&[("Door", "shut")]));
+        let doors: Vec<(String, Kind)> = differences_since_the_base(root, Some("Door"))
+            .into_iter()
+            .map(|change| (change.file, change.change))
+            .collect();
+        let under = |relative: &str| root.join(relative).to_string_lossy().into_owned();
+        assert_eq!(
+            doors.len(),
+            2,
+            "the added and the removed Door: {doors:?} under {}",
+            under("")
+        );
+        assert!(
+            doors[0].0.ends_with("new/name.model.ts") && doors[0].1 == Kind::Added,
+            "the new file: {doors:?}"
+        );
+        assert!(
+            doors[1].0.ends_with("old/name.model.ts") && doors[1].1 == Kind::Removed,
+            "the old file: {doors:?}"
+        );
     }
 
     #[test]
@@ -951,14 +1038,14 @@ mod tests {
             [
                 change("Lamp", "dim", Kind::Removed),
                 change("Door", "shut", Kind::Added),
+                change("Vase", "whole", Kind::Removed),
                 change("Bell", "rings", Kind::Removed),
                 change("Door", "shut", Kind::Removed),
-                change("Vase", "whole", Kind::Removed),
             ],
             "the files of the run in path order (a model gone from a file that stays, the \
-             renamed file's model as added), then the files only the base has in path order: \
-             the deleted file, the old name of the renamed one, and the file that is no longer \
-             a model file; a folder the search skips is not listed"
+             renamed file's model as added, and the models of a `.model.ts` file that holds \
+             none any more), then the files only the base has in path order: the deleted file \
+             and the old name of the renamed one; a folder the search skips is not listed"
         );
         assert_eq!(
             changes_since_the_base(root, Some("Door")),

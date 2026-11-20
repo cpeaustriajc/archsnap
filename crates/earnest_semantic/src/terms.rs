@@ -114,6 +114,7 @@ impl Lowerer<'_> {
                     Type::optional(lowered.ty),
                 ))
             }
+            TermKind::Present(inner) => self.present(inner, place, scope),
             TermKind::Across {
                 reach,
                 shape,
@@ -285,6 +286,21 @@ impl Lowerer<'_> {
         }
         let on = self.term(target, scope)?;
         self.field_of(on, name, place, scope)
+    }
+
+    fn present(&mut self, inner: &Term, place: Place, scope: &mut Scope) -> Lowering<Typed> {
+        let lowered = self.term(inner, scope)?;
+        match lowered.ty {
+            Type::Optional(inside) => {
+                Ok(Typed::new(apply(Op::Unwrap, vec![lowered.expr]), *inside))
+            }
+            Type::Null => Err(self.stop(
+                place,
+                "m.some(null)",
+                "`null` holds no value, so reading it is a fault in every state",
+            )),
+            other => Ok(Typed::new(lowered.expr, other)),
+        }
     }
 
     fn state_field(&mut self, name: &str, place: Place) -> Lowering<Typed> {
