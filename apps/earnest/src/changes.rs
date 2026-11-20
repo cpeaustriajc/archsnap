@@ -62,7 +62,6 @@ impl Wording {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct Difference {
-    #[serde(skip)]
     pub(crate) file: String,
     pub(crate) model: String,
     pub(crate) id: String,
@@ -786,6 +785,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&change).unwrap(),
             serde_json::json!({
+                "file": "tank.model.ts",
                 "model": "Cart",
                 "id": "oneAddAtATime",
                 "change": "loosened",

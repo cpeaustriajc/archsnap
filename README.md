@@ -256,9 +256,8 @@ unchanged is not listed. Rule changes compare meaning, not text: a comment or wh
 in a condition is no change.
 
 Every change carries the path of its file, as the last field of its line in the text and the
-report, so two models of one name in two files are told apart. The entries of `ruleChanges`
-in the JSON do not carry it yet: a test of the behavior suite compares an entry whole, and adding
-`file` to the entry is a one-line change once that test says so.
+report and as `file` in each entry of `ruleChanges` in the JSON, so two models of one name in
+two files are told apart.
 
 Every rule the two commits share is compared, not only those whose text was edited. The old
 condition is read with the constants and helper functions of the file at the base commit, so a

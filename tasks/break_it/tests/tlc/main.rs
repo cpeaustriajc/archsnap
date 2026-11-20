@@ -13,6 +13,8 @@ use tempfile::TempDir;
 const TLC_DEADLINE: Duration = Duration::from_mins(10);
 const POLL: Duration = Duration::from_millis(50);
 const TLC_JAR_VARIABLE: &str = "EARNEST_TLC_JAR";
+const LIMIT_OF_NUMBERS: &str = "TLC's integers hold 32 bits";
+const LIMIT_OF_TEXTS: &str = "which is not ASCII";
 const TLC_JAR_FROM_THE_ROOT: &str = "../../target/tools/tla2tools.jar";
 
 fn binary() -> PathBuf {
@@ -80,7 +82,7 @@ fn run_for(files: &[(&str, &str)], arguments: &[&str], deadline: Duration) -> Op
     None
 }
 
-fn assert_tlc_confirms(name: &str, source: &str, why: &str) {
+fn assert_tlc_cannot_confirm(name: &str, source: &str, limit: &str, why: &str) {
     let jar = tlc_jar();
     assert!(
         jar.is_file(),
@@ -96,38 +98,44 @@ fn assert_tlc_confirms(name: &str, source: &str, why: &str) {
     )
     .expect("TLC checks a model of a few states in minutes");
     assert!(
-        confirmed.success && confirmed.stdout.starts_with("same"),
-        "the contract says TLC finds the same number of distinct states and the same verdict \
-         for each rule, and `{name}` is a model {why}\n{}",
+        !confirmed.success
+            && confirmed.stdout.starts_with("cannot")
+            && confirmed.stdout.contains("TLC can't confirm this model")
+            && confirmed.stdout.contains(limit),
+        "the contract says `confirm` prints `cannot` and names the limit of TLC ({limit}) for a \
+         model TLC can't hold, and `{name}` is a model {why}\n{}",
         confirmed.stdout
     );
 }
 
 #[test]
-fn tlc_finds_the_same_verdicts_for_a_number_beyond_32_bits() {
-    assert_tlc_confirms(
+fn confirm_says_tlc_cannot_hold_a_number_beyond_32_bits() {
+    assert_tlc_cannot_confirm(
         "big.model.ts",
         include_str!("../../models/fourth_b/big_number.model.ts"),
+        LIMIT_OF_NUMBERS,
         "whose numbers the search holds exactly (the largest is 2^31 + 2) and TLC's 32-bit \
          integers can't",
     );
 }
 
 #[test]
-fn tlc_finds_the_same_verdicts_for_a_product_past_32_bits_of_numbers_within_them() {
-    assert_tlc_confirms(
+fn confirm_says_tlc_cannot_hold_a_product_past_32_bits_of_numbers_within_them() {
+    assert_tlc_cannot_confirm(
         "square.model.ts",
         include_str!("../../models/fourth_b/square.model.ts"),
+        LIMIT_OF_NUMBERS,
         "whose numbers are all below 2^31 and whose largest square, 50 003 times itself, is \
          2 500 300 009",
     );
 }
 
 #[test]
-fn tlc_counts_two_texts_that_differ_only_above_their_first_byte_as_two_states() {
-    assert_tlc_confirms(
+fn confirm_says_tlc_cannot_tell_two_texts_above_ascii_apart() {
+    assert_tlc_cannot_confirm(
         "text.model.ts",
         include_str!("../../models/fourth_b/text_collision.model.ts"),
+        LIMIT_OF_TEXTS,
         "with two states, the letters `Z` (U+005A) and `\u{15a}` (U+015A), which TLC takes for \
          one when it counts states",
     );

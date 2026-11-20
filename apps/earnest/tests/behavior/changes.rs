@@ -183,6 +183,7 @@ fn r20_the_rule_changes_come_out_as_json() {
     assert_eq!(
         change_of(&report, "capped"),
         &json!({
+            "file": MODEL_FILE,
             "model": "Tank",
             "id": "capped",
             "change": "loosened",
@@ -194,6 +195,7 @@ fn r20_the_rule_changes_come_out_as_json() {
     assert_eq!(
         change_of(&report, "floor"),
         &json!({
+            "file": MODEL_FILE,
             "model": "Tank",
             "id": "floor",
             "change": "tightened",
@@ -205,6 +207,7 @@ fn r20_the_rule_changes_come_out_as_json() {
     assert_eq!(
         change_of(&report, "steady"),
         &json!({
+            "file": MODEL_FILE,
             "model": "Tank",
             "id": "steady",
             "change": "changed",
@@ -216,6 +219,7 @@ fn r20_the_rule_changes_come_out_as_json() {
     assert_eq!(
         change_of(&report, "named"),
         &json!({
+            "file": MODEL_FILE,
             "model": "Tank",
             "id": "named",
             "change": "reworded",

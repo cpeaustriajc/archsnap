@@ -25,7 +25,10 @@ test:
     cargo test --locked
 
 tlc:
-    cargo run --release --locked -p earnest-cli -- confirm --tlc target/tools/tla2tools.jar tasks/conformance/models/*.model.ts tasks/conformance/models/*.rs
+    cargo build --release --locked -p earnest-cli
+    for model in tasks/conformance/models/*.model.ts tasks/conformance/models/*.rs; do target/release/earnest confirm --tlc target/tools/tla2tools.jar "$model" || exit 1; done
+    cargo clippy --locked -p earnest_break_it --features tlc --test tlc -- -D warnings
+    cargo test --locked -p earnest_break_it --features tlc --test tlc
 
 verify:
     cargo verus focus
