@@ -93,7 +93,10 @@ a missing entry. `earnest verify` refuses the same.
 
 `m.rem(a, b)` is the remainder of whole numbers: `%` is not allowed in a model file, and `m.rem` of a
 negative `a` or a `b` below 1 is a fault that `explore` and `replay` report as `earnest verify`
-does. `m.some(value)` is the value inside an optional: `%`'s sibling for `!`, and for `as`, `satisfies` and `<Type>value`, which a model
+does. `m.div(a, b)` is the whole number of times `b` goes into `a`, as Rust's `/` on integers
+(`m.div(7, 2)` is 3): `/` is not allowed in a model file, since JavaScript's gives a fraction, and
+`m.div` of a negative `a` or a `b` below 1 is the same kind of fault, "takes a division with a
+negative number or a divisor below 1". `m.some(value)` is the value inside an optional: `%`'s sibling for `!`, and for `as`, `satisfies` and `<Type>value`, which a model
 file may not write (only `as const` is read). `m.some(null)` is a fault that `explore` and `replay` report as `earnest
 verify` does ("reads a value that is null"), where JavaScript would go on with `null` as 0, so
 a number read from an optional goes through it. `m.setOf(a, b)`, `m.seqOf(a, b)` and `m.mapOf([k, v])` write collection values; a queue's

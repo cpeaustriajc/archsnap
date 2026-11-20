@@ -130,6 +130,9 @@ impl Lowerer<'_> {
                 "a template string",
                 "text is built only in a view's state and group labels",
             )),
+            TermKind::Unpack { .. } | TermKind::Updates(_) | TermKind::Convert { .. } => {
+                self.derived(term, scope)
+            }
             TermKind::Declared { shape, value } => {
                 let declared = self.shape(shape)?.ty;
                 let lowered = self.term(value, scope)?;
@@ -137,6 +140,195 @@ impl Lowerer<'_> {
                 Ok(Typed::new(expr, declared))
             }
             _ => Err(self.unknown_syntax(place, "an expression")),
+        }
+    }
+
+    fn derived(&mut self, term: &Term, scope: &mut Scope) -> Lowering<Typed> {
+        let place = term.place;
+        match &term.kind {
+            TermKind::Unpack {
+                value,
+                name,
+                present,
+                absent,
+                absent_first,
+            } => {
+                let eagerness = if *absent_first {
+                    Absent::Eager
+                } else {
+                    Absent::Lazy
+                };
+                self.unpack((value, name, present, absent), eagerness, place, scope)
+            }
+            TermKind::Updates(_) => Err(self.stop(
+                place,
+                "the state used as a value",
+                "a helper that returns `Self` can be given back by an action, or spread into \
+                 its result with `..self.helper(..)`: it is not a value a rule, a condition or \
+                 another helper can read",
+            )),
+            TermKind::Convert { ty, value } => self.convert(*ty, value, place, scope),
+            _ => Err(self.unknown_syntax(place, "an expression")),
+        }
+    }
+
+    fn optional_value(&mut self, value: &Term, scope: &mut Scope) -> Lowering<(Expr, Type)> {
+        let lowered = self.term(value, scope)?;
+        match lowered.ty {
+            Type::Optional(inside) => Ok((lowered.expr, *inside)),
+            other => Err(self.stop(
+                value.place,
+                &format!("{} where an `Option` is needed", other.kind()),
+                "`Some(x)`, `unwrap_or` and `map_or` are read on an `Option`: a field, an \
+                 input or a helper's result that is declared `Option<T>`",
+            )),
+        }
+    }
+
+    fn unpack(
+        &mut self,
+        parts: (&Term, &str, &Term, &Term),
+        eagerness: Absent,
+        place: Place,
+        scope: &mut Scope,
+    ) -> Lowering<Typed> {
+        let (value, name, present, absent) = parts;
+        let (held_value, inside) = self.optional_value(value, scope)?;
+        let held = scope.slot();
+        let eager = if eagerness == Absent::Eager {
+            let given = self.term(absent, scope)?;
+            let slot = scope.slot();
+            Some((slot, given))
+        } else {
+            None
+        };
+        let slot = scope.slot();
+        scope
+            .names
+            .push((name.to_owned(), Binding::Local(slot, inside)));
+        let yes = self.term(present, scope);
+        scope.names.pop();
+        let yes = yes?;
+        let no = match &eager {
+            Some((kept, given)) => Typed::new(Expr::Local(*kept), given.ty.clone()),
+            None => self.term(absent, scope)?,
+        };
+        let (yes_expr, no_expr, ty) = self.join(yes, no, place)?;
+        let looked = Expr::Choose(
+            Box::new(is_null(Expr::Local(held))),
+            Box::new(no_expr),
+            Box::new(Expr::Bind {
+                slot,
+                value: Box::new(apply(Op::Unwrap, vec![Expr::Local(held)])),
+                body: Box::new(yes_expr),
+            }),
+        );
+        let inner = match eager {
+            Some((kept, given)) => Expr::Bind {
+                slot: kept,
+                value: Box::new(given.expr),
+                body: Box::new(looked),
+            },
+            None => looked,
+        };
+        Ok(Typed::new(
+            Expr::Bind {
+                slot: held,
+                value: Box::new(held_value),
+                body: Box::new(inner),
+            },
+            ty,
+        ))
+    }
+
+    pub(super) fn unpack_changes(
+        &mut self,
+        parts: (&Term, &str, &Term, &Term),
+        scope: &mut Scope,
+    ) -> Lowering<Vec<Option<Expr>>> {
+        let (value, name, present, absent) = parts;
+        let (held_value, inside) = self.optional_value(value, scope)?;
+        let held = scope.slot();
+        let slot = scope.slot();
+        scope
+            .names
+            .push((name.to_owned(), Binding::Local(slot, inside)));
+        let yes = self.changes(present, scope);
+        scope.names.pop();
+        let yes = yes?;
+        let no = self.changes(absent, scope)?;
+        Ok(yes
+            .into_iter()
+            .zip(no)
+            .enumerate()
+            .map(|(index, pair)| match pair {
+                (None, None) => None,
+                (yes_expr, no_expr) => {
+                    let present_branch = Expr::Bind {
+                        slot,
+                        value: Box::new(apply(Op::Unwrap, vec![Expr::Local(held)])),
+                        body: Box::new(yes_expr.unwrap_or(Expr::Field(index))),
+                    };
+                    let looked = Expr::Choose(
+                        Box::new(is_null(Expr::Local(held))),
+                        Box::new(no_expr.unwrap_or(Expr::Field(index))),
+                        Box::new(present_branch),
+                    );
+                    Some(Expr::Bind {
+                        slot: held,
+                        value: Box::new(held_value.clone()),
+                        body: Box::new(looked),
+                    })
+                }
+            })
+            .collect())
+    }
+
+    fn convert(
+        &mut self,
+        ty: IntType,
+        value: &Term,
+        place: Place,
+        scope: &mut Scope,
+    ) -> Lowering<Typed> {
+        let lowered = self.term(value, scope)?;
+        let given = Type::Int(Some(ty));
+        match lowered.ty {
+            Type::Bool => Ok(Typed::new(
+                Expr::Choose(
+                    Box::new(lowered.expr),
+                    Box::new(Expr::Const(Value::Int(1))),
+                    Box::new(Expr::Const(Value::Int(0))),
+                ),
+                given,
+            )),
+            Type::Int(Some(from)) if ty.has_from(from) => Ok(Typed::new(lowered.expr, given)),
+            Type::Int(Some(from)) => Err(self.stop(
+                place,
+                &format!("`{}::from` of a `{}`", ty.name(), from.name()),
+                &format!(
+                    "Rust has no `From<{}>` for `{}`, because a `{}` can hold a number a `{}` \
+                     can't: use a type that holds every `{}`, or keep the number in `{}`",
+                    from.name(),
+                    ty.name(),
+                    from.name(),
+                    ty.name(),
+                    from.name(),
+                    from.name(),
+                ),
+            )),
+            Type::Int(None) => Err(self.stop(
+                place,
+                &format!("`{}::from` of a number of no stated type", ty.name()),
+                "Rust can't tell which `From` impl a bare number means: give the number the type \
+                 it has, as in `1_u8`, or convert a field, an input or a helper's result",
+            )),
+            other => Err(self.stop(
+                place,
+                &format!("`{}::from` of {}", ty.name(), other.kind()),
+                "the checker reads `from` of a boolean, which is 0 or 1, and of a number of a \
+                 narrower integer type, as `u16::from(small)` in place of `as`",
+            )),
         }
     }
 
@@ -253,7 +445,8 @@ impl Lowerer<'_> {
             return Err(self.stop(
                 place,
                 &format!("`{name}`"),
-                "the model file does not define this name, so the checker can't know its value",
+                "the model file does not define this name, so the checker can't know its value: declare \
+                 it as a top-level constant, or take it as a parameter",
             ));
         };
         let running = (None, name.to_owned());
@@ -370,71 +563,35 @@ impl Lowerer<'_> {
         place: Place,
         scope: &mut Scope,
     ) -> Lowering<Typed> {
-        let draft = self.draft;
-        let known = draft
-            .helpers
-            .iter()
-            .find(|helper| helper.kind == kind && helper.name == name);
-        let Some(found) = known else {
-            return Err(self.stop(
-                place,
-                &format!("a call to `{name}`"),
-                "it is not a library primitive or a function defined in the model file",
-            ));
-        };
-        let running = (Some(kind), name.to_owned());
-        if self.in_flight.contains(&running) {
-            return Err(self.stop(
-                place,
-                &format!("recursion in `{name}`"),
-                "a helper function can't call itself",
-            ));
-        }
-        if found.parameters.len() != arguments.len() {
-            return Err(self.stop(
-                place,
-                &format!("a call to `{name}`"),
-                "the number of arguments differs from the function's parameters",
-            ));
-        }
-        let mut passed = Vec::with_capacity(arguments.len());
-        for argument in arguments {
-            let whole_state = matches!(&argument.kind, TermKind::Name(owner)
-                if matches!(scope.find(owner), Some(Binding::State)));
-            passed.push(if whole_state {
-                None
-            } else {
-                Some(self.term(argument, scope)?)
-            });
-        }
-        let mut inner = Scope::starting_at(scope.slots);
-        let mut bound = Vec::new();
-        for (parameter, value) in found.parameters.iter().zip(passed) {
-            match value {
-                None => inner.names.push((parameter.clone(), Binding::State)),
-                Some(lowered) => {
-                    let slot = inner.slot();
-                    inner
-                        .names
-                        .push((parameter.clone(), Binding::Local(slot, lowered.ty)));
-                    bound.push((slot, lowered.expr));
-                }
-            }
-        }
-        self.in_flight.push(running);
-        let body = self.term(&found.body, &mut inner);
+        let entered = self.enter_helper(kind, name, arguments, place, scope)?;
+        let mut inner = entered.inner;
+        self.in_flight.push(entered.running);
+        let body = self.term(entered.body, &mut inner);
         self.in_flight.pop();
         scope.slots = inner.slots;
         let lowered = body?;
-        let expr = bound
-            .into_iter()
-            .rev()
-            .fold(lowered.expr, |body_expr, (slot, value)| Expr::Bind {
-                slot,
-                value: Box::new(value),
-                body: Box::new(body_expr),
-            });
+        let expr = bind_all(entered.bound, lowered.expr);
         Ok(Typed::new(expr, lowered.ty))
+    }
+
+    pub(super) fn helper_changes(
+        &mut self,
+        kind: HelperKind,
+        name: &str,
+        arguments: &[Term],
+        place: Place,
+        scope: &mut Scope,
+    ) -> Lowering<Vec<Option<Expr>>> {
+        let entered = self.enter_helper(kind, name, arguments, place, scope)?;
+        let mut inner = entered.inner;
+        self.in_flight.push(entered.running);
+        let updates = self.changes(entered.body, &mut inner);
+        self.in_flight.pop();
+        scope.slots = inner.slots;
+        Ok(updates?
+            .into_iter()
+            .map(|update| update.map(|expr| bind_all(entered.bound.clone(), expr)))
+            .collect())
     }
 
     fn multiple_of(
@@ -540,6 +697,7 @@ impl Lowerer<'_> {
             Binary::Subtract => Op::Math(Math::Subtract),
             Binary::Multiply => Op::Math(Math::Multiply),
             Binary::Remainder => Op::Math(Math::Remainder),
+            Binary::Divide => Op::Math(Math::Divide),
             _ => return Err(self.unknown_syntax(place, "an operator")),
         };
         let first = self.term(left, scope)?;
@@ -630,7 +788,12 @@ impl Lowerer<'_> {
         ))
     }
 
-    fn join(&mut self, left: Typed, right: Typed, place: Place) -> Lowering<(Expr, Expr, Type)> {
+    pub(super) fn join(
+        &mut self,
+        left: Typed,
+        right: Typed,
+        place: Place,
+    ) -> Lowering<(Expr, Expr, Type)> {
         self.mixed(&left.ty, &right.ty, place)?;
         let Some(ty) = left.ty.union(&right.ty) else {
             let feature = format!(
@@ -930,6 +1093,99 @@ impl Lowerer<'_> {
             coerced.push((sym, self.coerce(typed, wanted_type, place)?));
         }
         Ok(Expr::Record(coerced))
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Absent {
+    Eager,
+    Lazy,
+}
+
+struct Entered<'h> {
+    body: &'h Term,
+    inner: Scope,
+    bound: Vec<(usize, Expr)>,
+    running: (Option<HelperKind>, String),
+}
+
+fn bind_all(bound: Vec<(usize, Expr)>, body: Expr) -> Expr {
+    bound
+        .into_iter()
+        .rev()
+        .fold(body, |body_expr, (slot, value)| Expr::Bind {
+            slot,
+            value: Box::new(value),
+            body: Box::new(body_expr),
+        })
+}
+
+impl<'a> Lowerer<'a> {
+    fn enter_helper(
+        &mut self,
+        kind: HelperKind,
+        name: &str,
+        arguments: &[Term],
+        place: Place,
+        scope: &mut Scope,
+    ) -> Lowering<Entered<'a>> {
+        let draft: &'a earnest_ast::Draft = self.draft;
+        let known = draft
+            .helpers
+            .iter()
+            .find(|helper| helper.kind == kind && helper.name == name);
+        let Some(found) = known else {
+            return Err(self.stop(
+                place,
+                &format!("a call to `{name}`"),
+                "it is not a library primitive or a function defined in the model file",
+            ));
+        };
+        let running = (Some(kind), name.to_owned());
+        if self.in_flight.contains(&running) {
+            return Err(self.stop(
+                place,
+                &format!("recursion in `{name}`"),
+                "a helper function can't call itself",
+            ));
+        }
+        if found.parameters.len() != arguments.len() {
+            return Err(self.stop(
+                place,
+                &format!("a call to `{name}`"),
+                "the number of arguments differs from the function's parameters",
+            ));
+        }
+        let mut passed = Vec::with_capacity(arguments.len());
+        for argument in arguments {
+            let whole_state = matches!(&argument.kind, TermKind::Name(owner)
+                if matches!(scope.find(owner), Some(Binding::State)));
+            passed.push(if whole_state {
+                None
+            } else {
+                Some(self.term(argument, scope)?)
+            });
+        }
+        let mut inner = Scope::starting_at(scope.slots);
+        let mut bound = Vec::new();
+        for (parameter, value) in found.parameters.iter().zip(passed) {
+            match value {
+                None => inner.names.push((parameter.clone(), Binding::State)),
+                Some(lowered) => {
+                    let slot = inner.slot();
+                    inner
+                        .names
+                        .push((parameter.clone(), Binding::Local(slot, lowered.ty)));
+                    bound.push((slot, lowered.expr));
+                }
+            }
+        }
+        Ok(Entered {
+            body: &found.body,
+            inner,
+            bound,
+            running,
+        })
     }
 }
 

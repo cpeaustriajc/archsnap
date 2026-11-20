@@ -51,12 +51,14 @@ pub(crate) enum Text {
 pub(crate) struct Discovered {
     pub(crate) found: Vec<Found>,
     pub(crate) skipped: Vec<String>,
+    pub(crate) no_model: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Searched {
     Found(Found),
     Skipped,
+    NoModel,
 }
 
 #[derive(Debug, Default)]
@@ -64,6 +66,7 @@ struct Walked {
     rank: usize,
     found: BTreeMap<PathBuf, (usize, Found)>,
     skipped: BTreeMap<PathBuf, usize>,
+    no_model: BTreeMap<PathBuf, usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -109,6 +112,10 @@ pub(crate) fn is_model_source(language: Language, path: &str, source: &str) -> b
         Language::Rust => earnest_rs::uses_library(text),
     };
     reaches(source) || (source.contains('\0') && reaches(&source.replace('\0', "")))
+}
+
+fn declares_no_model(language: Language, source: &str) -> bool {
+    language == Language::Rust && !earnest_rs::declares_a_model(source)
 }
 
 pub(crate) fn is_model_name(path: &str) -> bool {
@@ -269,6 +276,9 @@ fn model_file(path: &Path, origin: Origin, below: &Path) -> Option<Searched> {
     let found = match String::from_utf8(bytes) {
         Ok(source) => {
             if origin == Origin::Named || is_model_file(language, &shown, &source) {
+                if origin == Origin::Searched && !is_test && declares_no_model(language, &source) {
+                    return Some(Searched::NoModel);
+                }
                 Found::model(&shown, language, &source)
             } else {
                 return None;
@@ -294,6 +304,9 @@ fn keep(walked: &mut Walked, shown: PathBuf, searched: Option<Searched>) {
         }
         Some(Searched::Skipped) => {
             walked.skipped.insert(shown, walked.rank);
+        }
+        Some(Searched::NoModel) => {
+            walked.no_model.insert(shown, walked.rank);
         }
         None => {}
     }
@@ -341,6 +354,34 @@ fn real_path(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+fn left_out(
+    listed: BTreeMap<PathBuf, usize>,
+    already_found: &BTreeMap<PathBuf, (usize, PathBuf, Found)>,
+) -> Vec<String> {
+    let mut once: BTreeMap<PathBuf, (usize, PathBuf)> = BTreeMap::new();
+    for (shown, rank) in listed {
+        let real = real_path(&shown);
+        if already_found.contains_key(&real) {
+            continue;
+        }
+        match once.entry(real) {
+            Entry::Vacant(slot) => {
+                slot.insert((rank, shown));
+            }
+            Entry::Occupied(mut slot) => {
+                if rank < slot.get().0 {
+                    slot.insert((rank, shown));
+                }
+            }
+        }
+    }
+    let shown: BTreeSet<PathBuf> = once.into_values().map(|(_, shown)| shown).collect();
+    shown
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect()
+}
+
 pub(crate) fn discover(roots: &[PathBuf]) -> Result<Discovered, String> {
     let here = [PathBuf::from(HERE)];
     let roots = if roots.is_empty() { &here } else { roots };
@@ -377,34 +418,16 @@ pub(crate) fn discover(roots: &[PathBuf]) -> Result<Discovered, String> {
             }
         }
     }
-    let mut skipped_once: BTreeMap<PathBuf, (usize, PathBuf)> = BTreeMap::new();
-    for (shown, rank) in walked.skipped {
-        let real = real_path(&shown);
-        if once.contains_key(&real) {
-            continue;
-        }
-        match skipped_once.entry(real) {
-            Entry::Vacant(slot) => {
-                slot.insert((rank, shown));
-            }
-            Entry::Occupied(mut slot) => {
-                if rank < slot.get().0 {
-                    slot.insert((rank, shown));
-                }
-            }
-        }
-    }
+    let skipped = left_out(walked.skipped, &once);
+    let no_model = left_out(walked.no_model, &once);
     let found: BTreeMap<PathBuf, Found> = once
         .into_values()
         .map(|(_, shown, found)| (shown, found))
         .collect();
-    let skipped: BTreeSet<PathBuf> = skipped_once.into_values().map(|(_, shown)| shown).collect();
     Ok(Discovered {
         found: found.into_values().collect(),
-        skipped: skipped
-            .iter()
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect(),
+        skipped,
+        no_model,
     })
 }
 
@@ -416,7 +439,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     const TYPESCRIPT: &str = "import { m } from \"@earnest/model\";\n";
-    const RUST: &str = "use earnest::model::Model;\n";
+    const RUST: &str = "use earnest::model::Model;\n#[derive(Model)]\nstruct A;\n";
 
     fn folder_with(files: &[(&str, &str)]) -> tempfile::TempDir {
         let folder = tempfile::tempdir().expect("a temporary folder can be made");
@@ -484,13 +507,34 @@ mod tests {
     #[test]
     fn a_rust_file_uses_the_library_however_the_path_is_spaced_or_grouped() {
         let folder = folder_with(&[
-            ("plain.rs", "use earnest::model::Model;\n"),
-            ("grouped.rs", "use earnest::{model::{Model, model}};\n"),
-            ("spaced.rs", "use earnest :: model :: Model;\n"),
-            ("broken.rs", "use earnest::\n    model::Model;\n"),
-            ("renamed.rs", "use earnest as kit;\n"),
-            ("external.rs", "extern crate earnest;\n"),
-            ("whole.rs", "fn f() -> earnest::model::Timer { todo() }\n"),
+            (
+                "plain.rs",
+                "use earnest::model::Model;\n#[derive(Model)]\nstruct A;\n",
+            ),
+            (
+                "grouped.rs",
+                "use earnest::{model::{Model, model}};\n#[derive(Model)]\nstruct A;\n",
+            ),
+            (
+                "spaced.rs",
+                "use earnest :: model :: Model;\n#[derive(Model)]\nstruct A;\n",
+            ),
+            (
+                "broken.rs",
+                "use earnest::\n    model::Model;\n#[derive(Model)]\nstruct A;\n",
+            ),
+            (
+                "renamed.rs",
+                "use earnest as kit;\n#[derive(Model)]\nstruct A;\n",
+            ),
+            (
+                "external.rs",
+                "extern crate earnest;\n#[derive(Model)]\nstruct A;\n",
+            ),
+            (
+                "whole.rs",
+                "fn f() -> earnest::model::Timer { todo() }\n#[derive(Model)]\nstruct A;\n",
+            ),
             ("other.rs", "use earnest_rs::read;\n"),
             ("word.rs", "pub const MOOD: &str = \"earnest\";\n"),
         ]);
@@ -616,7 +660,7 @@ mod tests {
             places(&unread),
             [
                 ("stray.model.ts", 2, 15, "`byte 0xE9`"),
-                ("stray.rs", 3, 15, "`byte 0xE9`"),
+                ("stray.rs", 5, 15, "`byte 0xE9`"),
             ],
             "each file is kept, with the place of its first byte that is not UTF-8"
         );
@@ -716,11 +760,11 @@ mod tests {
         let folder = folder_with(&[
             (
                 "block.rs",
-                "use earnest::/* the model module */model::{Model};\n",
+                "use earnest::/* the model module */model::{Model};\n#[derive(Model)]\nstruct A;\n",
             ),
             (
                 "line.rs",
-                "use earnest:: // the model module\n    model::Model;\n",
+                "use earnest:: // the model module\n    model::Model;\n#[derive(Model)]\nstruct A;\n",
             ),
             ("quiet.rs", "// use earnest::model::Model;\nfn f() {}\n"),
         ]);

@@ -2,12 +2,14 @@ use crate::arguments::{self, Chart, Confirm, Models, Report, Tla};
 use crate::changes::{Compare, Difference, check_base, rule_changes};
 use crate::confirm::{Checker, Tool, confirm_lines, differences};
 use crate::discovery::{discover, language_of};
-use crate::print::{problem_lines, skipped_line, to_stderr, to_stdout, unreadable_lines};
+use crate::print::{
+    no_model_line, problem_lines, skipped_line, to_stderr, to_stdout, unreadable_lines,
+};
 use crate::reading::{ModelFile, load, read};
 use crate::run::{Bounds, Graphs, Ran, Search, checked, explore_each};
 use crate::select::{Target, held_back, select, select_with_removed};
 use earnest_chart::{
-    RuleChange, RuleChanges, Section, Unreadable, chart_with_limit, report_with_limit,
+    RuleChange, RuleChanges, Section, Unreadable, chart_with_limit, one_line, report_with_limit,
     skipped_section,
 };
 use earnest_check::Status;
@@ -43,6 +45,7 @@ pub(crate) fn limits_of(bounds: &arguments::Bounds) -> Bounds {
 pub(crate) struct Gathered {
     pub(crate) files: Vec<ModelFile>,
     pub(crate) skipped: Vec<String>,
+    pub(crate) no_model: Vec<String>,
 }
 
 pub(crate) fn gather(models: &Models) -> Result<Gathered, String> {
@@ -50,6 +53,7 @@ pub(crate) fn gather(models: &Models) -> Result<Gathered, String> {
     Ok(Gathered {
         files: discovered.found.into_iter().map(load).collect(),
         skipped: discovered.skipped,
+        no_model: discovered.no_model,
     })
 }
 
@@ -85,7 +89,7 @@ pub(crate) fn refusing(
     rule: Option<&str>,
     error: String,
 ) -> String {
-    say_what_was_skipped(skipped);
+    say_what_was_skipped(skipped, &[]);
     if model.is_none() && rule.is_none() {
         return error;
     }
@@ -114,8 +118,11 @@ pub(crate) fn refusing(
     )
 }
 
-fn say_what_was_skipped(skipped: &[String]) {
-    if let Some(line) = skipped_line(skipped.len()) {
+fn say_what_was_skipped(skipped: &[String], no_model: &[String]) {
+    for line in skipped_line(skipped.len())
+        .into_iter()
+        .chain(no_model_line(no_model.len()))
+    {
         to_stderr(&line);
     }
 }
@@ -145,7 +152,11 @@ fn searched<'a>(targets: &[Target<'a>], rule: Option<&'a str>) -> Vec<Search<'a>
 }
 
 pub(crate) fn chart_command(arguments: &Chart) -> Result<Exit, String> {
-    let Gathered { files, skipped } = gather(&arguments.selection.models)?;
+    let Gathered {
+        files,
+        skipped,
+        no_model,
+    } = gather(&arguments.selection.models)?;
     let rule = arguments.selection.rule.as_deref();
     let model = arguments.selection.models.model.as_deref();
     let targets =
@@ -162,8 +173,22 @@ pub(crate) fn chart_command(arguments: &Chart) -> Result<Exit, String> {
         .map(|graph| chart_with_limit(graph, arguments.arrows.max_arrows.get()))
         .collect();
     to_stdout(&charts.join("\n\n"));
-    say_what_was_skipped(&skipped);
+    say_what_was_skipped(&skipped, &no_model);
     Ok(warn_of_unreadable(&files))
+}
+
+fn no_model_section(no_model: &[String]) -> String {
+    let (noun, verb) = if no_model.len() == 1 {
+        ("file that uses the library and declares", "was")
+    } else {
+        ("files that use the library and declare", "were")
+    };
+    let lines: Vec<String> = no_model.iter().map(|path| one_line(path)).collect();
+    format!(
+        "## Files that declare no model\n\n{} {noun} no model {verb} not read:\n\n```\n{}\n```",
+        no_model.len(),
+        lines.join("\n")
+    )
 }
 
 fn every_model_passed(ran: &[Ran]) -> bool {
@@ -175,7 +200,11 @@ pub(crate) fn report_command(arguments: &Report) -> Result<Exit, String> {
     if let Some(base) = &arguments.base {
         check_base(base)?;
     }
-    let Gathered { files, skipped } = gather(&arguments.selection.models)?;
+    let Gathered {
+        files,
+        skipped,
+        no_model,
+    } = gather(&arguments.selection.models)?;
     let rule = arguments.selection.rule.as_deref();
     let model = arguments.selection.models.model.as_deref();
     let selected = select_with_removed(&files, model, rule, arguments.base.as_deref())
@@ -234,7 +263,8 @@ pub(crate) fn report_command(arguments: &Report) -> Result<Exit, String> {
         since.as_ref(),
         arguments.arrows.max_arrows.get(),
     );
-    if let Some(section) = skipped_section(&skipped) {
+    let left_out = (!no_model.is_empty()).then(|| no_model_section(&no_model));
+    for section in skipped_section(&skipped).into_iter().chain(left_out) {
         if !written.is_empty() {
             written.push_str("\n\n");
         }
@@ -278,7 +308,11 @@ fn write_file(path: &Path, text: &str) -> Result<(), String> {
 }
 
 pub(crate) fn tla_command(arguments: &Tla) -> Result<Exit, String> {
-    let Gathered { files, skipped } = gather(&arguments.models)?;
+    let Gathered {
+        files,
+        skipped,
+        no_model,
+    } = gather(&arguments.models)?;
     let model = arguments.models.model.as_deref();
     let targets =
         select(&files, model, None).map_err(|error| refusing(&skipped, model, None, error))?;
@@ -317,7 +351,7 @@ pub(crate) fn tla_command(arguments: &Tla) -> Result<Exit, String> {
         }
     }
     to_stdout(&written.join("\n"));
-    say_what_was_skipped(&skipped);
+    say_what_was_skipped(&skipped, &no_model);
     Ok(warn_of_unreadable(&files))
 }
 
@@ -338,7 +372,11 @@ pub(crate) fn confirm_command(arguments: &Confirm) -> Result<Exit, String> {
             .map(|path| program_path(path, what).map(|found| (tool, found)))
     })
     .collect::<Result<_, _>>()?;
-    let Gathered { files, skipped } = gather(&arguments.models)?;
+    let Gathered {
+        files,
+        skipped,
+        no_model,
+    } = gather(&arguments.models)?;
     let model = arguments.models.model.as_deref();
     let targets =
         select(&files, model, None).map_err(|error| refusing(&skipped, model, None, error))?;
@@ -383,7 +421,7 @@ pub(crate) fn confirm_command(arguments: &Confirm) -> Result<Exit, String> {
             to_stdout(&confirm_lines(&ours, &found, &beyond, *tool).join("\n"));
         }
     }
-    say_what_was_skipped(&skipped);
+    say_what_was_skipped(&skipped, &no_model);
     let unreadable = warn_of_unreadable(&files);
     Ok(if everything_agrees {
         unreadable

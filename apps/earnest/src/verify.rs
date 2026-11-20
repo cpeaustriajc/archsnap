@@ -149,7 +149,11 @@ pub(crate) fn verify(arguments: &Verify) -> Result<Exit, String> {
     if let Some(base) = &arguments.base {
         check_base(base)?;
     }
-    let Gathered { files, skipped } = gather(&arguments.selection.models)?;
+    let Gathered {
+        files,
+        skipped,
+        no_model,
+    } = gather(&arguments.selection.models)?;
     let model = arguments.selection.models.model.as_deref();
     let rule = arguments.selection.rule.as_deref();
     let selected = select_with_removed(&files, model, rule, arguments.base.as_deref())
@@ -187,6 +191,7 @@ pub(crate) fn verify(arguments: &Verify) -> Result<Exit, String> {
     let verified = Verified {
         files: &files,
         skipped: &skipped,
+        no_model: &no_model,
         checked: &checked,
         since: compared.as_ref().map(|(base, compared)| Since {
             base,

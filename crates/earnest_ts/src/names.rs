@@ -23,18 +23,24 @@ pub(crate) fn snake(name: &str) -> String {
 pub(crate) fn why_outside(root: &str, property: Option<&str>) -> &'static str {
     match (root, property) {
         ("fetch" | "XMLHttpRequest" | "WebSocket" | "navigator", _) => {
-            "the network is outside the library"
+            "the network is outside the library: model the call with `m.request()` and its answer as an action input"
         }
-        ("Date" | "performance", _) => "the system clock is outside the library",
-        ("Math", Some("random")) | ("crypto", _) => "a random value is outside the library",
+        ("Date" | "performance", _) => {
+            "the system clock is outside the library: model time with `m.timer()`, or as a number an action steps up"
+        }
+        ("Math", Some("random")) | ("crypto", _) => {
+            "a random value is outside the library: model each possible value as an action input with `m.oneOf([...])` or `m.enum([...])`"
+        }
         ("Math", _) => {
-            "`Math` is outside the library; write the sum with `+`, `-`, `*` and `m.rem(a, b)`"
+            "`Math` is outside the library; write the sum with `+`, `-`, `*`, `m.rem(a, b)` and `m.div(a, b)`"
         }
-        ("console", _) => "printing is outside the library",
+        ("console", _) => "printing is outside the library: leave it out of the model",
         ("setTimeout" | "setInterval", _) => {
             "a real timer is outside the library; declare one with `m.timer()`"
         }
-        _ => "it is not a library primitive or a function defined in the model file",
+        _ => {
+            "it is not a library primitive or a function defined in the model file: write it as an arrow function in a top-level `const` of this file, or use a primitive from \"The primitives\" in the README"
+        }
     }
 }
 
@@ -53,17 +59,17 @@ mod tests {
     fn a_known_global_gets_its_own_sentence() {
         assert_eq!(
             why_outside("Date", Some("now")),
-            "the system clock is outside the library",
+            "the system clock is outside the library: model time with `m.timer()`, or as a number an action steps up",
             "the clock"
         );
         assert_eq!(
             why_outside("fetch", None),
-            "the network is outside the library",
+            "the network is outside the library: model the call with `m.request()` and its answer as an action input",
             "the network"
         );
         assert_eq!(
             why_outside("Math", Some("random")),
-            "a random value is outside the library",
+            "a random value is outside the library: model each possible value as an action input with `m.oneOf([...])` or `m.enum([...])`",
             "a random number"
         );
     }

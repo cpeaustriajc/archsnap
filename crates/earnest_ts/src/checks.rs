@@ -403,6 +403,48 @@ fn m_rem_is_the_remainder_operation() {
     );
 }
 
+#[test]
+fn the_division_operator_is_refused_and_the_library_call_is_read() {
+    for holds in [
+        "(s) => s.n / 2 === 0",
+        "(s) => { const r = s.n / 2; return r === 0; }",
+    ] {
+        let found = problems(&rule(holds));
+        assert_eq!(found.len(), 1, "`{holds}`: {found:?}");
+        assert_eq!(found[0].feature, "`/`", "the operator");
+        assert!(
+            found[0].message.contains("m.div(a, b)"),
+            "the sentence names the function: {}",
+            found[0].message
+        );
+    }
+    let assigned = problems(&rule("(s) => { s.n /= 2; return true; }"));
+    assert!(
+        assigned
+            .iter()
+            .any(|problem| problem.message.contains("m.div(a, b)")),
+        "`/=` is refused with the function named: {assigned:?}"
+    );
+    assert_eq!(
+        problems(&rule("(s) => m.div(s.n, 2) === 0")),
+        [],
+        "the call is read"
+    );
+    let one = problems(&rule("(s) => m.div(s.n) === 0"));
+    assert_eq!(one.len(), 1, "one argument is refused: {one:?}");
+}
+
+#[test]
+fn m_div_is_the_division_operation() {
+    let reading = read("m.model.ts", &rule("(s) => m.div(s.n, 2) === 0"));
+    let holds = &reading.drafts[0].rules[0].holds;
+    assert_eq!(
+        crate::show::show(holds),
+        "(=== (/ s.n 2) 0)",
+        "the operation the call stands for"
+    );
+}
+
 fn refused_once(source: &str, feature: &str) {
     let found = problems(source);
     assert_eq!(found.len(), 1, "one problem in `{source}`: {found:?}");

@@ -1,6 +1,7 @@
 use crate::reader::{
     OUTSIDE, Reader, Sign, at, name_of, path_text, start_of, unwrapped, why_outside,
 };
+use crate::typing::{inside_option, plain};
 use earnest_ast::{Binary, HelperKind, Reach, Shape, ShapeKind, Term, TermKind, Unary};
 use earnest_value::IntType;
 use proc_macro2::Span;
@@ -64,12 +65,45 @@ const PRIMITIVES: [&str; 50] = [
     "is_some",
 ];
 
+const AS_IS: &str = "$value";
+
+fn unknown_method(name: &str) -> &'static str {
+    match name {
+        "unwrap" | "expect" => {
+            "`unwrap` and `expect` panic on `None`, and earnest has no panics: a walk of the \
+             model in a test would stop there instead of reporting it. Read the value with \
+             `if let Some(x) = value { .. } else { .. }`, `value.unwrap_or(default)` or \
+             `value.map_or(default, |x| ..)`, and in an action write `let x = value?;` where \
+             `None` means the action can't happen"
+        }
+        "unwrap_or_default" | "unwrap_or_else" | "or" | "or_else" => {
+            "write `value.unwrap_or(default)` with the default written out: the checker reads \
+             no function that gives a value, only a test"
+        }
+        "map" | "and_then" | "filter" | "ok_or" | "map_or_else" | "take" | "replace" | "zip"
+        | "flatten" => {
+            "write `value.map_or(default, |x| ..)` or `if let Some(x) = value { .. } else { .. }`"
+        }
+        "as_ref" | "as_mut" | "as_deref" | "copied" | "cloned" | "iter" | "borrow" => {
+            "the checker reads `&x` and `x.clone()` as `x` and has no references of its own: \
+             leave this call out and use the value as it is"
+        }
+        _ => {
+            "it is not one of the library's primitives, so the checker can't know what it does: \
+             \"The primitives\" in the README lists what a value can do, and for the value \
+             inside an `Option` write `if let Some(x) = value { .. } else { .. }` or \
+             `value.map_or(default, |x| ..)`"
+        }
+    }
+}
+
 const OPTION_TESTS: [&str; 2] = ["is_none", "is_some_and"];
 const LIBRARY_CALLS: [&str; 3] = ["forall", "exists", "Some"];
 
 const LOOP: &str = "a loop is outside the library: use `every`, `some`, `forall` or `exists`";
-const CHANGE: &str =
-    "nothing changes in place: every operation gives back a new value, and an action a new state";
+const CHANGE: &str = "nothing changes in place: every operation gives back a new value, and an \
+    action a new state: write `let next = value + 1;`, or put the new value in the action's \
+    `Self { field: value, ..self.clone() }`";
 const WAIT: &str = "waiting is outside the library: model it with a `Request` or a `Timer`";
 const PRINTING: [&str; 7] = [
     "println", "print", "eprintln", "eprint", "dbg", "write", "writeln",
@@ -114,6 +148,7 @@ fn operator(op: &BinOp) -> Option<Binary> {
         BinOp::Sub(_) => Binary::Subtract,
         BinOp::Mul(_) => Binary::Multiply,
         BinOp::Rem(_) => Binary::Remainder,
+        BinOp::Div(_) => Binary::Divide,
         _ => return None,
     })
 }
@@ -161,6 +196,7 @@ impl Reader<'_> {
                 self.term(&reference.expr)
             }
             Expr::If(branch) => self.choice(branch),
+            Expr::Match(found) => self.matching(found),
             Expr::Block(inner) if inner.label.is_none() => self.value_of(&inner.block),
             Expr::Struct(literal) => self.record(literal),
             Expr::Closure(closure) => self.lambda(closure),
@@ -175,7 +211,7 @@ impl Reader<'_> {
             Lit::Int(number) => {
                 let Some(value) = Self::literal_number(literal, sign) else {
                     let feature = self.short_text(span);
-                    return self.nothing(span, &feature, "the number is too large for the checker");
+                    return self.nothing(span, &feature, "the number is too large for the checker, which holds a number in 64 bits: use a smaller number, or a constant computed from smaller ones");
                 };
                 let plain = at(span, TermKind::Int(value));
                 if number.suffix().is_empty() {
@@ -183,7 +219,7 @@ impl Reader<'_> {
                 }
                 let Some(ty) = IntType::named(number.suffix()) else {
                     let feature = self.short_text(span);
-                    return self.nothing(span, &feature, "a model holds whole numbers only");
+                    return self.nothing(span, &feature, "a model holds whole numbers only: write the number with an integer suffix such as `1_u8`, or count in whole units (cents, not 1.5 dollars)");
                 };
                 let shape = Shape {
                     place: plain.place,
@@ -207,7 +243,7 @@ impl Reader<'_> {
                 self.nothing(
                     span,
                     &feature,
-                    "a model holds booleans, whole numbers, texts and enum variants",
+                    "a model holds booleans, whole numbers, texts and enum variants: write a `&'static str` for a text, an enum for a choice, and a whole number for anything counted",
                 )
             }
         }
@@ -223,14 +259,15 @@ impl Reader<'_> {
                 at(span, TermKind::Name((*single).to_owned()))
             }
             [owner, variant] if self.enums.contains_key(*owner) => {
-                let known = self
-                    .enums
-                    .get(*owner)
-                    .is_some_and(|variants| variants.iter().any(|known| known == variant));
-                if known {
+                let variants = self.enums.get(*owner).cloned().unwrap_or_default();
+                if variants.iter().any(|known| known == variant) {
                     at(span, TermKind::Variant((*variant).to_owned()))
                 } else {
-                    self.nothing(span, &text, "the enum has no variant with this name")
+                    let message = format!(
+                        "`{owner}` has no variant with this name: its variants are {}",
+                        variants.join(", ")
+                    );
+                    self.nothing(span, &text, &message)
                 }
             }
             _ => self.nothing(span, &text, why_outside(&text)),
@@ -264,6 +301,9 @@ impl Reader<'_> {
         if is_state(&call.receiver) {
             return self.own_method(call, &name);
         }
+        if let Some(read) = self.option_method(call, &name) {
+            return read;
+        }
         let target = self.term(&call.receiver);
         let arguments: Vec<Term> = call
             .args
@@ -277,12 +317,7 @@ impl Reader<'_> {
                 || OPTION_TESTS.contains(&name.as_str()))
         {
             let feature = format!(".{name}()");
-            return self.nothing(
-                call.method.span(),
-                &feature,
-                "it is not one of the library's primitives, so the checker can't know what it \
-                 does",
-            );
+            return self.nothing(call.method.span(), &feature, unknown_method(&name));
         }
         at(
             span,
@@ -292,6 +327,67 @@ impl Reader<'_> {
                 arguments,
             },
         )
+    }
+
+    fn option_method(&mut self, call: &ExprMethodCall, name: &str) -> Option<Term> {
+        let span = start_of(&call.receiver);
+        match (name, call.args.len()) {
+            ("unwrap_or", 1) => {
+                self.refuse_borrowed_option(&call.receiver);
+                let value = self.term(&call.receiver);
+                let default = self.term(&call.args[0]);
+                Some(at(
+                    span,
+                    TermKind::Unpack {
+                        value: Box::new(value),
+                        name: AS_IS.to_owned(),
+                        present: Box::new(at(span, TermKind::Name(AS_IS.to_owned()))),
+                        absent: Box::new(default),
+                        absent_first: true,
+                    },
+                ))
+            }
+            ("map_or", 2) => {
+                self.refuse_borrowed_option(&call.receiver);
+                let value = self.term(&call.receiver);
+                let default = self.term(&call.args[0]);
+                let Expr::Closure(closure) = unwrapped(&call.args[1]) else {
+                    return Some(self.nothing(
+                        call.args[1].span(),
+                        &self.short_text(call.args[1].span()),
+                        "pass `map_or` a function of one value written in place, as \
+                         `value.map_or(0, |x| x + 1)`",
+                    ));
+                };
+                let inputs: Vec<&Pat> = closure.inputs.iter().collect();
+                let [input] = inputs.as_slice() else {
+                    return Some(self.nothing(
+                        closure.or1_token.span,
+                        "map_or",
+                        "the function of `map_or` takes the one value inside: `|x| ..`",
+                    ));
+                };
+                let (parameter, annotated) = self.parameter(input);
+                let inside = annotated.cloned().or_else(|| {
+                    let found = self.static_type(&call.receiver)?;
+                    inside_option(&found).cloned()
+                });
+                self.bound.push(plain(parameter.clone(), inside));
+                let body = self.term(&closure.body);
+                self.bound.pop();
+                Some(at(
+                    span,
+                    TermKind::Unpack {
+                        value: Box::new(value),
+                        name: parameter,
+                        present: Box::new(body),
+                        absent: Box::new(default),
+                        absent_first: true,
+                    },
+                ))
+            }
+            _ => None,
+        }
     }
 
     fn own_method(&mut self, call: &ExprMethodCall, name: &str) -> Term {
@@ -326,7 +422,7 @@ impl Reader<'_> {
         let parts: Vec<&str> = text.split("::").collect();
         let arguments: Vec<&Expr> = call.args.iter().collect();
         if let [name] = parts.as_slice()
-            && self.bound.iter().any(|local| local == name)
+            && self.bound.iter().any(|local| local.name == *name)
             && (self.functions.contains(*name) || LIBRARY_CALLS.contains(name))
         {
             return self.nothing(
@@ -340,6 +436,19 @@ impl Reader<'_> {
             (["Some"], [inner]) => {
                 let wrapped = self.term(inner);
                 at(span, TermKind::Wrap(Box::new(wrapped)))
+            }
+            ([int, "from"], [value])
+                if function.qself.is_none() && IntType::named(int).is_some() =>
+            {
+                let ty = IntType::named(int).unwrap_or(IntType::I32);
+                let converted = self.term(value);
+                at(
+                    span,
+                    TermKind::Convert {
+                        ty,
+                        value: Box::new(converted),
+                    },
+                )
             }
             (["Set", "of"], _) => {
                 let items = self.listed(call, &text);
@@ -418,18 +527,26 @@ impl Reader<'_> {
             Pat::Wild(_) => ("_".to_owned(), ty),
             other => {
                 let feature = self.short_text(other.span());
-                self.refuse(other.span(), &feature, "a parameter is one plain name");
+                self.refuse(
+                    other.span(),
+                    &feature,
+                    "a parameter is one plain name: take the value whole and read its fields with `.field`",
+                );
                 ("_".to_owned(), ty)
             }
         }
     }
 
     fn lambda(&mut self, closure: &ExprClosure) -> Term {
-        let parameters: Vec<String> = closure
+        let typed: Vec<(String, Option<Type>)> = closure
             .inputs
             .iter()
-            .map(|input| self.parameter(input).0)
+            .map(|input| {
+                let (name, ty) = self.parameter(input);
+                (name, ty.cloned())
+            })
             .collect();
+        let parameters: Vec<String> = typed.iter().map(|(name, _)| name.clone()).collect();
         let spans: Vec<(String, Span)> = parameters
             .iter()
             .cloned()
@@ -437,7 +554,8 @@ impl Reader<'_> {
             .collect();
         self.refuse_repeats(&spans, "parameter", "E0415");
         let kept = self.bound.len();
-        self.bound.extend(parameters.iter().cloned());
+        self.bound
+            .extend(typed.into_iter().map(|(name, ty)| plain(name, ty)));
         let body = self.term(&closure.body);
         self.bound.truncate(kept);
         at(
@@ -485,7 +603,7 @@ impl Reader<'_> {
             );
         };
         let shape = self.shape(ty, &[]);
-        self.bound.push(parameter.clone());
+        self.bound.push(plain(parameter.clone(), Some(ty.clone())));
         let body = self.term(&closure.body);
         self.bound.pop();
         at(
@@ -514,7 +632,10 @@ impl Reader<'_> {
                 return self.nothing(
                     unary.span(),
                     "*",
-                    "the library's values are read as they are, never through a pointer",
+                    "a `*` reads through a reference, and the checker has no references: it reads \
+                     `&x` as `x`. Take the parameter by value (`last: Option<u8>`, which clippy \
+                     asks for on a `Copy` type), or compare two references, `last == \
+                     &Some(1)`, and write the value itself everywhere else",
                 );
             }
         };
@@ -541,6 +662,9 @@ impl Reader<'_> {
     }
 
     fn choice(&mut self, branch: &ExprIf) -> Term {
+        if let Expr::Let(binding) = unwrapped(&branch.cond) {
+            return self.unpack(branch, binding);
+        }
         let test = self.term(&branch.cond);
         let yes = self.value_of(&branch.then_branch);
         let no = match &branch.else_branch {
@@ -548,7 +672,7 @@ impl Reader<'_> {
             None => self.nothing(
                 branch.if_token.span,
                 "if",
-                "an `if` used as a value needs an `else`",
+                "an `if` used as a value needs an `else`: write `if condition { a } else { b }`",
             ),
         };
         at(
@@ -560,11 +684,12 @@ impl Reader<'_> {
     fn record(&mut self, literal: &ExprStruct) -> Term {
         let span = literal.path.span();
         let name = path_text(&literal.path);
-        if name != "Self" && !self.records.contains_key(&name) {
+        if name != "Self" && !self.models.contains(&name) && !self.records.contains_key(&name) {
             return self.nothing(
                 literal.path.span(),
                 &name,
-                "it is not `Self` or a struct in this file that derives `Domain`",
+                "it is not `Self`, the model, or a struct in this file that derives `Domain`: \
+                 derive `Domain` on the struct, or build the state as `Self { .. }`",
             );
         }
         let mut fields = Vec::with_capacity(literal.fields.len());
@@ -628,24 +753,24 @@ impl Reader<'_> {
             }
             Expr::Assign(assignment) => (assignment.eq_token.span, "=", CHANGE),
             Expr::Reference(reference) => (reference.and_token.span, "&mut", CHANGE),
-            Expr::Match(choice) => (
-                choice.match_token.span,
-                "match",
-                "`match` is outside the library: compare with `==` in an `if`",
-            ),
             Expr::Let(binding) => (
                 binding.let_token.span,
-                "if let",
-                "`if let` is outside the library: test with `is_some()` or `is_some_and(f)`",
+                "let",
+                "a `let` condition is read only as `if let Some(x) = value { .. } else { .. }`, \
+                 with nothing joined to it by `&&`",
             ),
             Expr::Await(waited) => (waited.await_token.span, "await", WAIT),
             Expr::Async(block) => (block.async_token.span, "async", WAIT),
             Expr::Try(tried) => (
                 tried.question_token.span,
                 "?",
-                "an action that can't happen is written with `require!`, not with an error",
+                "`?` is read only on an `Option` in an action that returns `Option<Self>`, as `let x = value?;`, which makes the action not happen where `value` is `None`: otherwise write `require!(condition);` at the top of the action",
             ),
-            Expr::Cast(cast) => (cast.as_token.span, "as", "a cast is outside the library"),
+            Expr::Cast(cast) => (
+                cast.as_token.span,
+                "as",
+                "a cast is outside the library: widen a number with `u16::from(small)`, make a number of a boolean with `u8::from(flag)`, and keep a number in the wider type where it would narrow",
+            ),
             Expr::Return(returned) => (
                 returned.return_token.span,
                 "return",
@@ -657,6 +782,9 @@ impl Reader<'_> {
                 "[]",
                 "read an item of a sequence with `get(index)`",
             ),
+            Expr::Macro(called) if called.mac.path.is_ident("matches") => {
+                return self.matches_macro(&called.mac);
+            }
             Expr::Macro(called) => return self.refuse_macro(&called.mac),
             other => {
                 let feature = self.short_text(other.span());

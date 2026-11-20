@@ -54,6 +54,9 @@ pub enum Binary {
     Multiply,
     /// `%` on numbers. A negative left side or a right side below 1 is a fault.
     Remainder,
+    /// `/` on whole numbers in Rust, `m.div(a, b)` in TypeScript: the quotient without a
+    /// fraction. A negative left side or a right side below 1 is a fault.
+    Divide,
 }
 
 /// How many values of a declaration must pass the test of a [`TermKind::Across`].
@@ -186,6 +189,37 @@ pub enum TermKind {
     },
     /// A template string. It is allowed only as a view's state or group label.
     Template(Vec<TemplatePiece>),
+    /// Rust's `if let Some(name) = value { present } else { absent }`, and the same as
+    /// `value.map_or(absent, |name| present)` and `value.unwrap_or(absent)`: `present` with
+    /// `name` bound to the value inside when `value` is present, `absent` when it is `null`.
+    Unpack {
+        /// The optional value.
+        value: Box<Term>,
+        /// The name `present` reads the value inside by.
+        name: String,
+        /// What it is when the value is present.
+        present: Box<Term>,
+        /// What it is when the value is `null`.
+        absent: Box<Term>,
+        /// Whether `absent` is evaluated before the value is looked at, as Rust evaluates the
+        /// first argument of `map_or` and of `unwrap_or` whichever way the value goes.
+        absent_first: bool,
+    },
+    /// Every start value listed in `#[initial(a, b)]`, in order. It is only the `initial` of a
+    /// state field's [`Shape`], and each state is a start state for each value.
+    Choices(Vec<Term>),
+    /// A value of the model's own type, written as a record of the fields that change: the
+    /// body of a Rust helper that returns `Self`. An action can give it back or spread it into
+    /// its own result; anywhere else it is refused, because the state is not a value.
+    Updates(Box<Term>),
+    /// `u8::from(value)` in Rust: a boolean as 0 or 1, or a number of a narrower type as the
+    /// number itself, in the integer type `ty`.
+    Convert {
+        /// The integer type the conversion gives.
+        ty: IntType,
+        /// The boolean or the number converted.
+        value: Box<Term>,
+    },
     /// A value where the file writes its type: in Rust a `let` with a type, a constant, a
     /// parameter or the result of a helper, and a number with a suffix such as `1u8`.
     ///
@@ -254,6 +288,9 @@ pub struct Shape {
 pub enum ShapeKind {
     /// `m.boolean()` or `bool`.
     Bool,
+    /// A Rust `&'static str` where the file writes only its type: a helper's parameter or
+    /// result, a `let` or a constant. It lists no values, so it is never a field or an input.
+    Text,
     /// `m.int(lo, hi)` or `#[range(lo, hi)]`: the whole numbers from `lo` to `hi`, both
     /// included.
     Int {

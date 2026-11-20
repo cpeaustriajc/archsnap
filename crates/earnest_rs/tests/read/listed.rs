@@ -176,7 +176,7 @@ fn a_list_that_is_wrong_is_refused_at_the_list() {
         (
             "    #[one_of(\"a\")]\n    flag: bool,\n",
             "#[one_of(\"a\")]",
-            "goes on a whole number",
+            "lists the values of a whole number",
         ),
         (
             "    #[one_of(1)]\n    #[range(0, 3)]\n    count: u8,\n",

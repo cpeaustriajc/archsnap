@@ -1,5 +1,5 @@
 use crate::Reader;
-use crate::terms::bare;
+use crate::terms::{CLASS, bare};
 use earnest_ast::{Term, TermKind};
 use oxc_ast::ast::{
     ArrowFunctionBody, ArrowFunctionExpression, BindingPattern, Expression, IfStatement,
@@ -74,7 +74,7 @@ impl Reader<'_> {
                 self.refuse(
                     default.span().start,
                     "=",
-                    "a parameter with a default value is outside the library",
+                    "a parameter with a default value is outside the library: write the value at each call",
                 );
             }
             match &parameter.pattern {
@@ -93,7 +93,7 @@ impl Reader<'_> {
             self.refuse(
                 rest.span.start,
                 "...",
-                "a rest parameter is outside the library",
+                "a rest parameter is outside the library: take each value as a parameter of its own",
             );
         }
         names
@@ -364,7 +364,7 @@ impl Reader<'_> {
                 "function",
                 "write the function as an arrow function in a top-level `const`",
             ),
-            Statement::ClassDeclaration(_) => ("class", "a class is outside the library"),
+            Statement::ClassDeclaration(_) => ("class", CLASS),
             Statement::TSEnumDeclaration(_) => ("enum", "declare the choices with `m.enum([...])`"),
             Statement::VariableDeclaration(variables) => (variables.kind.as_str(), otherwise),
             Statement::ExpressionStatement(alone) => {

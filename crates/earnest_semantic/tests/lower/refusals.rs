@@ -63,8 +63,8 @@ fn a_name_the_file_does_not_define_is_refused() {
     );
     assert_eq!(
         problem.message,
-        "the model file does not define this name, so the checker can't know its value",
-        "the sentence says what is wrong with the name"
+        "the model file does not define this name, so the checker can't know its value: declare it as a top-level constant, or take it as a parameter",
+        "the sentence says what is wrong with the name and what to write"
     );
 }
 

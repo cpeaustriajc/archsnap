@@ -8,14 +8,16 @@
 mod bodies;
 mod items;
 mod library;
+mod matching;
 mod reader;
 mod shapes;
 mod terms;
+mod typing;
 mod views;
 
 use earnest_ast::Reading;
 
-pub use library::uses_library;
+pub use library::{declares_a_model, uses_library};
 
 /// Reads every model in the Rust source text `source`.
 ///
@@ -34,6 +36,17 @@ pub use library::uses_library;
 /// model of its type: its `title`, `step` labels and `colors`, and the labels of its `#[state]`
 /// and `#[group]` methods, read from a `format!` or a `.to_string()` or `.to_owned()`. A number
 /// or a `&'static str` marked `#[one_of(a, b)]` is a choice of the listed values.
+///
+/// The value inside an `Option` is read with `if let Some(x) = value { .. } else { .. }`,
+/// `value.unwrap_or(default)`, `value.map_or(default, |x| ..)`, `let x = value?;` and `let Some(x)
+/// = value else { return None; };` in an action, where `None` means the action does not happen.
+/// A value read this way is moved out of its place, so the checker reads it only where Rust
+/// does: a `Copy` field, a parameter, or an owned result. `match` is read on an enum that
+/// derives `Domain`, or on a pair of two, with each variant named, `|` between variants and `_`
+/// for the rest, and is refused when it leaves a variant out. A helper may return `Self`, which
+/// an action gives back or spreads, `&'static str`, a record or an enum; `u8::from(flag)` and
+/// the `From` conversions between integer types are read. A `#[view]` block may call the helpers
+/// of the `#[model]` block. `#[initial(a, b)]` lists several start values.
 ///
 /// Every draft has the language `Rust`. A number's shape carries its integer type, and a
 /// value whose type the file writes out is a `Declared` term: a constant, a `let` with a

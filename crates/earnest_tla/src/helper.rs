@@ -4,6 +4,7 @@ use crate::names::Names;
 pub(crate) enum Helper {
     Fault,
     Remainder,
+    Division,
     EmptyMap,
     MapSet,
     MapDelete,
@@ -21,9 +22,10 @@ pub(crate) enum Helper {
     SeqItems,
 }
 
-pub(crate) const EVERY_HELPER: [Helper; 17] = [
+pub(crate) const EVERY_HELPER: [Helper; 18] = [
     Helper::Fault,
     Helper::Remainder,
+    Helper::Division,
     Helper::EmptyMap,
     Helper::MapSet,
     Helper::MapDelete,
@@ -42,12 +44,14 @@ pub(crate) const EVERY_HELPER: [Helper; 17] = [
 ];
 
 pub(crate) const REMAINDER_FAULT: &str = "a remainder with a negative number or a divisor below 1";
+pub(crate) const DIVISION_FAULT: &str = "a division with a negative number or a divisor below 1";
 
 impl Helper {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Fault => "Fault",
             Self::Remainder => "Remainder",
+            Self::Division => "Division",
             Self::EmptyMap => "EmptyMap",
             Self::MapSet => "MapSet",
             Self::MapDelete => "MapDelete",
@@ -68,7 +72,7 @@ impl Helper {
 
     pub(crate) fn needs(self) -> Option<Self> {
         match self {
-            Self::Remainder => Some(Self::Fault),
+            Self::Remainder | Self::Division => Some(Self::Fault),
             _ => None,
         }
     }
@@ -87,6 +91,14 @@ impl Helper {
                 format!(
                     "{name}({left}, {right}) == IF ({left} >= 0) /\\ ({right} >= 1) \
                      THEN {left} % {right} ELSE Fault(\"{REMAINDER_FAULT}\")"
+                )
+            }
+            Self::Division => {
+                let left = names.claim("left");
+                let right = names.claim("right");
+                format!(
+                    "{name}({left}, {right}) == IF ({left} >= 0) /\\ ({right} >= 1) \
+                     THEN {left} \\div {right} ELSE Fault(\"{DIVISION_FAULT}\")"
                 )
             }
             Self::EmptyMap => {

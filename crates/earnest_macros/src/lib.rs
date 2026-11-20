@@ -40,7 +40,8 @@ pub fn derive_domain(input: TokenStream) -> TokenStream {
 /// Implements `earnest::model::Model`, so `Type::starts()` lists every start state.
 ///
 /// Put it on the struct that holds the model's state. A field with `#[initial(value)]` starts
-/// at that value. An integer field needs `#[range(lo, hi)]` (both bounds included) and
+/// at that value, and one with `#[initial(a, b)]` starts at each value listed, in that order,
+/// which is how to start an enum or a record at some of its values only. An integer field needs `#[range(lo, hi)]` (both bounds included) and
 /// without `#[initial]` starts at every number in the range. Any other field without
 /// `#[initial]` starts where its type says: at every value for a `bool`, an `Option` and a
 /// type that derives `Domain`, and empty, free, idle or at zero for the library's collections

@@ -1,15 +1,15 @@
+use crate::typing::Local;
 use earnest_ast::{MOST_NESTING, TOO_DEEP, Term, TermKind};
 use earnest_diagnostics::{Place, Problem};
 use proc_macro2::{Ident, Span};
 use std::collections::{BTreeMap, BTreeSet};
 use syn::ext::IdentExt;
 use syn::spanned::Spanned;
-use syn::{Attribute, Expr, ExprLit, FieldsNamed, Lit, Path, UnOp};
+use syn::{Attribute, Expr, ExprLit, FieldsNamed, Lit, Path, Type, UnOp};
 
 const LONGEST_FEATURE: usize = 48;
 
-pub(crate) const OUTSIDE: &str =
-    "it is not part of the library or defined in this file, so the checker can't know what it does";
+pub(crate) const OUTSIDE: &str = "the checker reads only the library and what this file defines, so it can't know what this does: define it in this file as a constant or a helper function, or use a primitive from \"The primitives\" in the README";
 
 pub(crate) struct Reader<'a> {
     pub(crate) file: &'a str,
@@ -22,7 +22,12 @@ pub(crate) struct Reader<'a> {
     pub(crate) functions: BTreeSet<String>,
     pub(crate) methods: BTreeSet<String>,
     pub(crate) open_records: Vec<String>,
-    pub(crate) bound: Vec<String>,
+    pub(crate) bound: Vec<Local>,
+    pub(crate) structs: BTreeMap<String, Vec<(String, Type)>>,
+    pub(crate) copies: BTreeSet<String>,
+    pub(crate) fn_types: BTreeMap<String, Type>,
+    pub(crate) method_types: BTreeMap<String, Type>,
+    pub(crate) model_name: Option<String>,
     pub(crate) returns_self: Option<bool>,
     pub(crate) depth: usize,
 }
@@ -86,9 +91,9 @@ pub(crate) fn path_text(path: &Path) -> String {
 pub(crate) fn why_outside(path: &str) -> &'static str {
     let starts = |prefixes: &[&str]| prefixes.iter().any(|prefix| path.starts_with(prefix));
     if starts(&["std::time", "Instant", "SystemTime", "chrono"]) {
-        "the system clock is outside the library"
+        "the system clock is outside the library: model time with a `Timer`, or as a number that actions step up"
     } else if starts(&["rand", "fastrand", "getrandom"]) {
-        "random values are outside the library"
+        "random values are outside the library: model each possible value as an action input, with `#[one_of(..)]` or an enum that derives `Domain`, so every one is tried"
     } else if starts(&[
         "std::fs",
         "std::io",
@@ -97,7 +102,7 @@ pub(crate) fn why_outside(path: &str) -> &'static str {
         "std::process",
         "tokio",
     ]) {
-        "input and output are outside the library"
+        "input and output are outside the library: model the answer as an action input, or the call as a `Request`"
     } else {
         OUTSIDE
     }
@@ -126,6 +131,11 @@ impl<'a> Reader<'a> {
             methods: BTreeSet::new(),
             open_records: Vec::new(),
             bound: Vec::new(),
+            structs: BTreeMap::new(),
+            copies: BTreeSet::new(),
+            fn_types: BTreeMap::new(),
+            method_types: BTreeMap::new(),
+            model_name: None,
             returns_self: None,
             depth: 0,
         }

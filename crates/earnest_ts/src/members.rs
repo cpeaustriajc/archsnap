@@ -198,7 +198,7 @@ impl Reader<'_> {
             self.refuse(
                 rest.span.start,
                 "...",
-                "a rest parameter is outside the library",
+                "a rest parameter is outside the library: take each value as a parameter of its own",
             );
         }
         found

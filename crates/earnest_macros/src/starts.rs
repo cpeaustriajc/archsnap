@@ -3,8 +3,9 @@ use crate::choices::{
 };
 use proc_macro2::TokenStream;
 use quote::quote;
+use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{Data, DeriveInput, Expr, Field, Fields};
+use syn::{Data, DeriveInput, Expr, Field, Fields, Token};
 
 pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
     let item: DeriveInput = syn::parse2(input)?;
@@ -64,8 +65,16 @@ fn start_choices(field: &Field) -> syn::Result<TokenStream> {
         .iter()
         .find(|attribute| attribute.path().is_ident("initial"));
     if let Some(attribute) = initial {
-        let value: Expr = attribute.parse_args()?;
-        return Ok(quote! { ::std::vec::Vec::<#ty>::from([#value]) });
+        let values = attribute.parse_args_with(Punctuated::<Expr, Token![,]>::parse_terminated)?;
+        if values.is_empty() {
+            return Err(syn::Error::new(
+                attribute.span(),
+                "write the starting value, `#[initial(value)]`, or each value the field starts \
+                 at, `#[initial(A, B)]`",
+            ));
+        }
+        let listed = values.iter();
+        return Ok(quote! { ::std::vec::Vec::<#ty>::from([#(#listed),*]) });
     }
     Ok(range.unwrap_or_else(|| quote! { <#ty as ::earnest::model::Start>::starts() }))
 }
@@ -171,6 +180,30 @@ mod tests {
             let text = piece.to_string();
             assert!(expanded.contains(&text), "{text} in {expanded}");
         }
+    }
+
+    #[test]
+    fn several_initial_values_are_several_start_choices() {
+        let expanded = expand(quote! {
+            struct Lamp {
+                #[initial(Mode::Dim, Mode::Bright)]
+                mode: Mode,
+            }
+        })
+        .expect("a model struct")
+        .to_string();
+        let wanted = quote! {
+            for earnest_choice_mode in ::std::vec::Vec::<Mode>::from([Mode::Dim, Mode::Bright])
+        }
+        .to_string();
+        assert!(expanded.contains(&wanted), "{wanted} in {expanded}");
+        let empty = refusal(quote! {
+            struct Lamp {
+                #[initial()]
+                mode: Mode,
+            }
+        });
+        assert!(empty.contains("#[initial(A, B)]"), "{empty}");
     }
 
     #[test]

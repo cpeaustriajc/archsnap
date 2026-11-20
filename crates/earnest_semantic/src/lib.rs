@@ -194,6 +194,13 @@ impl Lowerer<'_> {
     fn field(&mut self, draft: &FieldDraft) -> Lowering<(Field, Type)> {
         let shaped = self.shape(&draft.shape)?;
         let starts = match (&draft.shape.initial, shaped.start) {
+            (
+                Some(Term {
+                    kind: TermKind::Choices(listed),
+                    ..
+                }),
+                _,
+            ) => self.listed_starts(listed, &shaped.ty, &shaped.domain)?,
             (Some(term), _) => vec![self.constant(term, &shaped.ty, &shaped.domain)?],
             (None, Some(value)) => vec![value],
             (None, None) => self.all_values(&shaped.domain, draft.shape.place)?,
@@ -205,6 +212,28 @@ impl Lowerer<'_> {
             starts,
         };
         Ok((field, shaped.ty))
+    }
+
+    fn listed_starts(
+        &mut self,
+        listed: &[Term],
+        ty: &Type,
+        domain: &Domain,
+    ) -> Lowering<Vec<Value>> {
+        let mut starts: Vec<Value> = Vec::with_capacity(listed.len());
+        for term in listed {
+            let value = self.constant(term, ty, domain)?;
+            if starts.contains(&value) {
+                let shown = self.symbols.show(&value);
+                return Err(self.stop(
+                    term.place,
+                    &format!("the starting value {shown} listed twice"),
+                    "list each starting value once",
+                ));
+            }
+            starts.push(value);
+        }
+        Ok(starts)
     }
 
     fn constant(&mut self, term: &Term, ty: &Type, domain: &Domain) -> Lowering<Value> {
@@ -307,8 +336,31 @@ impl Lowerer<'_> {
         if let TermKind::Record { base, fields } = &term.kind {
             return self.changed_fields(base.as_deref(), fields, scope);
         }
-        if let TermKind::Wrap(inner) = &term.kind {
+        if let TermKind::Wrap(inner) | TermKind::Updates(inner) = &term.kind {
             return self.changes(inner, scope);
+        }
+        if let TermKind::Name(owner) = &term.kind
+            && matches!(scope.find(owner), Some(Binding::State))
+        {
+            return Ok(vec![None; self.fields.len()]);
+        }
+        if let TermKind::Unpack {
+            value,
+            name,
+            present,
+            absent,
+            absent_first: false,
+        } = &term.kind
+        {
+            return self.unpack_changes((value, name, present, absent), scope);
+        }
+        if let TermKind::Helper {
+            kind,
+            name,
+            arguments,
+        } = &term.kind
+        {
+            return self.helper_changes(*kind, name, arguments, term.place, scope);
         }
         if let TermKind::Bind { name, value, body } = &term.kind {
             let bound = self.bound(name, value, scope)?;
@@ -360,18 +412,27 @@ impl Lowerer<'_> {
         fields: &[(String, Term)],
         scope: &mut Scope,
     ) -> Lowering<Vec<Option<Expr>>> {
+        let mut updates = vec![None; self.fields.len()];
         if let Some(spread) = base {
-            let whole_state = matches!(&spread.kind, TermKind::Name(owner)
-                if matches!(scope.find(owner), Some(Binding::State)));
-            if !whole_state {
-                return Err(self.stop(
-                    spread.place,
-                    "a spread in an action result",
-                    "an action gives back only the fields it changes; the rest stay as they were",
-                ));
+            match &spread.kind {
+                TermKind::Name(owner) if matches!(scope.find(owner), Some(Binding::State)) => {}
+                TermKind::Helper {
+                    kind,
+                    name,
+                    arguments,
+                } => {
+                    updates = self.helper_changes(*kind, name, arguments, spread.place, scope)?;
+                }
+                _ => {
+                    return Err(self.stop(
+                        spread.place,
+                        "a spread in an action result",
+                        "an action gives back only the fields it changes; spread the state, \
+                         `..self.clone()`, or a helper that returns `Self`, `..self.helper(..)`",
+                    ));
+                }
             }
         }
-        let mut updates = vec![None; self.fields.len()];
         for (name, value) in fields {
             let found = self
                 .fields
@@ -389,7 +450,14 @@ impl Lowerer<'_> {
             let lowered = self.term(value, scope)?;
             let coerced = self.coerce(lowered, &wanted, value.place)?;
             if let Some(update) = updates.get_mut(index) {
-                *update = Some(coerced);
+                *update = Some(match update.take() {
+                    Some(dropped) => Expr::Bind {
+                        slot: scope.slot(),
+                        value: Box::new(dropped),
+                        body: Box::new(coerced),
+                    },
+                    None => coerced,
+                });
             }
         }
         Ok(updates)
@@ -494,6 +562,7 @@ impl Lowerer<'_> {
     fn shape(&mut self, shape: &Shape) -> Lowering<Shaped> {
         match &shape.kind {
             ShapeKind::Bool => Ok(plain(Domain::Bool, Type::Bool)),
+            ShapeKind::Text => Ok(plain(Domain::OneOf(Vec::new()), Type::Text)),
             ShapeKind::Int { lo, hi, ty } => {
                 if lo > hi {
                     return Err(self.stop(

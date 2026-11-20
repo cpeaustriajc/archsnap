@@ -268,6 +268,22 @@ fn a_remainder_by_zero_or_by_a_negative_number_is_a_fault() {
 }
 
 #[test]
+fn a_division_of_numbers_that_are_not_negative_drops_the_fraction() {
+    assert_eq!(math(Math::Divide, 7, 2), Ok(Value::Int(3)));
+    assert_eq!(math(Math::Divide, 6, 3), Ok(Value::Int(2)));
+    assert_eq!(math(Math::Divide, 0, 3), Ok(Value::Int(0)));
+    assert_eq!(math(Math::Divide, 2, 5), Ok(Value::Int(0)));
+}
+
+#[test]
+fn a_division_of_a_negative_number_or_by_a_divisor_below_one_is_a_fault() {
+    assert_eq!(math(Math::Divide, -7, 3), Err(Fault::Division));
+    assert_eq!(math(Math::Divide, 7, 0), Err(Fault::Division));
+    assert_eq!(math(Math::Divide, 7, -3), Err(Fault::Division));
+    assert_eq!(math(Math::Divide, i64::MIN, -1), Err(Fault::Division));
+}
+
+#[test]
 fn and_is_true_only_when_both_sides_are() {
     let and = |left: Expr, right: Expr| value_of(&Expr::And(Box::new(left), Box::new(right)));
     assert_eq!(and(yes(), yes()), YES);
@@ -716,6 +732,10 @@ fn each_fault_finishes_a_sentence_about_what_was_evaluated() {
     assert_eq!(
         Fault::Remainder.describe(),
         "takes a remainder with a negative number or a divisor below 1"
+    );
+    assert_eq!(
+        Fault::Division.describe(),
+        "takes a division with a negative number or a divisor below 1"
     );
     assert_eq!(
         Fault::WrongKind.describe(),

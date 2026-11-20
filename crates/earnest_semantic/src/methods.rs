@@ -179,7 +179,8 @@ impl Lowerer<'_> {
         self.stop(
             call.place,
             &format!("`{}` on {}", call.name, ty.kind()),
-            "it is not one of the library's primitives, so the checker can't know what it does",
+            "it is not one of the primitives of this kind of value, so the checker can't know \
+             what it does: \"The primitives\" in the README lists what each kind of value can do",
         )
     }
 

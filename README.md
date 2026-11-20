@@ -43,6 +43,18 @@ library a TypeScript model imports; it ships compiled JavaScript and declaration
 Node and type-checks under strict `tsc` from `node_modules`. See `npm/cli/README.md` and
 `npm/model/README.md`. A Rust model needs no npm package: it uses the `earnest` crate.
 
+To install the checker from source, with no npm and no registry:
+
+```sh
+cargo install --git https://github.com/cpeaustriajc/earnest earnest-cli
+cargo install --path apps/earnest      # from a clone of this repository
+```
+
+Either puts the program `earnest` in `~/.cargo/bin`. The checker never resolves the
+`@earnest/model` import on disk: it reads the file's text and never looks for the package, so
+`earnest verify` works with no `node_modules` at all. The import matters only to the editor, the
+type checker and Node, which need the package to find `m` and its types.
+
 ## Commands
 
 ```sh
@@ -84,8 +96,11 @@ broken rule are the same for every `--jobs` and on every run.
 
 ### Which files are models
 
-A file is a model file when any of these holds, and a model file is read or refused as
-unreadable, never left out:
+The simple answer: a TypeScript file named `*.model.ts` (or `.model.mts`, `.model.tsx`), or any
+`.ts`, `.mts` or `.tsx` file that imports `@earnest/model`, is a model file, and so is a Rust file
+that derives `Model`. The rest of this section is the exceptions and the edge cases. A file is a
+model file when any of these holds, and a model file is read or refused as unreadable, never
+left out:
 
 - it is named on the command line, whatever it is called and whatever it imports;
 - in TypeScript, its name ends in `.model.ts`, `.model.mts` or `.model.tsx`, whatever it imports;
@@ -100,6 +115,24 @@ starts with `earnest` counts however it is spaced, grouped or broken by a commen
 earnest::model::Model`, `use earnest::/* c */model::Model`, `use earnest as kit` and `extern
 crate earnest`. A raw identifier is the same name as its plain spelling everywhere in Rust, so
 `use r#earnest::model::Model` names the crate. A word in a comment or a text is not a use.
+
+A Rust file found by walking a folder that names the `earnest` crate but declares no model, such
+as a test helper that walks `Model::starts()` and `steps()`, is not a model file. It is left out,
+and the run says so: a line `skipped  1 file that uses the library and declares no model` in
+the text output of `earnest verify` (on stderr for the other commands), a section `Files that
+declare no model` that lists the paths in `earnest report`, and the paths in the `noModel` list
+of the JSON. The file is judged by its tokens, so nothing hides a model from the test: a
+`derive` of `Model` or `Domain`, an attribute `#[model]`, `#[view]`, `#[action]`, `#[rule]`,
+`#[end]`, `#[state]`, `#[group]`, `#[initial]`, `#[range]` or `#[one_of]`, a call of `require!`
+and an `impl` of one of the library's traits count wherever they stand, inside a `mod`, a
+function or a macro, behind `cfg` or `cfg_attr`, with a path or a raw identifier, and a file that
+can't be parsed or is nested too deep to be is read and refused, never left out. A file named on
+the command line is read or refused whatever it declares. TypeScript has no such rule: a file
+that imports `@earnest/model` is a model file even when it only calls `explore`, because telling
+that no model is made through an alias, a namespace import or a destructured `m` takes the
+binding analysis that the checker applies only to refuse those files, and a model missed there
+would be dropped without a word. Name such a script's folder `tests`, or call it `*.test.ts`, to
+have it skipped as a test file.
 
 A file named on the command line is always read or refused, whatever it is called: a name that
 is only an extension (`.ts`, `.mts`, `.tsx`, `.rs`) is a file of that language, and a file of
@@ -304,7 +337,8 @@ unreadable  src/clock.model.ts
 ```
 
 `skipped` lists, in path order, the test files that use the library and were not read (see
-"Which files are models"); it is `[]` when there are none. `status` is `pass`, `fail` or
+"Which files are models"); it is `[]` when there are none. `noModel` lists, in path order, the
+Rust files that use the library and declare no model and were left out, and is `[]` too. `status` is `pass`, `fail` or
 `unfinished`. `verdict` is `holds`, `broken` or `unknown` (the rule
 was not seen broken, but the model was unfinished or the rule faulted in a state). `kind` is `stuck`, `out-of-range` or `fault`.
 In JSON a set and a sequence are arrays, a map is an array of `[key, value]` pairs and a record is
@@ -484,8 +518,9 @@ export type State = m.Infer<typeof AddToCartFocus>;
   erases the export from the JavaScript as `export type { low }` does. Write `export type {
   Name }` for a type.
 - `end` marks states where stopping is correct. Any other state with no action is stuck.
-- `view` is optional. `step` maps an action id to its arrow label; the default is the action's
-  sentence. `colors` accepts `broken`, `start` and `end`, each with `#` and 3, 4, 6 or 8
+- `view` is optional. Without one, a state's label in the chart is every field, as `n = 0, q = 0,
+  by = 1`, and a view's `state` label is how to shorten it. `step` maps an action id to its arrow
+  label; the default is the action's sentence. `colors` accepts `broken`, `start` and `end`, each with `#` and 3, 4, 6 or 8
   hexadecimal digits or a color name of letters; any other part, or any other color, makes the
   file unreadable, because the chart would leave it out without a word. A `step` entry whose id is not an
   action of the model makes the file unreadable for the same reason.
@@ -503,7 +538,7 @@ export type State = m.Infer<typeof AddToCartFocus>;
   own name.
 - `type` and `interface` declarations.
 - In a function: literals, `null`, field and input reads, `===`, `!==`, `<`, `<=`, `>`, `>=`,
-  `&&`, `||`, `!`, `+`, `-` (also as a sign: `-1`), `*`, `m.rem(a, b)`, the `? :` choice, the `!` after a
+  `&&`, `||`, `!`, `+`, `-` (also as a sign: `-1`), `*`, `m.rem(a, b)`, `m.div(a, b)`, the `? :` choice, the `!` after a
   `m.some(value)`, the value inside an optional (`m.some(s.chosen).qty`), object literals with spread, calls to the
   primitives below and to helper functions, `as const`, and template strings in `view` labels. A function
   body is one expression, or a block of `const` declarations and `if (...) return ...;`
@@ -545,7 +580,11 @@ listed twice in `m.enum` or `m.oneOf` (the library throws on it too), and any na
 not define, also in a constant that nothing reads. The operator `%` and `%=` are refused: write `m.rem(a, b)`, which is
 the remainder, and a fault for a negative `a` or a `b` below 1, because languages disagree on
 the result. The library's `m.rem` throws the same fault in Node, so `explore` and `replay` report
-it as `earnest verify` does. Rust's `%` keeps its meaning, a fault on a negative number. A type assertion hides a `null` from the type checker as `!` does
+it as `earnest verify` does. The operator `/` and `/=` are refused too: JavaScript's `/` gives a
+fraction, where Rust's drops it, so write `m.div(a, b)`, the whole number of times `b` goes into
+`a`, which is a fault for a negative `a` or a `b` below 1 in the same words as `m.rem`, and which
+`explore` and `replay` report as `earnest verify` does. Rust's `%` and `/` keep their meaning, a
+fault on a negative number and, for `/`, a divisor of zero, where Rust panics. A type assertion hides a `null` from the type checker as `!` does
 and changes nothing in JavaScript, so `as`, `satisfies` and `<Type>value` are refused in a term
 except `as const`: `(s.o as number) < 3` is `null < 3` in the start state, and write
 `m.some(s.o) < 3` instead. A postfix `!` after a value is
@@ -653,7 +692,11 @@ impl Turnstile {
   `Self` can't, and `rustc` refuses each of them (E0308, E0277), so the file is unreadable.
   The same holds the other way: an action that returns `Option<Self>` gives back
   `Some(Self { .. })` on every path, and a bare `Self { .. }`, a `Some(Some(..))` or a value
-  that is not wrapped is refused (E0308). Each `require!(condition);` is part of its `when`.
+  that is not wrapped is refused (E0308). Each `require!(condition);` is part of its `when`:
+  it is read among the statements of the body and of an early `if` block, and it is refused
+  inside a `match` arm or any other expression. An early `if condition { return Some(Self { .. });
+  }` gives that result when `condition` is true and the rest of the body does not run, so a
+  `require!` after it applies only where `condition` is false.
   The last expression is `Some(Self { changed fields, ..self.clone() })`. Before it, `let`
   bindings and `if condition { return Some(Self { .. }); }` are allowed.
 - A rule or an end is a method that returns `bool`. Ids are the method names. An enum value is
@@ -696,7 +739,10 @@ impl Turnstile {
   }
   ```
 
-  Every part is optional, and a model has one view. `title` is the chart's title. `step(action =
+  Every part is optional, and a model has one view. Without a view, a state's label is every
+  field, `n = 0, q = 0`, and `#[state]` is how to shorten it. A label may call the helpers of
+  the `#[model]` block, as `self.name()`: the block is a second `impl` of the same type. `title`
+  is the chart's title. `step(action =
   "label")` gives an action's arrow its label, where the default is the action's sentence, as
   `step` does in TypeScript; an action that the model does not have makes the file unreadable.
   `colors(part = "color")` colors `broken`, `start` or `end` with `#` and 3, 4, 6 or 8
@@ -763,6 +809,11 @@ impl Turnstile {
   number written out (E0689) and on an `Option`, so the file is unreadable, and `n % d == 0` is
   what to write where `n` can't be negative.
 
+A Rust model and its TypeScript twin print different ids, because an id follows each
+language's names: the method `no_edit_after_approval` is the rule `no_edit_after_approval`, and
+the constant `noEditAfterApproval` is the rule `noEditAfterApproval`. A twin keeps every field,
+action and rule the same apart from that spelling; `--rule` takes the id as the file spells it.
+
 A raw identifier is the same name as its plain spelling everywhere in Rust: `fn r#fn` is the
 rule `fn`, `fn r#loop` the action `loop` and the field `r#type` the field `type`, in the
 output, in `--rule`, in the JSON and in the TLA+ names. Rust refuses two items of one name in a
@@ -799,6 +850,196 @@ the checker agrees with Rust or refuses the file. It never reads the file as som
   `m.map(K, V.optional())` is read and `get` gives `null` for a missing key and for a key that
   maps to `null`.
 
+### Reading the value inside an `Option`
+
+TypeScript writes `m.some(value)`. Rust reads these forms, and each does on `None` what Rust
+does:
+
+```rust
+fn bonus(&self) -> u8 {
+    if let Some(x) = self.last { x * 2 } else { 1 }
+}
+
+fn weight(&self) -> u8 {
+    self.last.map_or(0, |x| x * 2)
+}
+
+fn count(&self) -> u8 {
+    self.last.unwrap_or(7)
+}
+
+#[action("the last number is added to the total")]
+fn add(&self) -> Option<Self> {
+    let x = self.last?;
+    require!(self.total + x <= 9);
+    Some(Self { total: self.total + x, last: None, ..self.clone() })
+}
+```
+
+- `if let Some(x) = value { a } else { b }` is `a` with `x` the value inside when `value` is
+  present and `b` when it is `None`. The `else` is required, and the pattern is `Some(name)`:
+  `Some(_)` (write `is_some()`), `mut`, `ref`, a pattern inside the `Some`, and a condition
+  joined to the `let` with `&&` are refused.
+- `value.map_or(default, |x| ..)` and `value.unwrap_or(default)` give `default` for `None`. The
+  default is evaluated first, as Rust evaluates an argument, so one that can't be computed
+  (`self.n - 1` at 0) is a fault whichever way the value goes.
+- `let x = value?;` in an action that returns `Option<Self>` makes the action not happen where
+  `value` is `None`, as a `require!(value.is_some())` does, and binds the value inside for the
+  rest of the body. `let Some(x) = value else { return None; };` is the same, and clippy's
+  `question_mark` asks for the first in its place under this repository's lints. Any other
+  `else`, and `?` in a rule, an end, a helper or an action that returns `Self`, is refused.
+- `value == Some(x)` and `value != Some(x)` compare as before.
+
+The value is moved out of its place when it is read this way, so the checker reads it only
+where Rust does: a field of the state or of a record that is `Copy` (an integer, a `bool`, an
+enum that derives `Copy`, an `Option` of those), a parameter taken by value, or an owned result
+such as `self.items.first()` or `self.line.clone()`. A reference (`&self.last`, a `&Option<u8>`
+parameter), `.as_ref()`, and a field that is not `Copy` (Rust says E0507) are refused with the
+fix. `unwrap()` and `expect("..")` are refused although Rust reads them, because they panic on
+`None`: a walk of the model in a test with `steps()` would stop there instead of reporting a
+state, so earnest has no panics there; write one of the forms above.
+
+### `match`
+
+```rust
+fn width(&self) -> u8 {
+    match self.stage {
+        Stage::Cold => 1,
+        Stage::Warm | Stage::Hot => 2,
+        _ => 3,
+    }
+}
+
+fn speed(&self) -> u8 {
+    match (self.stage, self.mode) {
+        (Stage::Cold, _) => 0,
+        (Stage::Warm | Stage::Hot, Mode::Fast) => 2,
+        (_, Mode::Fast) => 1,
+        (_, Mode::Slow) => 3,
+    }
+}
+
+#[action("the stage moves on")]
+fn advance(&self) -> Self {
+    match self.stage {
+        Stage::Cold => Self { stage: Stage::Warm, ..self.clone() },
+        Stage::Warm | Stage::Hot => Self { stage: Stage::Done, ..self.clone() },
+        Stage::Done => self.clone(),
+    }
+}
+```
+
+`match` is read in a rule, an end, a helper, a view label, a `let` and as the last expression of
+an action, on a value of an enum that derives `Domain` (a field, an input, a helper's parameter
+or result, or a `let` with its type stated) or on a pair `(a, b)` of two. An arm is `Enum::A`,
+`Enum::A | Enum::B`, `_`, or in a pair `(Enum::A | Enum::B, _)`; the first arm that matches
+wins, as in Rust. `matches!(value, Enum::A | Enum::B)` is read the same way. The arms must cover
+every variant or end in `_`, and a `match` that leaves one out is refused with the missing
+variant, as `rustc` refuses it (E0004). A guard (`if`), a name that binds the value, a pattern
+inside a pattern, a reference pattern, an arm of another enum (E0308), a `match` on a number, an
+`Option` or three values, and a `require!` inside an arm are refused with a sentence. Clippy
+asks for `A | B` where two arms are the same (`match_same_arms`), for the variant in place of
+a `_` that stands for one (`match_wildcard_for_single_variants`) and for `(A | B, _)` in place
+of `(A, _) | (B, _)` (`unnested_or_patterns`).
+
+### Helpers
+
+```rust
+fn with_stage(&self, stage: Stage) -> Self {
+    Self { stage, ..self.clone() }
+}
+
+fn name(&self) -> &'static str {
+    if self.flagged { "flagged" } else { "plain" }
+}
+
+fn grown(tag: &Tag) -> Tag {
+    Tag { size: tag.size + 1, ..tag.clone() }
+}
+
+fn weight(&self) -> u8 {
+    u8::from(self.flagged) + u8::from(self.tag.kind == Kind::Large)
+}
+
+#[action("the tag grows and the count goes up")]
+fn grow(&self) -> Option<Self> {
+    require!(self.tag.size < 3 && self.count < 3);
+    Some(Self { tag: grown(&self.tag), ..self.with_count(self.count + 1) })
+}
+```
+
+- A helper that returns `Self` (or the model's own name) is built with struct update. An action
+  gives it back, `Some(self.with_stage(..))`, or spreads it into its own result,
+  `..self.with_count(..)`, where the fields the action writes win, as in Rust. It is not a value:
+  a rule, a condition or another helper can't read it, and the sentence says so.
+- A helper may return a `&'static str`, a `Domain` record built with struct update, an enum, a
+  number, a `bool` or an `Option`. A text is compared with `==` and printed by `{}` in a label.
+- `u8::from(flag)` is 0 or 1, and `u16::from(small)` is the number itself, for every pair of
+  integer types for which Rust has `From` (a `u8` to any wider type, a `u16` to a `u32`, a
+  `usize`, an `i32` and wider, an `i8` to any wider signed type, and so on); a conversion Rust
+  does not have, and a bare number whose type is unknown, are refused with the reason. Clippy's
+  `bool_to_int_with_if` and `cast_lossless` ask for these in place of `if flag { 1 } else { 0 }`
+  and `as`, which the checker does not read.
+- A `#[view]` block may call the helpers of the `#[model]` block, as `self.name()`, because both
+  are `impl` blocks of one type. It can't call an action, a rule or an end.
+
+### Starting at some values
+
+`#[initial(value)]` starts a field at one value. `#[initial(A, B)]` starts it at each value
+listed, in order, one start state for each, so an enum or a record starts at some of its values
+only; list each value once. A field of an enum already starts at every variant, and `#[one_of]`
+lists the values of a number or a `&'static str`, never of an enum.
+
+```rust
+#[initial(Stage::Cold, Stage::Warm)]
+stage: Stage,
+```
+
+### What a model costs
+
+An action's inputs are tried in every combination in every state, so the work of a run is the
+number of states times the number of input combinations of all the actions, and each
+combination evaluates the guard and, where it holds, the update. An action with `n: u8` from 0
+to 9 and `mode: Mode` of three variants is tried 30 times in each state; with 10,000 states that
+is 300,000 tries, and three such actions are 900,000. A billion combinations in one action end
+as `unfinished` at the limit, never a kill, but they never finish. To keep the space small:
+
+- Give a number the few values that matter: `#[one_of(0, 1, 5)]` in place of `#[range(0, 9)]`.
+- Split an action with several inputs into actions with one each, when the inputs are not
+  read together.
+- Bound every counter with a range as narrow as the rules need, and give a field that can start
+  anywhere an `#[initial]`: an unbounded `Seq`, a wide `Set` or a `Map` of a wide key is the
+  states of its whole domain.
+- Pass the inputs of one thing as one `Domain` record only when they belong together: the
+  tries are still the product of its fields.
+- Stop early while writing the model with `--max-states` and `--time-limit`.
+
+### Lints
+
+The reader accepts the forms that clippy's pedantic lints ask for, so a model file passes
+`cargo clippy -D warnings`. Where this repository's own lint table (`max-fn-params-bools = 0`
+and the lints it turns on) asks for something else than a project's default, the model follows
+it:
+
+- A `bool` input is refused by `fn_params_excessive_bools` here, so take a two-variant enum
+  (`enum Toggle { On, Off }`) or a field of a `Domain` record. A record with more than three
+  `bool` fields draws `struct_excessive_bools`: use an enum.
+- A method with many inputs draws `too_many_arguments`: pass them as one `#[derive(Domain)]`
+  record, `fn order(&self, line: Line)`, whose fields have their own `#[range]` or `#[one_of]`.
+- An action that nothing can stop returns `Self` (`unnecessary_wraps`); one with `require!`
+  returns `Option<Self>`.
+- `if flag { 1 } else { 0 }` becomes `u8::from(flag)` and `x as u16` becomes `u16::from(x)`.
+- `let Some(x) = value else { return None; };` becomes `let x = value?;` (`question_mark`).
+- A `match` writes `A | B` for arms with the same body and names the variant a `_` would stand
+  for alone.
+- `n % d == 0` on an unsigned number becomes `n.is_multiple_of(d)`.
+- A parameter that is a record is taken by reference (`needless_pass_by_value`), and a small
+  `Copy` type by value (`trivially_copy_pass_by_ref`); an `&Option<T>` parameter draws
+  `ref_option`, so pass the `Option`.
+- `x >= 1 && x <= 3` draws `manual_range_contains`, and the checker reads no `contains`: where
+  a `#[range]` already bounds one side, write the other side only.
+- `unwrap()` draws `unwrap_used` here and is refused by the checker as well.
+
 ## The primitives
 
 Each primitive has the same meaning in TypeScript, in Rust and in the TLA+ export. TypeScript
@@ -809,9 +1050,9 @@ operation gives back a new value and changes nothing in place.
 | Group | Declared with | Operations |
 |---|---|---|
 | Boolean | `m.boolean()` / `bool` | `&&`, `\|\|`, `!`, `===` |
-| Number | `m.int(lo, hi)` / an integer type with `#[range(lo, hi)]` or `#[one_of(...)]` | `+`, `-`, `*`, `m.rem(a, b)` / `%`, `is_multiple_of(d)`, `<`, `<=`, `>`, `>=`, `===` |
-| Enum | `m.enum([...])`, `m.oneOf([...])` / `enum`, `#[one_of(...)]` | `===`, `!==` |
-| Optional | `.optional()` / `Option<T>` | `=== null`, `!== null` / `is_some()`, `is_none()`, `is_some_and(f)`, `== Some(x)` |
+| Number | `m.int(lo, hi)` / an integer type with `#[range(lo, hi)]` or `#[one_of(...)]` | `+`, `-`, `*`, `m.rem(a, b)` / `%`, `m.div(a, b)` / `/`, `is_multiple_of(d)`, `u8::from(flag)` and `u16::from(small)` (Rust), `<`, `<=`, `>`, `>=`, `===` |
+| Enum | `m.enum([...])`, `m.oneOf([...])` / `enum`, `#[one_of(...)]` | `===`, `!==` / `==`, `!=`, `match`, `matches!` |
+| Optional | `.optional()` / `Option<T>` | `=== null`, `!== null`, `m.some(x)` / `is_some()`, `is_none()`, `is_some_and(f)`, `== Some(x)`, `if let Some(x)`, `map_or(d, f)`, `unwrap_or(d)`, `let x = v?;` in an action |
 | Record | `m.record({...})` / `struct` | field read, `{ ...r, field: v }` / `R { field: v, ..r.clone() }` |
 | Set | `m.set(T)` / `Set<T>` | `has(x)`, `add(x)`, `delete(x)`, `union(s)`, `intersect(s)`, `subtract(s)`, `isSubset(s)`, `size`, `isEmpty`, `every(f)`, `some(f)`, `filter(f)` |
 | Map | `m.map(K, V)` / `Map<K, V>` | `has(k)`, `get(k)` (optional), `set(k, v)`, `delete(k)`, `size`, `isEmpty`, `keys` |

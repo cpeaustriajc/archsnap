@@ -791,6 +791,14 @@ export class RemainderFault extends Error {
   }
 }
 
+/** Thrown by `div` for a division the contract makes a fault; `explore` and `replay` report it. */
+export class DivisionFault extends Error {
+  constructor() {
+    super("takes a division with a negative number or a divisor below 1");
+    this.name = "DivisionFault";
+  }
+}
+
 /** Thrown by `some` for a `null`; `explore` and `replay` report it as a read of a null value. */
 export class NullFault extends Error {
   constructor() {
@@ -821,4 +829,17 @@ export const rem = (a: number, b: number): number => {
     throw new RemainderFault();
   }
   return a % b;
+};
+
+/**
+ * Writes the whole number of times `b` goes into `a`: `m.div(7, 2)` is 3. A negative `a` or a
+ * `b` below 1 is a fault, as in `earnest verify`, because languages disagree on the result
+ * there and Rust panics on a divisor of zero. Use it where JavaScript would use `/`, which a
+ * model file may not, since it gives a fraction.
+ */
+export const div = (a: number, b: number): number => {
+  if (a < 0 || b < 1 || Number.isNaN(a) || Number.isNaN(b)) {
+    throw new DivisionFault();
+  }
+  return (a - (a % b)) / b;
 };

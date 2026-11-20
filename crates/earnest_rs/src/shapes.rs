@@ -76,8 +76,11 @@ impl Reader<'_> {
                 self.refuse(
                     listed.span(),
                     &feature,
-                    "`#[one_of(...)]` goes on a whole number or a `&'static str`, or on an \
-                     `Option` or a collection of them",
+                    "`#[one_of(...)]` lists the values of a whole number or a `&'static str`, \
+                     or of an `Option` or a collection of them, and an enum already lists its \
+                     variants: to start an enum at some of them only, write `#[initial(A, B)]` \
+                     with the variants it starts at, and to start a record at some values, list \
+                     them in `#[initial(..)]` the same way",
                 );
             }
             if attribute(attributes, "range").is_some() {
@@ -133,6 +136,13 @@ impl Reader<'_> {
                 self.listed_texts(span, declares.attributes())
             }
             Type::Reference(borrowed)
+                if matches!(declares, Declares::Type)
+                    && borrowed.mutability.is_none()
+                    && is_str(&borrowed.elem) =>
+            {
+                Some(ShapeKind::Text)
+            }
+            Type::Reference(borrowed)
                 if matches!(declares, Declares::Type) && borrowed.mutability.is_none() =>
             {
                 return self.declared_shape(&borrowed.elem, declares);
@@ -151,7 +161,10 @@ impl Reader<'_> {
         self.refuse(
             span,
             &feature,
-            "it is not a library type or a type in this file that derives `Domain`",
+            "the checker knows `bool`, the integer types, `&'static str`, `Option<T>`, `Set<T>`, \
+             `Map<K, V>`, `Seq<T, MAX>`, `Queue<T, CAPACITY>`, `Lock`, `Timer`, `Request`, \
+             `Retry<MAX>`, `Self` for the state, and an enum or a struct of this file that \
+             derives `Domain`: write one of those, or derive `Domain` on the type",
         );
         None
     }
@@ -444,7 +457,7 @@ impl Reader<'_> {
             self.refuse(
                 span,
                 name,
-                "a record can't hold itself: it would have no end of values",
+                "a record can't hold itself, because it would have no end of values: hold a number or an enum that names the other one, or an `Option` of a record that does not hold it back",
             );
             return None;
         }

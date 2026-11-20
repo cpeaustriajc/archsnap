@@ -116,7 +116,7 @@ impl Reader<'_> {
                 self.refuse(
                     path.span(),
                     &action,
-                    "this action is labelled twice in the view",
+                    "this action is labelled twice in the view: give each action one `step(action = \"label\")`",
                 );
                 continue;
             }
@@ -139,7 +139,7 @@ impl Reader<'_> {
                     "`colors` colors `broken`, `start` and `end`, and no other part",
                 );
             } else if view.colors.iter().any(|(seen, _)| *seen == part) {
-                self.refuse(path.span(), &part, "this part is colored twice in the view");
+                self.refuse(path.span(), &part, "this part is colored twice in the view: give each of `broken`, `start` and `end` one color");
             } else if !is_color(&value) {
                 self.refuse(
                     color.span(),
@@ -190,7 +190,7 @@ impl Reader<'_> {
             self.refuse(
                 extra.span(),
                 &signature.ident.to_string(),
-                "a label looks only at the state: it takes `&self` and nothing else",
+                "a label looks only at the state: it takes `&self` and nothing else, so read a value from a field, or call a helper with it",
             );
         }
         let Some(term) = self.label_body(&method.block) else {
@@ -209,7 +209,7 @@ impl Reader<'_> {
             self.refuse(
                 signature.ident.span(),
                 &format!("#[{label}]"),
-                "a view has one `#[state]` label and one `#[group]` label at most",
+                "a view has one `#[state]` label and one `#[group]` label at most: merge the two methods into one `format!`",
             );
         } else {
             *slot = Some(read);

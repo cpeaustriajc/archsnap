@@ -38,6 +38,9 @@ pub enum Math {
     /// What is left of the first after dividing by the second. A negative first number or a
     /// second number below 1 is [`Fault::Remainder`].
     Remainder,
+    /// The whole number of times the second goes into the first. A negative first number or a
+    /// second number below 1 is [`Fault::Division`].
+    Divide,
 }
 
 /// A primitive on a set. The set is the first argument.

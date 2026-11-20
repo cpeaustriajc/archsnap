@@ -569,6 +569,9 @@ fn pair(op: Op, first: &Written, second: &Written, third: Option<&Written>) -> W
                 Math::Remainder => {
                     return call(Helper::Remainder, &[left, right], Kind::Int);
                 }
+                Math::Divide => {
+                    return call(Helper::Division, &[left, right], Kind::Int);
+                }
                 _ => return unknown("arithmetic added after it was written"),
             };
             Written::new(format!("({left} {sign} {right})"), Kind::Int)
@@ -644,7 +647,7 @@ fn has_a_value(op: Op, given: &[Written]) -> Option<String> {
     match (op, given) {
         (Op::Unwrap, [on, ..]) => Some(format!("({} # {NULL})", on.text)),
         (Op::Fit(ty), [on, ..]) => inside(ty, &on.text),
-        (Op::Math(Math::Remainder), [left, right, ..]) => Some(format!(
+        (Op::Math(Math::Remainder | Math::Divide), [left, right, ..]) => Some(format!(
             "(({} >= 0) {AND} ({} >= 1))",
             left.text, right.text
         )),

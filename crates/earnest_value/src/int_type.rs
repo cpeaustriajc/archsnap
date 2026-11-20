@@ -110,6 +110,28 @@ impl IntType {
         }
     }
 
+    /// Whether Rust has `impl From<from> for` this type: every conversion that loses no number,
+    /// which is how `from` of a narrower integer type is written in place of `as`.
+    #[must_use]
+    pub fn has_from(self, from: Self) -> bool {
+        use IntType::{I8, I16, I32, I64, I128, Isize, U8, U16, U32, U64, U128, Usize};
+        self == from
+            || match from {
+                U8 => matches!(
+                    self,
+                    U16 | U32 | U64 | U128 | Usize | I16 | I32 | I64 | I128 | Isize
+                ),
+                U16 => matches!(self, U32 | U64 | U128 | Usize | I32 | I64 | I128),
+                U32 => matches!(self, U64 | U128 | I64 | I128),
+                U64 => matches!(self, U128 | I128),
+                I8 => matches!(self, I16 | I32 | I64 | I128 | Isize),
+                I16 => matches!(self, I32 | I64 | I128 | Isize),
+                I32 => matches!(self, I64 | I128),
+                I64 => matches!(self, I128),
+                U128 | Usize | I128 | Isize => false,
+            }
+    }
+
     /// Whether `number` is a value of the type, from [`lowest`](Self::lowest) to
     /// [`highest`](Self::highest), both included.
     #[must_use]

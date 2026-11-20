@@ -19,6 +19,7 @@ pub(crate) struct Since<'a> {
 pub(crate) struct Verified<'a> {
     pub(crate) files: &'a [ModelFile],
     pub(crate) skipped: &'a [String],
+    pub(crate) no_model: &'a [String],
     pub(crate) checked: &'a [Checked],
     pub(crate) since: Option<Since<'a>>,
 }
@@ -43,6 +44,8 @@ struct Document<'a> {
     models: Vec<&'a ModelResult>,
     unreadable: Vec<&'a Problem>,
     skipped: &'a [String],
+    #[serde(rename = "noModel")]
+    no_model: &'a [String],
     #[serde(rename = "ruleChanges")]
     rule_changes: &'a [Difference],
     summary: Summary,
@@ -98,6 +101,7 @@ impl Verified<'_> {
             }));
         }
         lines.extend(skipped_line(self.skipped.len()));
+        lines.extend(no_model_line(self.no_model.len()));
         lines.push(summary_line(&self.summary()));
         lines.join("\n")
     }
@@ -107,6 +111,7 @@ impl Verified<'_> {
             models: self.checked.iter().map(|checked| &checked.result).collect(),
             unreadable: self.files.iter().flat_map(ModelFile::problems).collect(),
             skipped: self.skipped,
+            no_model: self.no_model,
             rule_changes: self.since.map_or(&[], |since| since.changes),
             summary: self.summary(),
         };
@@ -173,6 +178,20 @@ pub(crate) fn skipped_line(count: usize) -> Option<String> {
     (count > 0).then(|| {
         format!(
             "{:<STATUS_WIDTH$}{INDENT}{count} {noun} the library",
+            "skipped"
+        )
+    })
+}
+
+pub(crate) fn no_model_line(count: usize) -> Option<String> {
+    let noun = if count == 1 {
+        "file that uses the library and declares"
+    } else {
+        "files that use the library and declare"
+    };
+    (count > 0).then(|| {
+        format!(
+            "{:<STATUS_WIDTH$}{INDENT}{count} {noun} no model",
             "skipped"
         )
     })
@@ -295,6 +314,7 @@ mod tests {
         let verified = Verified {
             files: &files,
             skipped: &[],
+            no_model: &[],
             checked: &checked,
             since: None,
         };
@@ -332,6 +352,7 @@ unfinished  Z  1000 states so far  3 ms  (state limit of 1000)  (cached)
         let verified = Verified {
             files: &files,
             skipped: &[],
+            no_model: &[],
             checked: &checked,
             since: Some(Since {
                 base: "origin/main",
@@ -397,6 +418,7 @@ unfinished  Z  1000 states so far  3 ms  (state limit of 1000)  (cached)
         let verified = Verified {
             files: &files,
             skipped: &[],
+            no_model: &[],
             checked: &checked,
             since: None,
         };
@@ -449,6 +471,7 @@ unfinished  Z  1000 states so far  3 ms  (state limit of 1000)  (cached)
         let text = Verified {
             files: &files,
             skipped: &[],
+            no_model: &[],
             checked: &checked,
             since: None,
         }

@@ -10,9 +10,9 @@ use oxc_ast::ast::{
 use oxc_span::GetSpan;
 use oxc_syntax::operator::{AssignmentOperator, BinaryOperator, LogicalOperator, UnaryOperator};
 
-const NOT_AN_OPERATOR: &str = "this operator is outside the library";
-const NOT_IN_PLACE: &str =
-    "changing a value in place is outside the library; every operation gives back a new value";
+const NOT_AN_OPERATOR: &str = "this operator is outside the library: the operators are `===`, `!==`, `<`, `<=`, `>`, `>=`, `&&`, `||`, `!`, `+`, `-`, `*`, `m.rem(a, b)` and `m.div(a, b)`";
+pub(crate) const CLASS: &str = "a class is outside the library: declare the data as an `m.record({...})` and the behavior as the actions and rules of an `m.model`";
+const NOT_IN_PLACE: &str = "changing a value in place is outside the library; every operation gives back a new value: write `const next = value + 1;`, or return the new field from `then`";
 
 const AN_ASSERTION: &str = "a type assertion hides a `null` from the type checker and changes \
     nothing in JavaScript, so a value that is optional would be read as `null` where \
@@ -169,11 +169,16 @@ impl Reader<'_> {
                     "waiting is outside the library; model the wait with `m.request()`",
                 )
             }
-            Expression::NewExpression(_) => ("new", "making an object is outside the library"),
+            Expression::NewExpression(_) => (
+                "new",
+                "making an object is outside the library: write an object literal, `{ field: value }`, or a library value such as `m.setOf(a, b)`",
+            ),
             Expression::AssignmentExpression(assignment) => (
                 assignment.operator.as_str(),
                 if assignment.operator == AssignmentOperator::Remainder {
                     "changing a value in place is outside the library; write `m.rem(a, b)`"
+                } else if assignment.operator == AssignmentOperator::Division {
+                    "changing a value in place is outside the library; write `m.div(a, b)`"
                 } else {
                     NOT_IN_PLACE
                 },
@@ -190,8 +195,11 @@ impl Reader<'_> {
             Expression::FunctionExpression(_) => {
                 ("function", "write the function as an arrow function")
             }
-            Expression::ClassExpression(_) => ("class", "a class is outside the library"),
-            Expression::ThisExpression(_) => ("this", "`this` is outside the library"),
+            Expression::ClassExpression(_) => ("class", CLASS),
+            Expression::ThisExpression(_) => (
+                "this",
+                "`this` is outside the library: take the state as the first parameter, `(s) => s.field`",
+            ),
             Expression::TSNonNullExpression(inner) => {
                 self.term(&inner.expression);
                 (
@@ -217,10 +225,13 @@ impl Reader<'_> {
                 "?.",
                 "optional chaining is outside the library; compare with `null` first",
             ),
-            Expression::YieldExpression(_) => ("yield", "a generator is outside the library"),
+            Expression::YieldExpression(_) => (
+                "yield",
+                "a generator is outside the library: write a loop as `every`, `some` or `filter`, or as `m.forall` and `m.exists`",
+            ),
             _ => {
                 let written = self.quoted(expr.span());
-                return self.refused(start, &written, "this is outside the library");
+                return self.refused(start, &written, "this is outside the library: a model file may contain only the forms \"What a model file may contain\" lists in the README");
             }
         };
         self.refused(start, feature, message)
@@ -304,6 +315,15 @@ impl Reader<'_> {
                     binary.span.start,
                     "%",
                     "JavaScript's `%` can't be checked for a negative number: write `m.rem(a, b)`",
+                );
+            }
+            BinaryOperator::Division => {
+                return self.refused(
+                    binary.span.start,
+                    "/",
+                    "JavaScript's `/` gives a fraction, where Rust's `/` on integers drops it, and \
+                     the languages disagree for a negative number: write `m.div(a, b)`, the whole \
+                     number of times `b` goes into `a`",
                 );
             }
             BinaryOperator::Equality | BinaryOperator::Inequality => {
@@ -513,6 +533,18 @@ impl Reader<'_> {
                     call.span.start,
                     &format!("{library}.rem"),
                     "`m.rem` takes the number and the divisor: `m.rem(a, b)`",
+                ),
+            },
+            "div" => match self.arguments(call).as_slice() {
+                [left, right] => TermKind::Binary(
+                    Binary::Divide,
+                    Box::new(left.clone()),
+                    Box::new(right.clone()),
+                ),
+                _ => self.refused(
+                    call.span.start,
+                    &format!("{library}.div"),
+                    "`m.div` takes the number and the divisor: `m.div(a, b)`",
                 ),
             },
             "forall" => self.across(Reach::Every, call),

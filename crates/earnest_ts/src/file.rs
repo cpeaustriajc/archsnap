@@ -1,7 +1,7 @@
 use crate::Reader;
 use crate::members::MemberKind;
 use crate::names::LIBRARY_MODULE;
-use crate::terms::bare;
+use crate::terms::{CLASS, bare};
 use earnest_ast::{Draft, HelperDraft, HelperKind, Language, ViewDraft};
 use oxc_ast::ast::{
     Argument, ArrowFunctionExpression, BindingPattern, CallExpression, Declaration,
@@ -250,7 +250,7 @@ impl Reader<'_> {
                 "function",
                 "write the function as an arrow function in a top-level `const`",
             ),
-            Declaration::ClassDeclaration(_) => ("class", "a class is outside the library"),
+            Declaration::ClassDeclaration(_) => ("class", CLASS),
             Declaration::TSEnumDeclaration(_) => {
                 ("enum", "declare the choices with `m.enum([...])`")
             }

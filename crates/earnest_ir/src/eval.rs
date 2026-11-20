@@ -21,6 +21,9 @@ pub enum Fault {
     Overflow,
     /// A remainder with a negative number or a divisor below 1, where languages disagree.
     Remainder,
+    /// A division with a negative number or a divisor below 1, where languages disagree on the
+    /// result and Rust panics on a divisor of zero.
+    Division,
     /// A number is outside the integer type the model file gives it, where Rust stops a test
     /// build and wraps around in a release build.
     Outside(IntType),
@@ -42,6 +45,9 @@ impl Fault {
             Self::Overflow => "computes a number too large to hold".to_owned(),
             Self::Remainder => {
                 "takes a remainder with a negative number or a divisor below 1".to_owned()
+            }
+            Self::Division => {
+                "takes a division with a negative number or a divisor below 1".to_owned()
             }
             Self::Outside(ty) => format!("computes a number outside `{}`", ty.name()),
             Self::WrongKind => "uses a value of the wrong kind".to_owned(),
@@ -359,6 +365,12 @@ fn arithmetic(math: Math, first: &Value, second: Option<&Value>) -> Evaluated {
                 return Err(Fault::Remainder);
             }
             left.checked_rem(right)
+        }
+        Math::Divide => {
+            if left < 0 || right < 1 {
+                return Err(Fault::Division);
+            }
+            left.checked_div(right)
         }
     };
     answer.map(Value::Int).ok_or(Fault::Overflow)

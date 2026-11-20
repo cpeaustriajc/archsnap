@@ -1,5 +1,6 @@
 use crate::bodies::Body;
 use crate::reader::{Reader, attribute, name_of, path_text, place_of, why_outside};
+use crate::typing::plain;
 use earnest_ast::{
     ActionBody, ActionDraft, Draft, EndDraft, FieldDraft, HelperDraft, HelperKind, Language,
     Quoting, Reading, RuleDraft, Shape, Term, TermKind, ViewDraft, condition_text, nesting_problem,
@@ -14,11 +15,14 @@ use syn::{
 };
 
 const ROLES: [&str; 3] = ["action", "rule", "end"];
+const NEEDS_A_START: &str = "write the starting value in the brackets, `#[initial(value)]`, or \
+    each value the field starts at, `#[initial(A, B)]`";
 const LIBRARY_NAMES: [&str; 7] = ["forall", "exists", "Some", "None", "Set", "Seq", "Map"];
 const STATE: &str = "self";
 const WAIT: &str = "waiting is outside the library: model it with a `Request` or a `Timer`";
-const ONLY_MODELS: &str =
-    "a model file holds only models, the types they use, constants and helper functions";
+const ONLY_MODELS: &str = "a model file holds only models, the types they use, constants and \
+    helper functions: move anything else to another file, which the checker does not read as a \
+    model unless it derives `Model`";
 
 #[derive(Default)]
 struct Found<'a> {
@@ -230,11 +234,15 @@ impl Reader<'_> {
             match item {
                 Item::Use(import) => self.import(import),
                 Item::Enum(choices) => {
+                    if derives(&choices.attrs, "Copy") {
+                        self.copies.insert(name_of(&choices.ident));
+                    }
                     types.push((name_of(&choices.ident), choices.ident.span()));
                     self.refuse_library_name(&choices.ident, "enum");
                     self.declare_enum(choices);
                 }
                 Item::Struct(state) if derives(&state.attrs, "Model") => {
+                    self.note_struct(state);
                     types.push((name_of(&state.ident), state.ident.span()));
                     self.refuse_library_name(&state.ident, "struct");
                     self.name_of(state);
@@ -242,6 +250,7 @@ impl Reader<'_> {
                     found.models.push(state);
                 }
                 Item::Struct(record) => {
+                    self.note_struct(record);
                     types.push((name_of(&record.ident), record.ident.span()));
                     self.refuse_library_name(&record.ident, "struct");
                     self.declare_record(record);
@@ -264,6 +273,9 @@ impl Reader<'_> {
                     let name = name_of(&function.sig.ident);
                     values.push((name.clone(), function.sig.ident.span()));
                     self.refuse_library_name(&function.sig.ident, "fn");
+                    if let ReturnType::Type(_, ty) = &function.sig.output {
+                        self.fn_types.insert(name.clone(), ty.as_ref().clone());
+                    }
                     self.functions.insert(name);
                     found.functions.push(function);
                 }
@@ -276,6 +288,21 @@ impl Reader<'_> {
         self.refuse_repeats(&types, "type", "E0428");
         self.refuse_repeats(&values, "item", "E0428");
         found
+    }
+
+    fn note_struct(&mut self, item: &ItemStruct) {
+        let name = name_of(&item.ident);
+        if derives(&item.attrs, "Copy") {
+            self.copies.insert(name.clone());
+        }
+        if let Fields::Named(fields) = &item.fields {
+            let listed = fields
+                .named
+                .iter()
+                .filter_map(|field| Some((name_of(field.ident.as_ref()?), field.ty.clone())))
+                .collect();
+            self.structs.insert(name, listed);
+        }
     }
 
     fn import(&mut self, import: &ItemUse) {
@@ -341,7 +368,7 @@ impl Reader<'_> {
             self.refuse(
                 state.generics.span(),
                 "<>",
-                "a model and the types it uses can't be generic: every value must be known",
+                "a model and the types it uses can't be generic, because every value must be known: write each concrete type out, one struct for each",
             );
         }
     }
@@ -369,7 +396,7 @@ impl Reader<'_> {
                 self.refuse(
                     variant.span(),
                     &format!("{name}::{}", variant.ident),
-                    "a variant with data has no one name to be known by: keep every variant plain",
+                    "a variant with data has no one name to be known by: keep every variant plain, and write the data as fields of a struct that derives `Domain`, or as one plain variant for each case",
                 );
             }
             variants.push(name_of(&variant.ident));
@@ -399,7 +426,7 @@ impl Reader<'_> {
             other => self.refuse(
                 other.span(),
                 &format!("struct {name}"),
-                "a record has named fields",
+                "a record has named fields: write `struct Name { field: Type }` and derive `Domain`",
             ),
         }
     }
@@ -425,7 +452,7 @@ impl Reader<'_> {
                 self.refuse(
                     other.span(),
                     &format!("struct {name}"),
-                    "a model's state has named fields",
+                    "a model's state has named fields: write `struct Name { field: Type }` and derive `Model`",
                 );
                 Vec::new()
             }
@@ -446,6 +473,14 @@ impl Reader<'_> {
             .filter(|method| role_of(&method.attrs).is_none())
             .map(|method| name_of(&method.sig.ident))
             .collect();
+        self.model_name = Some(name.clone());
+        self.method_types = own
+            .iter()
+            .filter_map(|method| match &method.sig.output {
+                ReturnType::Type(_, ty) => Some((name_of(&method.sig.ident), ty.as_ref().clone())),
+                ReturnType::Default => None,
+            })
+            .collect();
         let mut draft = Draft {
             name,
             file: self.file.to_owned(),
@@ -462,8 +497,10 @@ impl Reader<'_> {
         for method in own {
             self.method(method, &mut draft);
         }
-        self.methods.clear();
         self.view_of(state, found, &mut draft);
+        self.methods.clear();
+        self.method_types.clear();
+        self.model_name = None;
         draft
     }
 
@@ -504,14 +541,20 @@ impl Reader<'_> {
         self.refuse_conditional(&field.attrs);
         let mut shape = self.shape(&field.ty, &field.attrs);
         if let Some(initial) = attribute(&field.attrs, "initial") {
-            shape.initial = Some(match initial.parse_args::<Expr>() {
-                Ok(value) => self.term(&value),
-                Err(_) => self.nothing(
-                    initial.span(),
-                    "#[initial]",
-                    "write the starting value in the brackets: `#[initial(value)]`",
-                ),
-            });
+            shape.initial = Some(
+                match initial.parse_args_with(Punctuated::<Expr, Token![,]>::parse_terminated) {
+                    Ok(listed) if listed.len() == 1 => match listed.iter().next() {
+                        Some(value) => self.term(value),
+                        None => self.nothing(initial.span(), "#[initial]", NEEDS_A_START),
+                    },
+                    Ok(listed) if !listed.is_empty() => {
+                        let values: Vec<Term> =
+                            listed.iter().map(|value| self.term(value)).collect();
+                        Term::new(place_of(initial.span()), TermKind::Choices(values))
+                    }
+                    _ => self.nothing(initial.span(), "#[initial]", NEEDS_A_START),
+                },
+            );
         }
         Some(FieldDraft { name, shape })
     }
@@ -530,7 +573,7 @@ impl Reader<'_> {
                 methods.push(method);
             } else {
                 let feature = self.short_text(item.span());
-                self.refuse(item.span(), &feature, "a model's block holds only methods");
+                self.refuse(item.span(), &feature, "a model's block holds only methods: move a constant, a type or a function to the top of the file");
             }
         }
         methods
@@ -561,6 +604,19 @@ impl Reader<'_> {
         if role == "action" {
             let returns_self = self.action_returns(signature);
             let taken: Vec<String> = inputs.iter().map(|(name, _)| name.clone()).collect();
+            let typed_inputs: Vec<(String, Type)> = signature
+                .inputs
+                .iter()
+                .filter_map(|input| match input {
+                    FnArg::Typed(typed) => match typed.pat.as_ref() {
+                        Pat::Ident(named) => {
+                            Some((name_of(&named.ident), typed.ty.as_ref().clone()))
+                        }
+                        _ => None,
+                    },
+                    FnArg::Receiver(_) => None,
+                })
+                .collect();
             let body = |term: Term| ActionBody {
                 state_name: Some(STATE.to_owned()),
                 input_name: None,
@@ -568,7 +624,11 @@ impl Reader<'_> {
                 term,
             };
             let kept = self.bound.len();
-            self.bound.extend(taken.iter().cloned());
+            self.bound.extend(
+                typed_inputs
+                    .iter()
+                    .map(|(name, ty)| plain(name.clone(), Some(ty.clone()))),
+            );
             let guard = self.guard(&method.block.stmts).map(body);
             let close = method.block.brace_token.span.close();
             self.returns_self = returns_self;
@@ -590,7 +650,7 @@ impl Reader<'_> {
             self.refuse(
                 extra.span(),
                 &id,
-                "a rule or an end looks only at the state: it takes `&self` and nothing else",
+                "a rule or an end looks only at the state: it takes `&self` and nothing else, so read a value from a field, or call a helper with it",
             );
         }
         let condition = self.value_of(&method.block);
@@ -712,14 +772,18 @@ impl Reader<'_> {
                     self.refuse(
                         mutable.span,
                         "mut",
-                        "an input can't change: every operation gives back a new value",
+                        "an input can't change: drop the `mut`, and write `let next = value + 1;` under a new name",
                     );
                 }
                 name_of(&named.ident)
             }
             other => {
                 let feature = self.short_text(other.span());
-                self.refuse(other.span(), &feature, "an input is one plain name");
+                self.refuse(
+                    other.span(),
+                    &feature,
+                    "an input is one plain name: take a pair or a tuple as one struct that derives `Domain`, and read its fields",
+                );
                 "_".to_owned()
             }
         };
@@ -764,7 +828,7 @@ impl Reader<'_> {
             self.refuse(
                 signature.generics.span(),
                 &format!("fn {}", signature.ident),
-                "a function of a model can't be generic: every value must be known",
+                "a function of a model can't be generic, because every value must be known: write the concrete type",
             );
         }
     }
@@ -794,6 +858,15 @@ impl Reader<'_> {
         }
     }
 
+    fn names_the_state(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Paren(inner) => self.names_the_state(&inner.elem),
+            Type::Group(inner) => self.names_the_state(&inner.elem),
+            Type::Path(named) => named.qself.is_none() && self.is_the_state(ty),
+            _ => false,
+        }
+    }
+
     fn helper(&mut self, kind: HelperKind, signature: &Signature, block: &Block) -> HelperDraft {
         self.plain_function(signature);
         let mut parameters = Vec::with_capacity(signature.inputs.len());
@@ -817,16 +890,52 @@ impl Reader<'_> {
                 }
                 other => {
                     let feature = self.short_text(other.span());
-                    self.refuse(other.span(), &feature, "a parameter is one plain name");
+                    self.refuse(
+                        other.span(),
+                        &feature,
+                        "a parameter is one plain name: take the pair or the tuple as one struct that derives `Domain`, and read its fields",
+                    );
                 }
             }
         }
         let kept = self.bound.len();
-        self.bound.extend(parameters.iter().cloned());
+        let receiver = self
+            .model_name
+            .clone()
+            .map(|model| syn::parse_str::<Type>(&format!("&{model}")).ok());
+        for input in &signature.inputs {
+            match input {
+                FnArg::Receiver(_) => {
+                    self.bound
+                        .push(plain(STATE.to_owned(), receiver.clone().flatten()));
+                }
+                FnArg::Typed(typed) => {
+                    if let Pat::Ident(named) = typed.pat.as_ref() {
+                        self.bound.push(plain(
+                            name_of(&named.ident),
+                            Some(typed.ty.as_ref().clone()),
+                        ));
+                    }
+                }
+            }
+        }
         let mut body = self.value_of(block);
         self.bound.truncate(kept);
         if let ReturnType::Type(_, ty) = &signature.output {
-            body = self.of_type(ty, body);
+            body = if self.names_the_state(ty) {
+                Term::new(body.place, TermKind::Updates(Box::new(body)))
+            } else {
+                if self.is_the_state(ty) {
+                    let feature = self.short_text(ty.span());
+                    self.refuse(
+                        ty.span(),
+                        &feature,
+                        "a helper gives the state back by value: write `Self` as the result, \
+                         and build it as `Self { changed fields, ..self.clone() }`",
+                    );
+                }
+                self.of_type(ty, body)
+            };
         }
         for (name, span, ty) in typed_parameters.into_iter().rev() {
             let given = Term::new(place_of(span), TermKind::Name(name.clone()));

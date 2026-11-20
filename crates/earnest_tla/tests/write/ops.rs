@@ -179,6 +179,24 @@ fn a_remainder_goes_through_the_helper_that_faults_where_the_engine_does() {
 }
 
 #[test]
+fn a_division_is_a_fault_where_the_engine_has_one() {
+    let mut stage = stage();
+    stage
+        .sketch
+        .rule("half", two(Op::Math(Math::Divide), &stage.n, int(2)));
+    let module = stage.sketch.written().module;
+    assert!(module.contains("Division(n, 2)"), "{module}");
+    assert_eq!(
+        helpers_of(&module),
+        [
+            "Fault(message) == Assert(FALSE, message)",
+            "Division(left, right) == IF (left >= 0) /\\ (right >= 1) THEN left \\div right \
+             ELSE Fault(\"a division with a negative number or a divisor below 1\")",
+        ]
+    );
+}
+
+#[test]
 fn set_primitives_are_the_set_operators() {
     let cases: [(SetOp, Expr, &str); 7] = [
         (SetOp::Has, int(1), "(1 \\in seen)"),

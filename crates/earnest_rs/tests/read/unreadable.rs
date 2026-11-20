@@ -17,7 +17,7 @@ pub struct Pile {
 impl Pile {
 ";
 
-const CLOCK: &str = "the system clock is outside the library";
+const CLOCK: &str = "the system clock is outside the library: model time with a `Timer`, or as a number that actions step up";
 const LOOP: &str = "a loop is outside the library: use `every`, `some`, `forall` or `exists`";
 
 fn pile(methods: &str) -> String {
@@ -154,13 +154,13 @@ fn random_values_and_files_are_refused() {
                 16,
                 20,
                 "`rand::random`".to_owned(),
-                "random values are outside the library".to_owned()
+                "random values are outside the library: model each possible value as an action input, with `#[one_of(..)]` or an enum that derives `Domain`, so every one is tried".to_owned()
             ),
             (
                 17,
                 21,
                 "`std::fs::read_to_string`".to_owned(),
-                "input and output are outside the library".to_owned()
+                "input and output are outside the library: model the answer as an action input, or the call as a `Request`".to_owned()
             ),
             (
                 18,
@@ -282,7 +282,7 @@ fn constructs_outside_the_allowed_forms_are_each_refused() {
 
     #[rule(\"Three\")]
     fn three(&self) -> bool {
-        if let Some(height) = Some(self.height) { height == 0 } else { false }
+        if let Some(height) = &Some(self.height) { height == &0 } else { false }
     }
 
     #[rule(\"Four\")]
@@ -294,9 +294,9 @@ fn constructs_outside_the_allowed_forms_are_each_refused() {
     assert_eq!(
         places(&source),
         [
-            at(16, 9, "`match`"),
+            at(16, 15, "`self.height`"),
             at(24, 21, "`as`"),
-            at(29, 12, "`if let`"),
+            at(29, 31, "`&Some(self.height)`"),
             at(34, 14, "`self.label()`"),
             at(34, 25, "`1.5`"),
         ],

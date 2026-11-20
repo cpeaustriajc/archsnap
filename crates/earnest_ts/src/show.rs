@@ -19,6 +19,7 @@ fn sign(binary: Binary) -> &'static str {
         Binary::Subtract => "-",
         Binary::Multiply => "*",
         Binary::Remainder => "%",
+        Binary::Divide => "/",
         _ => "?",
     }
 }
