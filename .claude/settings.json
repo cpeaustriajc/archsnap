@@ -38,6 +38,16 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "model=$(jq -r '.tool_input.model // \"\"'); case \"$model\" in opus|sonnet|haiku) exit 0 ;; esac; jq -n --arg model \"${model:-none, which inherits the session model}\" '{hookSpecificOutput: {hookEventName: \"PreToolUse\", permissionDecision: \"deny\", permissionDecisionReason: (\"Subagents run on opus, sonnet or haiku. This call named: \" + $model + \". Set model on the Agent call.\")}}'",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "PostToolUse": [
