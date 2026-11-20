@@ -782,3 +782,23 @@ export const seqOf = <const T>(...items: readonly T[]): SeqValue<T> => SeqValue.
 /** Writes a map value from `[key, value]` pairs: `m.mapOf(["a", 1], ["b", 2])`. */
 export const mapOf = <const K, const V>(...entries: readonly (readonly [K, V])[]): MapValue<K, V> =>
   MapValue.of(entries);
+
+/** Thrown by `rem` for a remainder the contract makes a fault; `explore` and `replay` report it. */
+export class RemainderFault extends Error {
+  constructor() {
+    super("takes a remainder with a negative number or a divisor below 1");
+    this.name = "RemainderFault";
+  }
+}
+
+/**
+ * Writes the remainder of `a` divided by `b`: `m.rem(7, 3)` is 1. A negative `a` or a `b`
+ * below 1 is a fault, as in `earnest verify`, because languages disagree on the result there.
+ * Use it where JavaScript would use `%`, which a model file may not.
+ */
+export const rem = (a: number, b: number): number => {
+  if (a < 0 || b < 1 || Number.isNaN(a) || Number.isNaN(b)) {
+    throw new RemainderFault();
+  }
+  return a % b;
+};

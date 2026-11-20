@@ -210,6 +210,12 @@ test("a declaration that makes no sense is refused when it is written", () => {
   expect(() => m.enum(["a", "a"])).toThrow(/different values/);
   expect(() => m.enum([])).toThrow(/one or more/);
   expect(() => m.oneOf([1, "one"])).toThrow(/all text, all numbers or all booleans/);
+  expect(() => m.oneOf([1, 1.5])).toThrow(/whole numbers that JavaScript holds exactly/);
+  expect(() => m.oneOf([9007199254740991, 9007199254740992])).toThrow(/holds exactly/);
+  expect(m.oneOf([-9007199254740991, 9007199254740991]).count).toBe(2);
+  expect(() => m.int(9007199254740991, 9007199254740992)).toThrow(/needs two whole numbers/);
+  expect(() => m.int(9007199254740990, 9007199254740996)).toThrow(/needs two whole numbers/);
+  expect(() => m.int(-9007199254740992, 0)).toThrow(/needs two whole numbers/);
   expect(() => m.int(0, 3).initial(7)).toThrow(/7 is not a value of this number/);
   expect(() => m.set(m.int(0, 1)).initial(m.setOf(0, 5))).toThrow(/not a value of this set/);
   expect(() => Letter.optional().optional()).toThrow(/can't be made optional/);

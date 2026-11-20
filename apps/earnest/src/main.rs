@@ -20,7 +20,21 @@ use clap::Parser;
 use commands::Exit;
 use std::process::ExitCode;
 
+const MAIN_STACK: usize = 512 * 1024 * 1024;
+
 fn main() -> ExitCode {
+    let started = std::thread::Builder::new()
+        .stack_size(MAIN_STACK)
+        .spawn(run);
+    match started {
+        Ok(running) => running
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+        Err(_) => run(),
+    }
+}
+
+fn run() -> ExitCode {
     let arguments = match Arguments::try_parse() {
         Ok(arguments) => arguments,
         Err(error) => {

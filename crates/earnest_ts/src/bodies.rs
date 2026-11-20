@@ -127,12 +127,35 @@ impl Reader<'_> {
 
     fn block(&mut self, statements: &[Statement<'_>], closing: u32) -> Term {
         let mark = self.locals.len();
+        let waiting = self.uninitialised.len();
+        for statement in statements {
+            if let Statement::VariableDeclaration(variables) = statement
+                && variables.kind == VariableDeclarationKind::Const
+            {
+                for declarator in &variables.declarations {
+                    if let BindingPattern::BindingIdentifier(name) = &declarator.id {
+                        self.uninitialised.push((name.name.to_string(), mark));
+                    }
+                }
+            }
+        }
         let folded = self.rest(statements, closing);
         self.locals.truncate(mark);
+        self.uninitialised.truncate(waiting);
         folded
     }
 
     fn rest(&mut self, statements: &[Statement<'_>], closing: u32) -> Term {
+        if self.too_deep(Span::new(closing, closing.saturating_add(1))) {
+            return self.nothing(closing);
+        }
+        self.depth = self.depth.saturating_add(1);
+        let folded = self.statements(statements, closing);
+        self.depth = self.depth.saturating_sub(1);
+        folded
+    }
+
+    fn statements(&mut self, statements: &[Statement<'_>], closing: u32) -> Term {
         let Some((first, later)) = statements.split_first() else {
             self.refuse(
                 closing,
@@ -212,6 +235,13 @@ impl Reader<'_> {
             };
             let value = self.term(init);
             let bound = name.name.to_string();
+            if let Some(index) = self
+                .uninitialised
+                .iter()
+                .rposition(|(waiting, _)| *waiting == bound)
+            {
+                self.uninitialised.remove(index);
+            }
             self.locals.push((bound.clone(), bound.clone()));
             bindings.push((bound, value, self.place(variables.span.start)));
         }

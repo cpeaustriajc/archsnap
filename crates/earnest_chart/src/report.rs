@@ -1,5 +1,5 @@
 use crate::changes::{RuleChanges, rule_change_lines};
-use crate::markdown::{code_span, fenced, prose};
+use crate::markdown::{code_span, fenced, one_line, prose};
 use crate::mermaid::chart;
 use crate::text::{detail_lines, word};
 use earnest_check::{Outcome, Status};
@@ -13,6 +13,16 @@ pub struct Section<'a> {
     pub file: &'a str,
     /// What the search found. The section has a chart when its `graph` is present.
     pub outcome: &'a Outcome,
+}
+
+/// A model file that could not be read, so none of its models is in the report.
+#[derive(Clone, Copy, Debug)]
+pub struct Unreadable<'a> {
+    /// The path of the file as the report should show it.
+    pub file: &'a str,
+    /// One line for each problem, as the text output of the CLI prints it:
+    /// `file:line:column`, the feature and the sentence.
+    pub problems: &'a [String],
 }
 
 fn result_line(section: &Section<'_>) -> String {
@@ -32,6 +42,16 @@ fn result_line(section: &Section<'_>) -> String {
     parts.join(" · ")
 }
 
+fn unread_lines(file: &Unreadable<'_>) -> Vec<String> {
+    let mut lines = vec![format!("unreadable  {}", one_line(file.file))];
+    lines.extend(
+        file.problems
+            .iter()
+            .map(|problem| format!("    {}", one_line(problem))),
+    );
+    lines
+}
+
 fn model(section: &Section<'_>) -> String {
     let mut blocks = vec![format!("## {}", prose(section.name)), result_line(section)];
     blocks.extend(section.outcome.graph.as_ref().map(chart));
@@ -43,7 +63,11 @@ fn model(section: &Section<'_>) -> String {
 }
 
 /// Markdown for a PR body, with no trailing line break: one section per model, in the order
-/// given, then a `Rule changes` section when `changes` is present.
+/// given, then an `Unreadable files` section when `unreadable` is not empty, then a `Rule
+/// changes` section when `changes` is present.
+///
+/// The `Unreadable files` section names each file the checker could not read and why, so a
+/// reader of the report can tell a file that was checked from one that was left unchecked.
 ///
 /// A model's section is a heading with its name, a result line with the status, the state
 /// count and the file, the chart, and a fenced block with the path to each broken rule and
@@ -51,8 +75,16 @@ fn model(section: &Section<'_>) -> String {
 /// when nothing is wrong. Pass `changes` only when the user asked for a comparison: with no
 /// changed rule the section still appears and says `none`.
 #[must_use]
-pub fn report(sections: &[Section<'_>], changes: Option<&RuleChanges<'_>>) -> String {
+pub fn report(
+    sections: &[Section<'_>],
+    unreadable: &[Unreadable<'_>],
+    changes: Option<&RuleChanges<'_>>,
+) -> String {
     let mut blocks: Vec<String> = sections.iter().map(model).collect();
+    if !unreadable.is_empty() {
+        let lines: Vec<String> = unreadable.iter().flat_map(unread_lines).collect();
+        blocks.push(format!("## Unreadable files\n\n{}", fenced(&lines)));
+    }
     if let Some(changes) = changes {
         blocks.push(format!(
             "## Rule changes\n\n{}",

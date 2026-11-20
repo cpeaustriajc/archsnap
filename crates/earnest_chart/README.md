@@ -4,8 +4,8 @@ The Mermaid chart and Markdown report writer.
 
 `chart` draws the `Graph` of a search as one fenced `mermaid` block holding a `stateDiagram-v2`
 chart, and `report` writes the Markdown for a PR body: one section per model with its result line,
-its chart and the path to each broken rule and each finding, then the rule changes when the caller
-passes them. `path_lines`, `detail_lines` and `rule_change_lines` give the paths and the rule
+its chart and the path to each broken rule and each finding, then a section naming each file the
+caller could not read, then the rule changes when the caller passes them. `path_lines`, `detail_lines` and `rule_change_lines` give the paths and the rule
 changes as the plain lines the text output documents, so the CLI and the report print them the
 same way.
 
@@ -53,6 +53,8 @@ A chart draws at most `ARROW_LIMIT` arrows, not counting the `[*]` arrows.
    or when it is a start state with no arrow leaving it.
 
 When a state or an arrow is left out, the block is followed by one line such as
-`Not shown: 15 of 36 states and 40 of 60 arrows.` When a broken state is among them because its
+`Not shown: 15 of 36 states and 40 of 60 arrows.` The states are counted by what the boxes stand
+for (`Node::states`), so a box left out takes every state it stands for, while an arrow is one box
+to another. When a broken state is among them because its
 route did not fit, the line says so: `Not shown: 5 of 26 states and 5 of 25 arrows. A broken
 state lies beyond what is shown.` The same graph always gives the same chart.

@@ -42,6 +42,11 @@ impl Default for Limits {
     }
 }
 
+/// The stack, in bytes, a thread that evaluates a model needs: an expression a file nests a
+/// thousand levels deep is evaluated one frame per level, so a thread started for the
+/// search or for a model should be given this much.
+pub const WORKER_STACK: usize = 256 * 1024 * 1024;
+
 const SMALLEST_SHARED_LEVEL: usize = 512;
 const STATES_BETWEEN_CLOCK_READS: usize = 64;
 
@@ -266,7 +271,12 @@ impl Search<'_> {
                     [from, to] => frontier.get(*from..*to),
                     _ => None,
                 })
-                .map(|ids| scope.spawn(move || self.expand_ids(ids, deadline, asked)))
+                .map(|ids| {
+                    std::thread::Builder::new()
+                        .stack_size(WORKER_STACK)
+                        .spawn_scoped(scope, move || self.expand_ids(ids, deadline, asked))
+                        .expect("a worker thread starts")
+                })
                 .collect();
             let mut level = Some(Vec::with_capacity(frontier.len()));
             for worker in workers {

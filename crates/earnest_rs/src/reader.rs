@@ -1,8 +1,9 @@
-use earnest_ast::{Term, TermKind};
+use earnest_ast::{MOST_NESTING, TOO_DEEP, Term, TermKind};
 use earnest_diagnostics::{Place, Problem};
 use proc_macro2::Span;
 use std::collections::{BTreeMap, BTreeSet};
-use syn::{Attribute, Expr, FieldsNamed, Lit, Path, UnOp};
+use syn::spanned::Spanned;
+use syn::{Attribute, Expr, ExprLit, FieldsNamed, Lit, Path, UnOp};
 
 const LONGEST_FEATURE: usize = 48;
 
@@ -20,6 +21,39 @@ pub(crate) struct Reader<'a> {
     pub(crate) functions: BTreeSet<String>,
     pub(crate) methods: BTreeSet<String>,
     pub(crate) open_records: Vec<String>,
+    pub(crate) bound: Vec<String>,
+    pub(crate) depth: usize,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum Sign {
+    Plus,
+    Minus,
+}
+
+pub(crate) fn unwrapped(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Paren(inner) => unwrapped(&inner.expr),
+        Expr::Group(inner) => unwrapped(&inner.expr),
+        other => other,
+    }
+}
+
+pub(crate) fn start_of(expr: &Expr) -> Span {
+    let mut current = expr;
+    loop {
+        current = match current {
+            Expr::Binary(found) => &found.left,
+            Expr::MethodCall(found) => &found.receiver,
+            Expr::Field(found) => &found.base,
+            Expr::Cast(found) => &found.expr,
+            Expr::Index(found) => &found.expr,
+            Expr::Try(found) => &found.expr,
+            Expr::Call(found) => &found.func,
+            Expr::Paren(found) => return found.paren_token.span.open(),
+            other => return other.span(),
+        };
+    }
 }
 
 pub(crate) fn place_of(span: Span) -> Place {
@@ -85,6 +119,8 @@ impl<'a> Reader<'a> {
             functions: BTreeSet::new(),
             methods: BTreeSet::new(),
             open_records: Vec::new(),
+            bound: Vec::new(),
+            depth: 0,
         }
     }
 
@@ -105,6 +141,15 @@ impl<'a> Reader<'a> {
                 self.refuse(attribute.pound_token.span, &feature, ONE_BUILD);
             }
         }
+    }
+
+    pub(crate) fn too_deep(&mut self, at: impl FnOnce() -> Span) -> Option<Term> {
+        if self.depth < MOST_NESTING {
+            return None;
+        }
+        let span = at();
+        let feature = self.short_text(span);
+        Some(self.nothing(span, &feature, TOO_DEEP))
     }
 
     pub(crate) fn nothing(&mut self, span: Span, feature: &str, message: &str) -> Term {
@@ -133,12 +178,12 @@ impl<'a> Reader<'a> {
 
     pub(crate) fn whole_number(&self, expr: &Expr) -> Option<i64> {
         match expr {
-            Expr::Lit(literal) => match &literal.lit {
-                Lit::Int(number) => number.base10_parse().ok(),
-                _ => None,
-            },
+            Expr::Lit(literal) => Self::literal_number(literal, Sign::Plus),
             Expr::Unary(unary) if matches!(unary.op, UnOp::Neg(_)) => {
-                self.whole_number(&unary.expr)?.checked_neg()
+                match unwrapped(&unary.expr) {
+                    Expr::Lit(literal) => Self::literal_number(literal, Sign::Minus),
+                    inner => self.whole_number(inner)?.checked_neg(),
+                }
             }
             Expr::Paren(inner) => self.whole_number(&inner.expr),
             Expr::Group(inner) => self.whole_number(&inner.expr),
@@ -148,5 +193,17 @@ impl<'a> Reader<'a> {
             }
             _ => None,
         }
+    }
+
+    pub(crate) fn literal_number(literal: &ExprLit, sign: Sign) -> Option<i64> {
+        let Lit::Int(number) = &literal.lit else {
+            return None;
+        };
+        let magnitude: i128 = number.base10_parse().ok()?;
+        let signed = match sign {
+            Sign::Plus => magnitude,
+            Sign::Minus => -magnitude,
+        };
+        i64::try_from(signed).ok()
     }
 }

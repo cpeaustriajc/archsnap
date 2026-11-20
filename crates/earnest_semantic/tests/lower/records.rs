@@ -1,7 +1,7 @@
 use crate::build::{
     action, after, bind, choose, draft, equal, fails, field, helper, helper_call, holds, int,
-    lowered, name, null, one_of, optional, range, record, record_shape, refusal, spread, starting,
-    take, text,
+    lowered, map_of, map_shape, name, null, one_of, optional, range, record, record_shape, refusal,
+    seq_of, seq_shape, spread, starting, take, text,
 };
 use earnest_ast::{ActionDraft, Draft, Shape, Term};
 use earnest_ir::{Expr, Model, Op};
@@ -201,5 +201,73 @@ fn records_that_differ_in_more_than_an_optional_field_still_do_not_meet() {
         refusal(with_ann(), equal(named_item(null()), null())).feature,
         "a record compared with null",
         "a record written out is never null"
+    );
+}
+
+fn shelf() -> Vec<(&'static str, Shape)> {
+    vec![("book", map_shape(guest(), item()))]
+}
+
+fn booking(entries: Vec<(Term, Term)>) -> Model {
+    let mut source = draft(shelf());
+    source.actions.push(action(
+        "book",
+        None,
+        record(vec![("book", map_of(entries))]),
+    ));
+    lowered(&source)
+}
+
+#[test]
+fn a_map_literal_takes_a_record_that_gives_an_optional_field_a_value() {
+    let model = booking(vec![(
+        text("ann"),
+        record(vec![("qty", int(1)), ("who", text("ann"))]),
+    )]);
+    let state = after(&model, 0, &[]);
+    assert_eq!(
+        model.symbols.show(&state[0]),
+        "{\"ann\" -> {qty: 1, who: \"ann\"}}",
+        "the key `ann` holds the record, whose `who` is the present guest"
+    );
+}
+
+#[test]
+fn the_entries_of_a_map_literal_join_into_one_record_type() {
+    let model = booking(vec![
+        (
+            text("ann"),
+            record(vec![("qty", int(1)), ("who", text("ann"))]),
+        ),
+        (text("bob"), record(vec![("qty", int(2)), ("who", null())])),
+    ]);
+    let state = after(&model, 0, &[]);
+    assert_eq!(
+        model.symbols.show(&state[0]),
+        "{\"ann\" -> {qty: 1, who: \"ann\"}, \"bob\" -> {qty: 2, who: null}}",
+        "the first entry names a guest, the second none, and both are items"
+    );
+}
+
+#[test]
+fn a_map_literal_inside_a_sequence_literal_is_coerced_as_deep_as_it_goes() {
+    let mut source = draft(vec![("rows", seq_shape(map_shape(guest(), item()), 2))]);
+    source.actions.push(action(
+        "add",
+        None,
+        record(vec![(
+            "rows",
+            seq_of(vec![map_of(vec![(
+                text("bob"),
+                record(vec![("qty", int(0)), ("who", text("bob"))]),
+            )])]),
+        )]),
+    ));
+    let model = lowered(&source);
+    let state = after(&model, 0, &[]);
+    assert_eq!(
+        model.symbols.show(&state[0]),
+        "[{\"bob\" -> {qty: 0, who: \"bob\"}}]",
+        "a sequence of one map"
     );
 }

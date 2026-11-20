@@ -2,11 +2,11 @@ use crate::arguments::{self, Chart, Confirm, Models, Report, Tla};
 use crate::changes::{Compare, Difference, check_base, rule_changes};
 use crate::confirm::{Tlc, confirm_lines, differences};
 use crate::discovery::discover;
-use crate::print::{to_stderr, to_stdout, unreadable_lines};
+use crate::print::{problem_lines, to_stderr, to_stdout, unreadable_lines};
 use crate::reading::{ModelFile, load};
 use crate::run::{Bounds, Graphs, Ran, Search, checked, explore_each};
-use crate::select::{Target, select};
-use earnest_chart::{RuleChange, RuleChanges, Section, chart, report};
+use crate::select::{Target, select, select_with_removed};
+use earnest_chart::{RuleChange, RuleChanges, Section, Unreadable, chart, report};
 use earnest_check::Status;
 use earnest_tla::{Files, write};
 use std::fs;
@@ -93,7 +93,13 @@ pub(crate) fn report_command(arguments: &Report) -> Result<Exit, String> {
     }
     let files = gather(&arguments.selection.models)?;
     let rule = arguments.selection.rule.as_deref();
-    let targets = select(&files, arguments.selection.models.model.as_deref(), rule)?;
+    let selected = select_with_removed(
+        &files,
+        arguments.selection.models.model.as_deref(),
+        rule,
+        arguments.base.as_deref(),
+    )?;
+    let targets = selected.targets;
     let ran = explore_each(&searched(&targets, rule), bounds, Graphs::Kept);
     let sections: Vec<Section<'_>> = targets
         .iter()
@@ -123,7 +129,24 @@ pub(crate) fn report_command(arguments: &Report) -> Result<Exit, String> {
         base,
         changes: &changes,
     });
-    to_stdout(&report(&sections, since.as_ref()));
+    if let Some(error) = selected.unmatched
+        && changes.is_empty()
+    {
+        return Err(error);
+    }
+    let problems: Vec<(&str, Vec<String>)> = files
+        .iter()
+        .filter(|file| !file.problems().is_empty())
+        .map(|file| (file.path.as_str(), problem_lines(file)))
+        .collect();
+    let unreadable: Vec<Unreadable<'_>> = problems
+        .iter()
+        .map(|(file, lines)| Unreadable {
+            file,
+            problems: lines,
+        })
+        .collect();
+    to_stdout(&report(&sections, &unreadable, since.as_ref()));
     if let Some((base, compared)) = &compared {
         to_stderr(&compared.warnings(base).join("\n"));
     }

@@ -1,14 +1,17 @@
 use crate::Reader;
 use crate::names::DECLARATIONS;
-use crate::terms::{bare, whole};
+use crate::terms::bare;
 use earnest_ast::{Shape, ShapeKind, Term};
 use earnest_diagnostics::Place;
+use earnest_value::MOST_SAFE_INTEGER;
 use oxc_ast::ast::{
     Argument, ArrayExpressionElement, CallExpression, Expression, ObjectPropertyKind,
 };
 use oxc_span::GetSpan;
 use oxc_syntax::operator::{BinaryOperator, UnaryOperator};
 
+const BEYOND_EXACT: &str = "a JavaScript number is exact only from -9007199254740991 to \
+    9007199254740991, and the library throws on a bound outside that";
 const NEEDS_A_NUMBER: &str = "a whole number or a top-level number constant is needed here";
 
 pub(crate) const WRITTEN_TWICE: &str =
@@ -16,29 +19,50 @@ pub(crate) const WRITTEN_TWICE: &str =
 
 impl Reader<'_> {
     pub(crate) fn is_declaration(&self, wrapped: &Expression<'_>) -> bool {
-        match bare(wrapped) {
-            Expression::Identifier(name) => {
-                self.local(&name.name).is_none() && self.named_shape(&name.name).is_some()
-            }
-            Expression::CallExpression(call) => {
-                let Expression::StaticMemberExpression(member) = bare(&call.callee) else {
-                    return false;
-                };
-                let property = member.property.name.as_str();
-                if let Expression::Identifier(root) = bare(&member.object)
-                    && self.is_library(&root.name)
-                {
-                    return DECLARATIONS.contains(&property);
+        let mut current = bare(wrapped);
+        loop {
+            match current {
+                Expression::Identifier(name) => {
+                    return self.local(&name.name).is_none()
+                        && self.named_shape(&name.name).is_some();
                 }
-                matches!(property, "optional" | "initial") && self.is_declaration(&member.object)
+                Expression::CallExpression(call) => {
+                    let Expression::StaticMemberExpression(member) = bare(&call.callee) else {
+                        return false;
+                    };
+                    let property = member.property.name.as_str();
+                    if let Expression::Identifier(root) = bare(&member.object)
+                        && self.is_library(&root.name)
+                    {
+                        return DECLARATIONS.contains(&property);
+                    }
+                    if !matches!(property, "optional" | "initial") {
+                        return false;
+                    }
+                    current = bare(&member.object);
+                }
+                _ => return false,
             }
-            _ => false,
         }
     }
 
     pub(crate) fn shape(&mut self, wrapped: &Expression<'_>) -> Shape {
         let expr = bare(wrapped);
         let place = self.place(expr.span().start);
+        if self.too_deep(expr.span()) {
+            return Shape {
+                place,
+                kind: ShapeKind::Bool,
+                initial: None,
+            };
+        }
+        self.depth = self.depth.saturating_add(1);
+        let found = self.shape_of(expr, place);
+        self.depth = self.depth.saturating_sub(1);
+        found
+    }
+
+    fn shape_of(&mut self, expr: &Expression<'_>, place: Place) -> Shape {
         match expr {
             Expression::Identifier(name) => match self.named_shape(&name.name) {
                 Some(found) => Shape {
@@ -53,21 +77,30 @@ impl Reader<'_> {
     }
 
     pub(crate) fn whole_number(&self, wrapped: &Expression<'_>) -> Option<i64> {
+        let number = self.exact_number(wrapped)?;
+        i64::try_from(number)
+            .ok()
+            .filter(|found| found.unsigned_abs() <= MOST_SAFE_INTEGER.unsigned_abs())
+    }
+
+    fn exact_number(&self, wrapped: &Expression<'_>) -> Option<i128> {
         match bare(wrapped) {
-            Expression::NumericLiteral(literal) => whole(literal.value),
+            Expression::NumericLiteral(literal) => {
+                format!("{}", literal.value).parse::<i128>().ok()
+            }
             Expression::Identifier(name) => self
                 .numbers
                 .iter()
                 .find(|(known, _)| known == name.name.as_str())
-                .map(|(_, number)| *number),
+                .map(|(_, number)| i128::from(*number)),
             Expression::UnaryExpression(unary)
                 if unary.operator == UnaryOperator::UnaryNegation =>
             {
-                self.whole_number(&unary.argument)?.checked_neg()
+                self.exact_number(&unary.argument)?.checked_neg()
             }
             Expression::BinaryExpression(binary) => {
-                let left = self.whole_number(&binary.left)?;
-                let right = self.whole_number(&binary.right)?;
+                let left = self.exact_number(&binary.left)?;
+                let right = self.exact_number(&binary.right)?;
                 match binary.operator {
                     BinaryOperator::Addition => left.checked_add(right),
                     BinaryOperator::Subtraction => left.checked_sub(right),
@@ -268,12 +301,16 @@ impl Reader<'_> {
 
     fn needed_number(&mut self, value: &Expression<'_>) -> i64 {
         if let Some(number) = self.whole_number(value) {
-            number
-        } else {
-            let written = self.quoted(value.span());
-            self.refuse(value.span().start, &written, NEEDS_A_NUMBER);
-            0
+            return number;
         }
+        let written = self.quoted(value.span());
+        let message = if self.exact_number(value).is_some() {
+            BEYOND_EXACT
+        } else {
+            NEEDS_A_NUMBER
+        };
+        self.refuse(value.span().start, &written, message);
+        0
     }
 
     fn number_option(&mut self, call: &CallExpression<'_>, index: usize, key: &str) -> i64 {

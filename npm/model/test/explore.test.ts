@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { type Exploration, type Finding, explore, m } from "@earnest/model";
+import { type Exploration, type Finding, explore, m, replay } from "@earnest/model";
 import * as cart from "./models/cart.model.ts";
 import * as turnstile from "./models/turnstile.model.ts";
 
@@ -492,6 +492,30 @@ test("a remainder of whole numbers that are not negative is not a fault", () => 
   expect(found.status).toBe("pass");
 });
 
+test("a next state with a number past what JavaScript holds exactly is a fault", () => {
+  const Grow = m.model("Grow", { n: m.int(0, 1).initial(1) });
+  const grow = Grow.action("the number doubles past 2^53", {
+    then: (s) => ({ n: s.n * 9007199254740991 * 2 }),
+  });
+  const found = explore(Grow, { exports: { grow } });
+  expect(found.states).toBe(1);
+  expect(found.status).toBe("fail");
+  expect(kinds(found)).toStrictEqual(["fault"]);
+  expect(only(found).message).toBe(
+    "the `then` of the action `grow` computes a number too large to hold in this state",
+  );
+});
+
+test("a number computed inside a rule is the one JavaScript computes, which can't be intercepted", () => {
+  const Step = m.model("Step", { n: m.int(0, 1).initial(1) });
+  const exact = Step.rule({
+    says: "Adding 2^53 and taking it away keeps the number",
+    holds: (s) => s.n + 9007199254740992 - 9007199254740992 === s.n,
+  });
+  const found = explore(Step, { exports: { exact } });
+  expect(found.rules.map((rule) => rule.verdict)).toStrictEqual(["broken"]);
+});
+
 test("maxStates stops the search, which is then unfinished with unknown rules", () => {
   const { Counter, ...exports } = counter();
   const small = Counter.rule({ says: "The count stays small", holds: (s) => s.count <= 3 });
@@ -643,4 +667,62 @@ test("the result is plain data that survives JSON", () => {
   const { Hops, ...exports } = hops();
   const found = explore(Hops, { exports });
   expect(JSON.parse(JSON.stringify(found))).toStrictEqual(found);
+});
+
+test("m.rem is the remainder for whole numbers that are not negative", () => {
+  expect([m.rem(7, 3), m.rem(0, 5), m.rem(6, 3), m.rem(2, 9)]).toStrictEqual([1, 0, 0, 2]);
+});
+
+test("m.rem of a negative number, or by a divisor below 1, throws the remainder fault", () => {
+  for (const [a, b] of [
+    [-1, 3],
+    [5, 0],
+    [5, -2],
+    [-4, -2],
+  ] as const) {
+    expect(() => m.rem(a, b)).toThrow(/negative number or a divisor below 1/);
+  }
+});
+
+const FAULT = "takes a remainder with a negative number or a divisor below 1 in this state";
+
+test("a rule that takes the remainder of a negative number is unknown in explore", () => {
+  const Rem = m.model("Rem", { n: m.int(0, 2).initial(0) });
+  const below = Rem.rule({ says: "Below", holds: (s) => m.rem(s.n - 1, 3) !== 99 });
+  const always = Rem.end({ says: "Always", when: () => true });
+  const found = explore(Rem, { exports: { below, always } });
+  expect(found.rules.map((rule) => rule.verdict)).toStrictEqual(["unknown"]);
+  expect(found.findings.map((finding) => finding.message)).toStrictEqual([
+    `the rule \`below\` ${FAULT}`,
+  ]);
+});
+
+test("m.rem faults in a when, an end and a then, as the checker does", () => {
+  const Rem = m.model("Rem", { n: m.int(0, 2).initial(0) });
+  const inWhen = Rem.action("when", { when: (s) => m.rem(s.n - 1, 3) === 0, then: () => ({}) });
+  const messages = (found: Exploration) => found.findings.map((finding) => finding.message);
+  expect(messages(explore(Rem, { exports: { inWhen } }))).toStrictEqual([
+    `the \`when\` of the action \`inWhen\` ${FAULT}`,
+  ]);
+  const Ended = m.model("Ended", { n: m.int(0, 1).initial(0) });
+  const over = Ended.end({ says: "Over", when: (s) => m.rem(s.n - 1, 2) === 0 });
+  expect(messages(explore(Ended, { exports: { over } }))).toStrictEqual([
+    `the end \`over\` ${FAULT}`,
+  ]);
+  const Then = m.model("Then", { n: m.int(0, 2).initial(0), d: m.int(0, 1).initial(0) });
+  const share = Then.action("share", { then: (s) => ({ n: m.rem(s.n, s.d) }) });
+  expect(messages(explore(Then, { exports: { share } }))).toStrictEqual([
+    `the \`then\` of the action \`share\` ${FAULT}`,
+  ]);
+});
+
+test("replay reports the remainder fault of an action", () => {
+  const Then = m.model("Then", { n: m.int(0, 2).initial(1), d: m.int(0, 1).initial(0) });
+  const share = Then.action("share", { then: (s) => ({ n: m.rem(s.n, s.d) }) });
+  const state = (n: number) => [
+    { name: "n", value: n },
+    { name: "d", value: 0 },
+  ];
+  const path = { start: state(1), steps: [{ action: "share", state: state(0) }] };
+  expect(() => replay(Then, path, { exports: { share } })).toThrow(/remainder/);
 });

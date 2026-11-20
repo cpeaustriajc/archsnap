@@ -2,37 +2,52 @@ use crate::Reader;
 use crate::names::{DECLARATIONS, snake, why_outside};
 use crate::shapes::WRITTEN_TWICE;
 use earnest_ast::{Binary, HelperKind, Reach, TemplatePiece, Term, TermKind, Unary};
+use earnest_value::MOST_SAFE_INTEGER;
 use oxc_ast::ast::{
     Argument, BinaryExpression, CallExpression, Expression, LogicalExpression, ObjectExpression,
     ObjectPropertyKind, StaticMemberExpression, TemplateLiteral, UnaryExpression,
 };
 use oxc_span::GetSpan;
-use oxc_syntax::operator::{BinaryOperator, LogicalOperator, UnaryOperator};
+use oxc_syntax::operator::{AssignmentOperator, BinaryOperator, LogicalOperator, UnaryOperator};
 
 const NOT_AN_OPERATOR: &str = "this operator is outside the library";
 const NOT_IN_PLACE: &str =
     "changing a value in place is outside the library; every operation gives back a new value";
 
 pub(crate) fn bare<'p, 'a>(expr: &'p Expression<'a>) -> &'p Expression<'a> {
-    match expr {
-        Expression::ParenthesizedExpression(inner) => bare(&inner.expression),
-        Expression::TSNonNullExpression(inner) => bare(&inner.expression),
-        Expression::TSAsExpression(inner) => bare(&inner.expression),
-        Expression::TSSatisfiesExpression(inner) => bare(&inner.expression),
-        Expression::TSTypeAssertion(inner) => bare(&inner.expression),
-        _ => expr,
+    let mut current = expr;
+    loop {
+        current = match current {
+            Expression::ParenthesizedExpression(inner) => &inner.expression,
+            Expression::TSNonNullExpression(inner) => &inner.expression,
+            Expression::TSAsExpression(inner) => &inner.expression,
+            Expression::TSSatisfiesExpression(inner) => &inner.expression,
+            Expression::TSTypeAssertion(inner) => &inner.expression,
+            _ => return current,
+        };
     }
 }
 
 pub(crate) fn whole(value: f64) -> Option<i64> {
-    format!("{value}").parse().ok()
+    let number: i64 = format!("{value}").parse().ok()?;
+    (number.unsigned_abs() <= MOST_SAFE_INTEGER.unsigned_abs()).then_some(number)
 }
 
 impl Reader<'_> {
     pub(crate) fn term(&mut self, wrapped: &Expression<'_>) -> Term {
         let expr = bare(wrapped);
         let start = expr.span().start;
-        let kind = match expr {
+        if self.too_deep(expr.span()) {
+            return Term::new(self.place(start), TermKind::Null);
+        }
+        self.depth = self.depth.saturating_add(1);
+        let kind = self.term_kind(expr, start);
+        self.depth = self.depth.saturating_sub(1);
+        Term::new(self.place(start), kind)
+    }
+
+    fn term_kind(&mut self, expr: &Expression<'_>, start: u32) -> TermKind {
+        match expr {
             Expression::BooleanLiteral(literal) => TermKind::Bool(literal.value),
             Expression::NullLiteral(_) => TermKind::Null,
             Expression::NumericLiteral(literal) => self.number(literal.value, expr),
@@ -52,8 +67,7 @@ impl Reader<'_> {
             Expression::StaticMemberExpression(member) => self.member(member),
             Expression::ArrowFunctionExpression(arrow) => self.lambda(arrow),
             _ => self.outside(expr),
-        };
-        Term::new(self.place(start), kind)
+        }
     }
 
     pub(crate) fn local(&self, name: &str) -> Option<&str> {
@@ -68,7 +82,33 @@ impl Reader<'_> {
         self.local(name).is_none() && self.library.as_deref() == Some(name)
     }
 
+    fn is_read_early(&self, written: &str) -> bool {
+        let Some((_, mark)) = self
+            .uninitialised
+            .iter()
+            .rev()
+            .find(|(waiting, _)| waiting == written)
+        else {
+            return false;
+        };
+        self.locals
+            .iter()
+            .rposition(|(source, _)| source == written)
+            .is_none_or(|index| index < *mark)
+    }
+
     fn name(&mut self, written: &str, offset: u32) -> TermKind {
+        if self.is_read_early(written) {
+            return self.refused(
+                offset,
+                written,
+                &format!(
+                    "`{written}` is declared later in this block, so reading it here is an \
+                     error in JavaScript, never the constant of the same name outside the \
+                     block: move the declaration above its first use"
+                ),
+            );
+        }
         let found = self
             .locals
             .iter()
@@ -124,9 +164,14 @@ impl Reader<'_> {
                 )
             }
             Expression::NewExpression(_) => ("new", "making an object is outside the library"),
-            Expression::AssignmentExpression(assignment) => {
-                (assignment.operator.as_str(), NOT_IN_PLACE)
-            }
+            Expression::AssignmentExpression(assignment) => (
+                assignment.operator.as_str(),
+                if assignment.operator == AssignmentOperator::Remainder {
+                    "changing a value in place is outside the library; write `m.rem(a, b)`"
+                } else {
+                    NOT_IN_PLACE
+                },
+            ),
             Expression::UpdateExpression(update) => (update.operator.as_str(), NOT_IN_PLACE),
             Expression::ArrayExpression(_) => (
                 "[]",
@@ -162,7 +207,8 @@ impl Reader<'_> {
             self.refused(
                 expr.span().start,
                 &written,
-                "a number in a model is a whole number that fits in 64 bits",
+                "a number in a model is a whole number from -9007199254740991 to 9007199254740991, as far \
+                 as a JavaScript number is exact",
             )
         }
     }
@@ -226,7 +272,13 @@ impl Reader<'_> {
             BinaryOperator::Addition => Binary::Add,
             BinaryOperator::Subtraction => Binary::Subtract,
             BinaryOperator::Multiplication => Binary::Multiply,
-            BinaryOperator::Remainder => Binary::Remainder,
+            BinaryOperator::Remainder => {
+                return self.refused(
+                    binary.span.start,
+                    "%",
+                    "JavaScript's `%` can't be checked for a negative number: write `m.rem(a, b)`",
+                );
+            }
             BinaryOperator::Equality | BinaryOperator::Inequality => {
                 return self.refused(
                     binary.span.start,
@@ -330,6 +382,14 @@ impl Reader<'_> {
         match bare(&call.callee) {
             Expression::Identifier(callee) => {
                 let name = callee.name.as_str();
+                if self.is_read_early(name) {
+                    return self.refused(
+                        start,
+                        name,
+                        "this name is declared later in this block, so calling it here is an \
+                         error in JavaScript: move the declaration above its first use",
+                    );
+                }
                 if self.local(name).is_some() {
                     return self.refused(
                         start,
@@ -408,6 +468,18 @@ impl Reader<'_> {
             "setOf" => TermKind::SetOf(self.arguments(call)),
             "seqOf" => TermKind::SeqOf(self.arguments(call)),
             "mapOf" => self.map_of(call),
+            "rem" => match self.arguments(call).as_slice() {
+                [left, right] => TermKind::Binary(
+                    Binary::Remainder,
+                    Box::new(left.clone()),
+                    Box::new(right.clone()),
+                ),
+                _ => self.refused(
+                    call.span.start,
+                    &format!("{library}.rem"),
+                    "`m.rem` takes the number and the divisor: `m.rem(a, b)`",
+                ),
+            },
             "forall" => self.across(Reach::Every, call),
             "exists" => self.across(Reach::Some, call),
             _ => {
@@ -565,7 +637,7 @@ mod tests {
             "comparison"
         );
         assert_eq!(
-            holds("(s) => (s.n + 1 - 2) * 3 % 4"),
+            holds("(s) => m.rem((s.n + 1 - 2) * 3, 4)"),
             "(% (* (- (+ s.n 1) 2) 3) 4)",
             "arithmetic"
         );

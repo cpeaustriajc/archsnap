@@ -1,3 +1,8 @@
+/// The largest whole number a JavaScript number holds exactly, 2^53 - 1. A number of a
+/// TypeScript model file is a JavaScript number, so it reaches this far in either direction and
+/// no further.
+pub const MOST_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+
 /// An integer type of Rust, which every number in a Rust model file has.
 ///
 /// A [`Value`](crate::Value) holds a number in 64 bits with a sign, so the bounds given here

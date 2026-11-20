@@ -6,6 +6,8 @@
 //! not define and a value of the wrong kind are left for the lowering to find.
 
 mod bodies;
+#[cfg(test)]
+mod checks;
 mod file;
 mod members;
 mod names;
@@ -14,7 +16,7 @@ mod shapes;
 mod show;
 mod terms;
 
-use earnest_ast::{Reading, Shape};
+use earnest_ast::{MOST_NESTING, Reading, Shape, TOO_DEEP, nesting_problem};
 use earnest_diagnostics::{Place, Problem};
 use oxc_allocator::Allocator;
 use oxc_parser::Parser;
@@ -34,6 +36,8 @@ pub(crate) struct Reader<'s> {
     plain_values: Vec<String>,
     models: Vec<String>,
     locals: Vec<(String, String)>,
+    uninitialised: Vec<(String, usize)>,
+    depth: usize,
 }
 
 /// Reads the TypeScript model file `source` and gives every model it declares, in file order.
@@ -54,6 +58,12 @@ pub(crate) struct Reader<'s> {
 /// still fail in the lowering, which is where an undefined name is found.
 #[must_use]
 pub fn read(file: &str, source: &str) -> Reading {
+    if let Some(problem) = nesting_problem(file, source) {
+        return Reading {
+            drafts: Vec::new(),
+            problems: vec![problem],
+        };
+    }
     let allocator = Allocator::default();
     let dialect = SourceType::from_path(file).unwrap_or_else(|_| SourceType::ts());
     let parsed = Parser::new(&allocator, source, dialect).parse();
@@ -77,6 +87,46 @@ pub fn read(file: &str, source: &str) -> Reading {
     Reading { drafts, problems }
 }
 
+/// Whether the TypeScript file `source` imports or may import `@earnest/model`, so it is a
+/// model file and must be read, or refused as unreadable, and never left out.
+///
+/// It is true when a static `import` or an `export ... from` names `@earnest/model` once the
+/// escapes of the specifier are resolved, as JavaScript does (`"@earnest\x2fmodel"` is the
+/// library), and when the file holds the specifier written plainly in either kind of quote.
+/// It is also true when the file can't be parsed, makes a dynamic `import()` or calls
+/// `require`, and mentions `earnest` anywhere: the file can't be shown to leave the library
+/// alone, and the reader then refuses what it can't read. `file` picks the dialect as it does
+/// for [`read`].
+#[must_use]
+pub fn reaches_library(file: &str, source: &str) -> bool {
+    let plainly = names::LIBRARY_QUOTES
+        .iter()
+        .any(|quoted| source.contains(quoted));
+    if plainly {
+        return true;
+    }
+    let mentions = source.contains("earnest");
+    if !mentions && !source.contains('\\') {
+        return false;
+    }
+    if nesting_problem(file, source).is_some() {
+        return true;
+    }
+    let allocator = Allocator::default();
+    let dialect = SourceType::from_path(file).unwrap_or_else(|_| SourceType::ts());
+    let parsed = Parser::new(&allocator, source, dialect).parse();
+    let imports = parsed
+        .module_record
+        .requested_modules
+        .keys()
+        .any(|specifier| specifier.as_str() == names::LIBRARY_MODULE);
+    let unclear = parsed.fatal_error
+        || !parsed.diagnostics.is_empty()
+        || !parsed.module_record.dynamic_imports.is_empty()
+        || source.contains("require");
+    imports || (unclear && mentions)
+}
+
 impl<'s> Reader<'s> {
     fn new(file: &'s str, source: &'s str) -> Self {
         let mut line_starts = vec![0];
@@ -93,6 +143,8 @@ impl<'s> Reader<'s> {
             plain_values: Vec::new(),
             models: Vec::new(),
             locals: Vec::new(),
+            uninitialised: Vec::new(),
+            depth: 0,
         }
     }
 
@@ -112,6 +164,15 @@ impl<'s> Reader<'s> {
             line: u32::try_from(line).unwrap_or(u32::MAX),
             column: u32::try_from(before + 1).unwrap_or(u32::MAX),
         }
+    }
+
+    pub(crate) fn too_deep(&mut self, span: Span) -> bool {
+        if self.depth < MOST_NESTING {
+            return false;
+        }
+        let written = self.quoted(Span::new(span.start, span.start.saturating_add(1)));
+        self.refuse(span.start, &written, TOO_DEEP);
+        true
     }
 
     pub(crate) fn refuse(&mut self, offset: u32, feature: &str, message: &str) {

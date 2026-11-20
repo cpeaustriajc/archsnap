@@ -18,7 +18,7 @@ export const Hall = m.model("Hall", {
 });
 
 export const turn = Hall.action("someone turns the hall dimmer one notch", {
-	then: (s) => ({ level: (s.level + 1) % 3 }),
+	then: (s) => ({ level: m.rem(s.level + 1, 3) }),
 });
 
 export const hallKnown = Hall.rule({

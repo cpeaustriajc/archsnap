@@ -523,7 +523,7 @@ fn alone(op: Op, on: &Written) -> Option<Written> {
             Kind::optional(on.kind.clone()),
         ),
         Op::Unwrap => Written::new(format!("{text}[1]"), on.kind.present()),
-        Op::Fit(_) => Written::new(text.clone(), Kind::Int),
+        Op::Fit(_) | Op::Safe => Written::new(text.clone(), Kind::Int),
         Op::Set(SetOp::Size) => Written::new(format!("Cardinality({text})"), Kind::Int),
         Op::Map(MapOp::Size) => Written::new(format!("Cardinality(DOMAIN {text})"), Kind::Int),
         Op::Map(MapOp::Keys) => Written::new(format!("(DOMAIN {text})"), Kind::set(on.kind.key())),

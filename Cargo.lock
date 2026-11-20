@@ -436,6 +436,7 @@ dependencies = [
  "earnest_diagnostics",
  "earnest_ir",
  "earnest_semantic",
+ "earnest_value",
  "oxc_allocator",
  "oxc_ast",
  "oxc_parser",

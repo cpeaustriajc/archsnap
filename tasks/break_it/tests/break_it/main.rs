@@ -6,6 +6,8 @@
 
 mod second;
 mod support;
+mod third;
+mod third_b;
 
 use support::{Sandbox, is_broken_after, rule};
 

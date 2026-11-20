@@ -370,3 +370,41 @@ fn a_problem_in_a_constant_that_is_read_is_reported_once() {
         .push(("spare".to_owned(), here(name("missing"))));
     assert_eq!(refused_draft_here(&source), "`missing`");
 }
+
+fn nested_in_negations(depth: usize) -> Term {
+    (0..depth).fold(field("flag"), |inner, _| not(inner))
+}
+
+fn with_room<T: Send>(work: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024 * 1024)
+            .spawn_scoped(scope, work)
+            .expect("a thread with room starts")
+            .join()
+            .expect("the work does not panic")
+    })
+}
+
+#[test]
+fn an_expression_nested_past_the_limit_is_refused_with_one_sentence() {
+    let problem = with_room(|| refusal(fields(), nested_in_negations(2_000)));
+    assert_eq!(
+        problem.feature, "a deeply nested expression",
+        "the feature names what is wrong"
+    );
+    assert!(
+        problem.message.contains("1000 levels deep"),
+        "the sentence names the limit: {}",
+        problem.message
+    );
+}
+
+#[test]
+fn an_expression_nested_as_deep_as_the_limit_allows_is_read() {
+    assert_eq!(
+        with_room(|| verdict_of(&with_rule(fields(), nested_in_negations(900)))),
+        Ok(true),
+        "900 negations of `true` are `true`"
+    );
+}

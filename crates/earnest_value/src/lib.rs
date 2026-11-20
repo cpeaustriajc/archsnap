@@ -10,5 +10,5 @@ mod int_type;
 mod value;
 
 pub use domain::{Domain, MOST_VALUES_LISTED};
-pub use int_type::IntType;
+pub use int_type::{IntType, MOST_SAFE_INTEGER};
 pub use value::{Sym, Symbols, Value};

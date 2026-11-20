@@ -12,7 +12,7 @@ mod graph;
 mod outcome;
 mod report;
 
-pub use explore::{Limits, explore};
+pub use explore::{Limits, WORKER_STACK, explore};
 pub use graph::{Edge, Graph, Node};
 pub use outcome::{
     Change, Finding, FindingKind, Named, Outcome, Path, RuleOutcome, Shown, Status, Step, Verdict,

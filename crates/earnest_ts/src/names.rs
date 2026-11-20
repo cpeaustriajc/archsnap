@@ -1,5 +1,7 @@
 pub(crate) const LIBRARY_MODULE: &str = "@earnest/model";
 
+pub(crate) const LIBRARY_QUOTES: [&str; 2] = ["\"@earnest/model\"", "'@earnest/model'"];
+
 pub(crate) const DECLARATIONS: [&str; 13] = [
     "boolean", "int", "enum", "oneOf", "record", "set", "map", "seq", "queue", "lock", "timer",
     "request", "retry",

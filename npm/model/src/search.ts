@@ -1,6 +1,6 @@
 import type { Declaration } from "./declarations.ts";
 import type { ActionRunner, AnyModel, RuleRunner, Runners } from "./model.ts";
-import { type Json, type Row, isJsonList, keyOf, toJson } from "./values.ts";
+import { type Json, RemainderFault, type Row, isJsonList, keyOf, toJson } from "./values.ts";
 
 /** A field or an input with its value in JSON form. */
 export interface Named {
@@ -130,6 +130,9 @@ export const attempt = <T>(run: () => T): Attempt<T> => {
   try {
     return { fault: null, value: run() };
   } catch (thrown) {
+    if (thrown instanceof RemainderFault) {
+      return { fault: REMAINDER, value: null };
+    }
     if (thrown instanceof TypeError) {
       return { fault: /\bnull\b/.test(thrown.message) ? NULL_READ : WRONG_KIND, value: null };
     }

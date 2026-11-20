@@ -78,7 +78,9 @@ value listed twice in `m.enum` or `m.oneOf`, an optional of an optional, and a l
 owner as a map value or a sequence or queue item, whose free state `null` could not be told from
 a missing entry. `earnest verify` refuses the same.
 
-`m.setOf(a, b)`, `m.seqOf(a, b)` and `m.mapOf([k, v])` write collection values; a queue's
+`m.rem(a, b)` is the remainder of whole numbers: `%` is not allowed in a model file, and `m.rem` of a
+negative `a` or a `b` below 1 is a fault that `explore` and `replay` report as `earnest verify`
+does. `m.setOf(a, b)`, `m.seqOf(a, b)` and `m.mapOf([k, v])` write collection values; a queue's
 `.initial` takes `m.seqOf(...)`. `m.forall(T, f)` and `m.exists(T, f)` range over a declaration
 or a collection. Every declaration has `values()`, which lists what it declares in the order the
 checker tries them, `has(value)`, `starts()`, `count` and `fromJson(json)`.
@@ -126,9 +128,14 @@ by its `label`, the action's sentence.
 
 ## Where Node and the checker differ
 
-- `%` with a negative left side, or with a negative right side, is a fault in the checker. In
-  Node the operator can't be intercepted, so it gives JavaScript's result. Only `%` by zero is
-  seen, because it gives `NaN`, and is reported as the same fault.
+- Arithmetic past 2^53 - 1 is a fault in the checker, "computes a number too large to hold",
+  wherever a model computes it. In Node the library sees only the numbers it is given back: a
+  next state that holds one is the same fault in the `then` of its action. A number computed
+  inside a rule, an end or a `when`, or by a helper on the way to a value that is not a number,
+  is the rounded value JavaScript computes, so `s.n + 9007199254740992 - 9007199254740992 ===
+  s.n` is judged by what JavaScript makes of it. `m.int` throws on a bound outside the safe
+  integers, and `m.oneOf` on a number outside them or one that is not whole, as the checker
+  refuses the same file.
 - `===` on two records compares the objects in Node. Compare records field by field. Sets, maps,
   sequences, queues, locks, timers, requests and retries are shared by content, so `===` on them
   compares content.

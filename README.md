@@ -4,9 +4,10 @@ A model checker for models written in your app's own language. A coding agent st
 a change as a model in TypeScript or Rust, `earnest verify` visits every reachable state, and the
 result goes into the PR as a statechart and a report.
 
-Status: version 1 is built and passes its own checks, and is not yet proven. Two adversarial
-passes each found models with a broken rule that were reported as passing; those are fixed, and
-a third pass has not been run. TLC has not confirmed the TLA+ export in CI. The spec is the
+Status: version 1 is built and passes its own checks, and is not yet proven. Three adversarial
+passes each found models with a broken rule that were reported as passing; those are fixed
+except what "Where Node and the checker differ" in `npm/model/README.md` says, and a fourth pass
+has not been run. TLC has not confirmed the TLA+ export in CI. The spec is the
 Claude Doc "A formal verification suite for agents".
 
 ## Commands
@@ -41,17 +42,30 @@ earnest confirm --tlc tla2tools.jar
 ### Which files are models
 
 A file is a model file when it is a `.ts`, `.mts` or `.tsx` file that imports `@earnest/model`, or
-a `.rs` file that contains `earnest::model`, however the path is spaced or grouped: `use
-earnest::{model::Model}`, `use earnest as kit` and `extern crate earnest` count too. Folders named `node_modules`, `target`, `dist`,
-`build` and any folder whose name starts with a dot are skipped. Models are checked and printed in
-order of file path, then of position in the file.
+a `.rs` file that names the `earnest` crate. The file is judged by what its imports mean and not
+by how they are written. In TypeScript the specifier is what JavaScript makes of it, so
+`"@earnest\x2fmodel"`, a Unicode escape or a line continuation in it is the library, and so is
+an `export ... from`, a dynamic `import()` or a `require`. In Rust the file is read as tokens, so
+a path that starts with `earnest` counts however it is spaced, grouped or broken by a comment:
+`use earnest::model::Model`, `use earnest::/* c */model::Model`, `use earnest as kit` and
+`extern crate earnest`. A word in a comment or a text is not a use. A file that mentions
+`earnest`, and that can't be parsed or reaches for a module in a way the checker can't follow,
+is not left out: it is a model file, and the reader refuses what it can't read. Folders named
+`node_modules`, `target`, `dist`, `build` and any folder whose name starts with a dot are
+skipped. Models are checked and printed in order of file path, then of position in the file.
 
-A file is never left out without a word. A file with one of those extensions is `unreadable`,
-with a problem that names it, when it imports the library and is not UTF-8 text (the problem is
-at the first byte that is not, or at the top of a file saved as UTF-16), and when it can't be
-opened at all, as a file without read permission or a link to nothing: the checker can't tell
-that it holds no model. So is a folder that can't be listed. A folder whose name ends like a
-model file is searched as a folder, and a link to a folder is not followed.
+A file is either read with the meaning its language gives it, or refused as unreadable with a
+sentence saying why, and it is never left out without a word. A file with one of those
+extensions is `unreadable`, with a problem that names it, when it reaches the library and is not
+UTF-8 text (the problem is at the first byte that is not, or at the top of a file that is UTF-16
+text; a file that starts with a UTF-16 byte order mark and holds ASCII text after it is not
+UTF-16 text, so its problem is its first byte), and when it can't be opened at all, as a file
+without read permission or a link to nothing: the checker can't tell that it holds no model. So
+is a folder that can't be listed. A folder whose name ends like a model file is searched as a
+folder, and a link to a folder is not followed. A file with a NUL byte between its letters is
+found and refused by the reader. `earnest report` names every unreadable file, with its
+problems, in a section `Unreadable files` of the Markdown, and `earnest verify` lists it as
+`unreadable`: no unreadable file is left out of either.
 
 ### Text output
 
@@ -189,9 +203,14 @@ rule changes since origin/main
 its whole model, or gone with its file. The models of a file that was deleted, renamed or no
 longer imports the library are found in the base commit under the paths the run searches, and
 their rules are listed as `removed` after the changes of the files that are still there. A
-renamed file or a renamed model therefore shows each rule twice, as `removed` under the old name
-and `added` under the new one. With `--model`, only removed models of that name are listed. A
-rule is
+file that has become unreadable since the base lists the rules of its base models as `removed`
+too, because the run no longer has them, and the file is shown as `unreadable` beside them. A
+file that is unreadable at the base as well has no rules to compare, and a warning on stderr
+says so. A renamed file or a renamed model therefore shows each rule twice, as `removed` under
+the old name and `added` under the new one. With `--model`, only removed models of that name
+are listed, also when no model of that name is left: `--base <ref> --model Name` for a model
+that was deleted lists its rules as `removed` and exits as a run with no model does, and only a
+name that neither the run nor the base has is exit 2. A rule is
 `loosened` when some reachable state of the new model passes the new rule and breaks the old one,
 `tightened` when the reverse happens and no state loosens it, `changed` when its condition differs
 but no reachable state tells the two apart or the old condition can't be read against the new
@@ -210,13 +229,18 @@ in Rust, so moving white space is not a change.
 `earnest chart` prints one fenced `mermaid` block holding a `stateDiagram-v2` chart. States and
 arrows carry the labels from the model's view. A state that breaks a rule has the class `broken`.
 A chart never has more than 20 arrows: when the model has more, the chart keeps the paths to the
-broken states first and says how many states and arrows it left out. When the shortest path to a
-broken state is longer than what is left of the 20 arrows, the chart keeps the first arrows of
-that path, does not draw the broken state, and the note says so: `Not shown: 5 of 26 states and
-5 of 25 arrows. A broken state lies beyond what is shown.`
+broken states first and says how many states and arrows it left out. The states are counted
+for what they are: a box of the chart stands for every state with its label, so the note counts
+the states of the boxes it left out, and an arrow is one box to another however many actions it
+carries. When the shortest path to a broken state is longer than what is left of the 20 arrows,
+the chart keeps the first arrows of that path, does not draw the broken state, and the note
+says so: `Not shown: 5 of 26 states and 5 of 25 arrows. A broken state lies beyond what is
+shown.`
 
 `earnest report` prints Markdown for a PR body: one section per model with its result line, its
-chart, the path to each broken rule, and the rule changes when `--base` is given.
+chart, the path to each broken rule, a section `Unreadable files` that names each file the
+checker could not read and why, and the rule changes when `--base` is given. A file is never
+left out of the report without a word: a report of a run with an unreadable file says so.
 
 ### TLA+ export
 
@@ -283,7 +307,9 @@ export type State = m.Infer<typeof AddToCartFocus>;
 - The id of an action, rule or end is the name of its exported constant.
 - `end` marks states where stopping is correct. Any other state with no action is stuck.
 - `view` is optional. `step` maps an action id to its arrow label; the default is the action's
-  sentence. `colors` accepts `broken`, `start` and `end`.
+  sentence. `colors` accepts `broken`, `start` and `end`, each with `#` and 3, 4, 6 or 8
+  hexadecimal digits or a color name of letters; any other part, or any other color, makes the
+  file unreadable, because the chart would leave it out without a word.
 
 ### What a model file may contain
 
@@ -298,7 +324,7 @@ export type State = m.Infer<typeof AddToCartFocus>;
   own name.
 - `type` and `interface` declarations.
 - In a function: literals, `null`, field and input reads, `===`, `!==`, `<`, `<=`, `>`, `>=`,
-  `&&`, `||`, `!`, `+`, `-` (also as a sign: `-1`), `*`, `%`, the `? :` choice, the `!` after a
+  `&&`, `||`, `!`, `+`, `-` (also as a sign: `-1`), `*`, `m.rem(a, b)`, the `? :` choice, the `!` after a
   value that TypeScript needs to read a field of an optional (`s.chosen!.qty`), object literals with spread, calls to the
   primitives below and to helper functions, and template strings in `view` labels. A function
   body is one expression, or a block of `const` declarations and `if (...) return ...;`
@@ -306,19 +332,36 @@ export type State = m.Infer<typeof AddToCartFocus>;
 - A name means what TypeScript says it means. In an action, an input is in scope only in a
   function that takes it, as `(s, { by })` or as a field of the whole input, `(s, input) =>
   input.by`; `when` and `then` may take different ones. Where a function does not take it, the
-  same name is the top-level constant.
+  same name is the top-level constant. A `const` in a block is in scope in the whole block, so
+  a name that is read before its declaration, or in its own initializer (`const a = a + 1;`),
+  is refused: in JavaScript it is the block's own constant with no value yet, and the file
+  throws, never the top-level constant of the same name.
+- A number is a JavaScript number, so it is exact from -9007199254740991 to 9007199254740991.
+  A literal outside that is refused, so are the bounds of an `m.int` and the numbers of an
+  `m.oneOf` outside it (the library throws on them too), and a number a model computes past it
+  is a fault, "computes a number too large to hold", in a rule, an end, a `when`, a `then` and
+  a helper. A sum or a product past it would be rounded when the file runs, so it is no value
+  to judge a rule by.
+- An expression is read to a depth of 1000, counted as the brackets, prefix operators,
+  operands of a chain and statements it nests. A file with a deeper one is unreadable, with the
+  place where it passes the limit, and the other models of the run are still checked: the
+  checker never stops with the file that is too deep.
 
 - A record literal is a value of a declared record when each field is: a field declared
   optional takes a value or `null`. So `g === "ann" ? { qty: 0, who: g } : { qty: 1, who: null }`
   is one kind of record, and so is a record bound to a `const` and spread into the field that
-  declares it, or given back by a helper function. It prints, compares and exports to TLA+ as
-  the declared record does.
+  declares it, or given back by a helper function, or written as the value of an entry of
+  `m.mapOf`, an item of `m.setOf` or `m.seqOf`, or a field of another record. The entries of
+  `m.mapOf` join into one record type, as the items of `m.setOf` do. It prints, compares and
+  exports to TLA+ as the declared record does.
 
 Anything else makes the file unreadable: `await`, loops, `let`, assignment, `new`, classes,
 `fetch`, `Date`, `Math.random`, other imports, a name written twice in one object, a value
 listed twice in `m.enum` or `m.oneOf` (the library throws on it too), and any name the file does
-not define, also in a constant that nothing reads. `%` on a negative number is a
-fault, because languages disagree on its result.
+not define, also in a constant that nothing reads. The operator `%` and `%=` are refused: write `m.rem(a, b)`, which is
+the remainder, and a fault for a negative `a` or a `b` below 1, because languages disagree on
+the result. The library's `m.rem` throws the same fault in Node, so `explore` and `replay` report
+it as `earnest verify` does. Rust's `%` keeps its meaning, a fault on a negative number.
 
 ## Writing a model in Rust
 
@@ -382,8 +425,13 @@ impl Turnstile {
   `self.name(..)`. A function outside the block is one too, called as `name(..)`. The two are
   kept apart, so a method and a function may share a name, and so may methods of two models.
   A helper's parameters need no `#[range]`, which Rust would refuse there: a helper is only
-  called with values. A function of the file can't be named `forall`, `exists` or `Some`. The
-  three attributes are written plainly, never with a path. No part of a model is under `#[cfg]` or
+  called with values. The checker reads `forall`, `exists`, `Some`, `None`, `Set`, `Seq` and
+  `Map` by the name they are written with, so nothing of the file can have such a name: not a
+  function, a constant, a struct or an enum, and no value of a body can have the name of a
+  function or of `forall` or `exists` that the body calls. An item of the library is imported
+  by its own name: `use earnest::model::forall as exists;` is refused, as is any other `as`
+  except `as _`. A `use` inside a body, a `macro_rules!` and a `type` alias are refused too, as a
+  model file holds no such item. The three attributes are written plainly, never with a path. No part of a model is under `#[cfg]` or
   `#[cfg_attr]`: the checker reads one text for every build. Only an item that is not part of
   a model (a test module, a function, a plain `impl` block) may be `#[cfg(test)]`, and it is
   skipped.
@@ -405,7 +453,13 @@ the checker agrees with Rust or refuses the file. It never reads the file as som
   nothing else types: `let most: u8 = 3;`. Two integer types don't mix, as in Rust. A
   `#[range(lo, hi)]` must lie inside its type. A `u64`, a `usize` and the 128-bit types
   reach as far as an `i64` does, and beyond that the fault is "computes a number too large to
-  hold". TypeScript has one kind of number, held in 64 bits, so there `s.n - 1` at 0 is -1.
+  hold". A negated literal is one number, so `-128` is an `i8` and `-9223372036854775808` an
+  `i64`, in an expression, in `#[initial]`, in `#[range]`, in a constant and in the TLA+ export.
+  TypeScript has one kind of number, a JavaScript number, exact to 2^53 - 1 in either
+  direction, so there `s.n - 1` at 0 is -1 and a number past 2^53 - 1 is a fault. Rust keeps
+  its integer types, whose arithmetic is exact in 64 bits.
+- **A `let` is as Rust reads it.** The right side of `let n = n + 1;` is the `n` before it, and
+  a use of a name before a later `let` of the same name is the name outside, as in Rust.
 - **`Some(None)` is not `None`.** `get`, `first`, `last` and `head` give an `Option`, so a `Map`
   value and a `Seq` or `Queue` item can't be an `Option`: the file is unreadable. Hold a struct
   with an `Option` field, or leave the entry out. `Option<Option<T>>`, `Some(None)`,
@@ -424,7 +478,7 @@ operation gives back a new value and changes nothing in place.
 | Group | Declared with | Operations |
 |---|---|---|
 | Boolean | `m.boolean()` / `bool` | `&&`, `\|\|`, `!`, `===` |
-| Number | `m.int(lo, hi)` / an integer type with `#[range(lo, hi)]` | `+`, `-`, `*`, `%`, `<`, `<=`, `>`, `>=`, `===` |
+| Number | `m.int(lo, hi)` / an integer type with `#[range(lo, hi)]` | `+`, `-`, `*`, `m.rem(a, b)` / `%`, `<`, `<=`, `>`, `>=`, `===` |
 | Enum | `m.enum([...])`, `m.oneOf([...])` / `enum` | `===`, `!==` |
 | Optional | `.optional()` / `Option<T>` | `=== null`, `!== null` / `is_some()`, `is_none()`, `is_some_and(f)`, `== Some(x)` |
 | Record | `m.record({...})` / `struct` | field read, `{ ...r, field: v }` / `R { field: v, ..r.clone() }` |
@@ -459,7 +513,11 @@ is.
 The TypeScript library also runs as ordinary code. `explore(Model)` searches a model in Node and
 returns its distinct state count, each rule's verdict and the shortest path to each broken rule.
 `replay(Model, path)` takes a path from `earnest verify --json`, applies it one action at a time
-and returns the states it passes through.
+and returns the states it passes through. Node can't see one fault of the checker: a number computed past 2^53 - 1 inside a rule, an end
+or a `when`. JavaScript's operators can't be intercepted from a library, so `explore` gives the
+value JavaScript computes there, where `earnest verify` reports the fault. Only a next state
+that holds such a number is seen. `earnest verify` is the authority on these; see
+`npm/model/README.md`.
 
 ## Layout
 

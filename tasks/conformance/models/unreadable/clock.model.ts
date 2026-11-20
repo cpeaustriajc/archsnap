@@ -5,7 +5,7 @@ export const Stamp = m.model("Stamp", {
 });
 
 export const mark = Stamp.action("the app stamps the time", {
-	then: () => ({ parity: Date.now() % 2 }),
+	then: () => ({ parity: m.rem(Date.now(), 2) }),
 });
 
 export const binary = Stamp.rule({

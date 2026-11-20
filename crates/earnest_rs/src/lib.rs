@@ -7,11 +7,14 @@
 
 mod bodies;
 mod items;
+mod library;
 mod reader;
 mod shapes;
 mod terms;
 
 use earnest_ast::Reading;
+
+pub use library::uses_library;
 
 /// Reads every model in the Rust source text `source`.
 ///

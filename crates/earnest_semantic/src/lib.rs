@@ -15,8 +15,8 @@ mod terms;
 mod types;
 
 use earnest_ast::{
-    ActionBody, ActionDraft, Draft, EndDraft, FieldDraft, HelperKind, LabelDraft, RuleDraft, Shape,
-    ShapeKind, TemplatePiece, Term, TermKind,
+    ActionBody, ActionDraft, Draft, EndDraft, FieldDraft, HelperKind, LabelDraft, MOST_NESTING,
+    RuleDraft, Shape, ShapeKind, TOO_DEEP, TemplatePiece, Term, TermKind,
 };
 use earnest_diagnostics::{Place, Problem};
 use earnest_ir::{Action, End, Expr, Field, Frame, Input, Label, Model, Piece, Rule, View, eval};
@@ -34,6 +34,7 @@ struct Lowerer<'a> {
     problems: Vec<Problem>,
     fields: Vec<(String, Type)>,
     in_flight: Vec<(Option<HelperKind>, String)>,
+    depth: usize,
 }
 
 struct Shaped {
@@ -110,6 +111,7 @@ impl<'a> Lowerer<'a> {
             problems: Vec::new(),
             fields: Vec::new(),
             in_flight: Vec::new(),
+            depth: 0,
         }
     }
 
@@ -292,6 +294,16 @@ impl Lowerer<'_> {
     }
 
     fn changes(&mut self, term: &Term, scope: &mut Scope) -> Lowering<Vec<Option<Expr>>> {
+        if self.depth >= MOST_NESTING {
+            return Err(self.stop(term.place, "a deeply nested expression", TOO_DEEP));
+        }
+        self.depth = self.depth.saturating_add(1);
+        let lowered = self.changes_of(term, scope);
+        self.depth = self.depth.saturating_sub(1);
+        lowered
+    }
+
+    fn changes_of(&mut self, term: &Term, scope: &mut Scope) -> Lowering<Vec<Option<Expr>>> {
         if let TermKind::Record { base, fields } = &term.kind {
             return self.changed_fields(base.as_deref(), fields, scope);
         }

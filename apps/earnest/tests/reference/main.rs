@@ -15,7 +15,6 @@ const HANG_GUARD: Duration = Duration::from_mins(5);
 const UNREADABLE_FOLDER: &str = "unreadable";
 const SLOW_FOLDER: &str = "limits";
 const STATES_OF_A_SLOW_MODEL: &str = "20";
-const REMAINDER_FAULT: &str = "takes a remainder with a negative number or a divisor below 1";
 
 const HOOKS: &str = r#"import { registerHooks } from "node:module";
 import { pathToFileURL } from "node:url";
@@ -146,19 +145,7 @@ fn checker_results(scratch: &Path, file: &Path) -> Vec<Value> {
         .clone()
 }
 
-fn has_the_accepted_remainder_fault(model: &Value) -> bool {
-    model["findings"].as_array().is_some_and(|findings| {
-        findings.iter().any(|finding| {
-            finding["kind"] == "fault"
-                && finding["message"]
-                    .as_str()
-                    .is_some_and(|message| message.contains(REMAINDER_FAULT))
-        })
-    })
-}
-
 fn comparable(model: &Value) -> Value {
-    let remainder_fault = has_the_accepted_remainder_fault(model);
     let rules: Vec<Value> = model["rules"]
         .as_array()
         .expect("a model has a `rules` array")
@@ -170,7 +157,6 @@ fn comparable(model: &Value) -> Value {
         .expect("a model has a `findings` array")
         .iter()
         .map(|finding| &finding["kind"])
-        .filter(|kind| !(remainder_fault && **kind == "fault"))
         .collect();
     json!({ "states": model["states"], "rules": rules, "findings": kinds })
 }
@@ -243,13 +229,13 @@ fn node_and_the_checker_agree_on_every_readable_typescript_conformance_model() {
 }
 
 #[test]
-fn the_accepted_difference_is_only_a_remainder_fault_the_checker_reports_and_node_does_not() {
+fn no_finding_of_the_checker_is_left_out_of_the_comparison() {
     let with_remainder = json!({
         "states": 3,
         "rules": [{ "id": "floor", "says": "x", "verdict": "holds", "path": null }],
         "findings": [
             { "kind": "stuck", "message": "no action can happen here", "path": {} },
-            { "kind": "fault", "message": format!("the `when` of the action `refill` {REMAINDER_FAULT} in this state"), "path": {} },
+            { "kind": "fault", "message": "the `when` of the action `refill` takes a remainder with a negative number or a divisor below 1 in this state", "path": {} },
         ],
     });
     assert_eq!(
@@ -257,9 +243,9 @@ fn the_accepted_difference_is_only_a_remainder_fault_the_checker_reports_and_nod
         json!({
             "states": 3,
             "rules": [{ "id": "floor", "verdict": "holds" }],
-            "findings": ["stuck"],
+            "findings": ["stuck", "fault"],
         }),
-        "the remainder fault is left out and nothing else is"
+        "the remainder fault is compared like any other finding"
     );
     let with_null_read = json!({
         "states": 4,

@@ -16,7 +16,7 @@ export const bounded = Counter.rule({
 
 export const even = Counter.rule({
 	says: "Twice the count is even",
-	holds: (s) => (s.count * 2) % 2 === 0,
+	holds: (s) => m.rem(s.count * 2, 2) === 0,
 });
 
 export const full = Counter.end({

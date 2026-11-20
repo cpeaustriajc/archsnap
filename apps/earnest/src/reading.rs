@@ -255,4 +255,41 @@ export const pick = Pick.action(\"a guest picks an item\", {
             "the `who` of the bound record is wrapped where the record meets its declaration"
         );
     }
+
+    #[test]
+    fn the_smallest_i8_is_exported_as_one_number_of_its_type() {
+        let source = "\
+use earnest::model::{Model, model};
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Model)]
+pub struct Min {
+    #[range(-128, -127)]
+    #[initial(-128)]
+    y: i8,
+}
+
+#[model]
+impl Min {
+    #[rule(\"The number is the smallest i8\")]
+    fn least(&self) -> bool {
+        self.y >= -128
+    }
+}
+";
+        let file = loaded("min.rs", Language::Rust, source);
+        assert!(
+            file.problems().is_empty(),
+            "the file is readable: {:?}",
+            file.problems()
+        );
+        let module = earnest_tla::write(&file.models()[0].model).module;
+        assert!(
+            module.contains("/\\ y = (-128)"),
+            "the start is -128, not the negation of 128: {module}"
+        );
+        assert!(
+            module.contains("(y >= (-128))") && !module.contains("128 \\in"),
+            "the rule compares with -128 and no 128 is tested for membership of an `i8`: {module}"
+        );
+    }
 }

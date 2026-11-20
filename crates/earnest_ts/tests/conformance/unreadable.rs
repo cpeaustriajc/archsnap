@@ -22,7 +22,7 @@ const OUTSIDE: &[Outside] = &[
         fixture: "unreadable/clock.model.ts",
         model: "Stamp",
         line: 8,
-        column: 25,
+        column: 31,
         feature: "`Date.now`",
     },
     Outside {

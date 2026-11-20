@@ -4,6 +4,8 @@
 //! Rust, so what the reader accepts is what `rustc` accepts, and their own tests replay a path.
 
 mod forms;
+mod limits;
+mod names;
 #[path = "models/party.rs"]
 mod party;
 #[path = "models/shelf.rs"]

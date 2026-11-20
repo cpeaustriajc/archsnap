@@ -2,8 +2,8 @@ use crate::support::{
     broken, change, edge, end, graph, named, node, outcome, rule, start, step, text,
 };
 use earnest_chart::{
-    ChangeKind, RuleChange, RuleChanges, RuleText, Section, detail_lines, path_lines, report,
-    rule_change_lines,
+    ChangeKind, RuleChange, RuleChanges, RuleText, Section, Unreadable, detail_lines, path_lines,
+    report, rule_change_lines,
 };
 use earnest_check::{Finding, FindingKind, Outcome, Path, Shown, Status};
 use serde_json::json;
@@ -128,7 +128,7 @@ stateDiagram-v2
         file: "models/counter.model.ts",
         outcome: &counter,
     }];
-    assert_eq!(report(&sections, None), expected);
+    assert_eq!(report(&sections, &[], None), expected);
 }
 
 const OVEN_SECTION: &str = r#"## Oven
@@ -172,7 +172,7 @@ fn a_failing_model_has_the_path_to_each_broken_rule_and_each_finding() {
         file: "models/oven.model.ts",
         outcome: &oven,
     }];
-    assert_eq!(report(&sections, None), OVEN_SECTION);
+    assert_eq!(report(&sections, &[], None), OVEN_SECTION);
 }
 
 #[test]
@@ -197,8 +197,8 @@ fn the_sections_follow_one_another_in_the_order_given() {
     let expected = format!(
         "{OVEN_SECTION}\n\n## Counter\n\n**pass** · Counter · 4 states · `models/counter.model.ts`"
     );
-    assert_eq!(report(&sections, None), expected);
-    assert_eq!(report(&[], None), "", "no model, no text");
+    assert_eq!(report(&sections, &[], None), expected);
+    assert_eq!(report(&[], &[], None), "", "no model, no text");
 }
 
 fn side<'a>(says: &'a str, holds: &'a str) -> RuleText<'a> {
@@ -293,7 +293,7 @@ rule changes since origin/main
         base: "origin/main",
         changes: &changes,
     };
-    assert_eq!(report(&sections, Some(&since)), expected);
+    assert_eq!(report(&sections, &[], Some(&since)), expected);
 }
 
 #[test]
@@ -307,7 +307,7 @@ fn a_comparison_that_found_no_change_says_none() {
         ["rule changes since HEAD", "  none"]
     );
     assert_eq!(
-        report(&[], Some(&since)),
+        report(&[], &[], Some(&since)),
         "## Rule changes\n\n```text\nrule changes since HEAD\n  none\n```"
     );
 }
@@ -350,7 +350,7 @@ fn an_unfinished_model_says_how_far_it_got_and_why_it_stopped() {
         outcome: &ledger,
     }];
     assert_eq!(
-        report(&sections, None),
+        report(&sections, &[], None),
         "## Ledger\n\n**unfinished** · Ledger · 1000 states so far · state limit of 1000 · `src/ledger.model.ts`"
     );
 }
@@ -484,7 +484,7 @@ fn text_a_developer_wrote_cannot_open_or_close_a_block_or_a_heading() {
         base: hostile,
         changes: &changes,
     };
-    let written = report(&sections, Some(&since));
+    let written = report(&sections, &[], Some(&since));
     let flat = "``` ## Injected <script>";
     let expected = format!(
         r#"## My\_Model \# 1 \#\# Injected
@@ -520,4 +520,73 @@ rule changes since {flat}
         .filter(|line| line.trim_start().starts_with('#'))
         .count();
     assert_eq!(headings, 2);
+}
+
+#[test]
+fn a_file_that_could_not_be_read_is_named_with_its_problems_after_the_models() {
+    let counter = counter();
+    let sections = [Section {
+        name: "Counter",
+        file: "models/counter.model.ts",
+        outcome: &counter,
+    }];
+    let problems = [
+        "src/clock.model.ts:12:17  `Date.now`  the system clock is outside the library".to_owned(),
+        "src/clock.model.ts:20:3  `Math.random`  a random value is outside the library".to_owned(),
+    ];
+    let files = [Unreadable {
+        file: "src/clock.model.ts",
+        problems: &problems,
+    }];
+    let since = RuleChanges {
+        base: "HEAD",
+        changes: &[],
+    };
+    let written = report(&sections, &files, Some(&since));
+    let expected = "\n\n## Unreadable files\n\n```text\n\
+        unreadable  src/clock.model.ts\n    \
+        src/clock.model.ts:12:17  `Date.now`  the system clock is outside the library\n    \
+        src/clock.model.ts:20:3  `Math.random`  a random value is outside the library\n```\n\n\
+        ## Rule changes";
+    assert!(
+        written.contains(expected),
+        "the unreadable files come after the last model and before the rule changes:\n{written}"
+    );
+    assert!(
+        written.starts_with("## Counter\n\n**pass**"),
+        "the model comes first:\n{written}"
+    );
+}
+
+#[test]
+fn only_unreadable_files_make_a_report_that_says_so() {
+    let problems = ["a.rs:1:1  `x`  no".to_owned()];
+    let files = [Unreadable {
+        file: "a.rs",
+        problems: &problems,
+    }];
+    assert_eq!(
+        report(&[], &files, None),
+        "## Unreadable files\n\n```text\nunreadable  a.rs\n    a.rs:1:1  `x`  no\n```",
+        "no model, and still the file is named"
+    );
+}
+
+#[test]
+fn a_file_name_cannot_close_the_block_that_names_it() {
+    let problems = ["```:1:1  `x`  no\n```".to_owned()];
+    let files = [Unreadable {
+        file: "```\n## Injected",
+        problems: &problems,
+    }];
+    let written = report(&[], &files, None);
+    let fences = written
+        .lines()
+        .filter(|line| line.trim_start_matches(' ').starts_with("```") && !line.starts_with("    "))
+        .count();
+    assert_eq!(fences, 2, "one block opens and closes:\n{written}");
+    assert!(
+        !written.lines().any(|line| line.starts_with("## Injected")),
+        "the name stays inside the block:\n{written}"
+    );
 }

@@ -1,3 +1,4 @@
+use earnest_check::WORKER_STACK;
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
@@ -78,16 +79,19 @@ where
     let mut done: Vec<(usize, R)> = thread::scope(|scope| {
         let workers: Vec<_> = (0..crew)
             .map(|_| {
-                scope.spawn(|| {
-                    let mut mine = Vec::new();
-                    while let Some(share) = pool.take() {
-                        if let Some(task) = tasks.get(share.task) {
-                            mine.push((share.task, work(task, share.threads)));
+                thread::Builder::new()
+                    .stack_size(WORKER_STACK)
+                    .spawn_scoped(scope, || {
+                        let mut mine = Vec::new();
+                        while let Some(share) = pool.take() {
+                            if let Some(task) = tasks.get(share.task) {
+                                mine.push((share.task, work(task, share.threads)));
+                            }
+                            pool.give_back(share);
                         }
-                        pool.give_back(share);
-                    }
-                    mine
-                })
+                        mine
+                    })
+                    .expect("a worker thread starts")
             })
             .collect();
         workers

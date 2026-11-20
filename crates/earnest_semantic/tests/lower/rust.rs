@@ -491,3 +491,48 @@ fn an_action_computes_its_new_values_in_the_type_of_their_field() {
         "`0 - 1` is computed as the `u8` the field is"
     );
 }
+
+const LAST_EXACT: i64 = 9_007_199_254_740_991;
+
+fn above_zero(sum: Term) -> Term {
+    binary(Binary::Greater, sum, int(0))
+}
+
+#[test]
+fn a_typescript_number_computed_past_the_safe_integers_is_a_fault() {
+    assert_eq!(
+        in_typescript(above_zero(plus(int(LAST_EXACT - 1), int(1)))),
+        Ok(true),
+        "2^53 - 1 is exact"
+    );
+    assert_eq!(
+        in_typescript(above_zero(plus(int(LAST_EXACT), int(1)))),
+        Err(Fault::Overflow),
+        "2^53 is where JavaScript starts to round"
+    );
+    assert_eq!(
+        in_typescript(above_zero(minus(negate(int(LAST_EXACT)), int(1)))),
+        Err(Fault::Overflow),
+        "-2^53 too"
+    );
+    assert_eq!(
+        in_typescript(above_zero(times(int(94_906_266), int(94_906_266)))),
+        Err(Fault::Overflow),
+        "94906266 squared is 9007199326062756, past 2^53, though it fits in 64 bits"
+    );
+    assert_eq!(
+        in_typescript(above_zero(minus(plus(int(LAST_EXACT), int(1)), int(1)))),
+        Err(Fault::Overflow),
+        "a sum past 2^53 faults even when a later step brings it back"
+    );
+}
+
+#[test]
+fn a_rust_number_keeps_its_integer_type_and_the_64_bits_below_it() {
+    let wide = || declared(whole(IntType::I64), int(LAST_EXACT));
+    assert_eq!(
+        in_rust(above_zero(plus(wide(), int(1)))),
+        Ok(true),
+        "an `i64` holds 2^53 and the checker adds exactly"
+    );
+}

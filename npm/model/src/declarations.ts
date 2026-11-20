@@ -207,6 +207,9 @@ const choice = <T extends string | number | boolean>(
   if (new Set(listed.map((option) => typeof option)).size !== 1) {
     throw new Error(`${builder} needs values that are all text, all numbers or all booleans`);
   }
+  if (listed.some((option) => typeof option === "number" && !Number.isSafeInteger(option))) {
+    throw new Error(`${builder} needs whole numbers that JavaScript holds exactly`);
+  }
   return new Declaration({
     kind: "enum",
     count: listed.length,

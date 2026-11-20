@@ -18,6 +18,41 @@ fn listed(targets: &[Target<'_>]) -> String {
         .join(", ")
 }
 
+pub(crate) struct Selected<'a> {
+    pub(crate) targets: Vec<Target<'a>>,
+    pub(crate) unmatched: Option<String>,
+}
+
+pub(crate) fn select_with_removed<'a>(
+    files: &'a [ModelFile],
+    model: Option<&str>,
+    rule: Option<&str>,
+    base: Option<&str>,
+) -> Result<Selected<'a>, String> {
+    match select(files, model, rule) {
+        Ok(targets) => Ok(Selected {
+            targets,
+            unmatched: None,
+        }),
+        Err(error) => {
+            let has_the_model = |name: &str| {
+                files
+                    .iter()
+                    .flat_map(ModelFile::models)
+                    .any(|readable| readable.model.name == name)
+            };
+            if base.is_some() && model.is_some_and(|name| !has_the_model(name)) {
+                Ok(Selected {
+                    targets: Vec::new(),
+                    unmatched: Some(error),
+                })
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
 pub(crate) fn select<'a>(
     files: &'a [ModelFile],
     model: Option<&str>,
@@ -57,7 +92,7 @@ pub(crate) fn select<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::select;
+    use super::{select, select_with_removed};
     use crate::discovery::{Found, Language};
     use crate::reading::{ModelFile, load};
     use std::fmt::Write;
@@ -150,6 +185,31 @@ mod tests {
         assert!(
             elsewhere.contains("`Porch`") && elsewhere.contains("`dim`"),
             "the error names the model and the rule: {elsewhere}"
+        );
+    }
+
+    #[test]
+    fn with_a_base_a_model_that_is_gone_is_left_for_the_comparison_to_list() {
+        let kept = files();
+        let selected = select_with_removed(&kept, Some("Cellar"), None, Some("HEAD"))
+            .expect("the base may have the model");
+        assert!(selected.targets.is_empty(), "nothing is checked");
+        assert_eq!(
+            selected.unmatched.as_deref(),
+            Some("no model is named `Cellar`"),
+            "the error stays for when the base has none either"
+        );
+        assert!(
+            select_with_removed(&kept, Some("Cellar"), None, None).is_err(),
+            "without a base the name must match a model"
+        );
+        let found = select_with_removed(&kept, Some("Hall"), None, Some("HEAD"))
+            .expect("the model is there");
+        assert_eq!(found.targets.len(), 1, "the model of that name");
+        assert_eq!(found.unmatched, None, "nothing unmatched");
+        assert!(
+            select_with_removed(&kept, Some("Porch"), Some("dim"), Some("HEAD")).is_err(),
+            "a rule the model lacks is still an error"
         );
     }
 

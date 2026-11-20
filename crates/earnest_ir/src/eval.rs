@@ -1,5 +1,5 @@
 use crate::{Expr, MapOp, Math, Op, Order, SeqOp, SetOp, Shelf, Sweep};
-use earnest_value::{IntType, Sym, Value};
+use earnest_value::{IntType, MOST_SAFE_INTEGER, Sym, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -13,7 +13,8 @@ use std::sync::Arc;
 pub enum Fault {
     /// A value that must be present is `null`.
     NullRead,
-    /// A number does not fit in 64 bits.
+    /// A number does not fit in 64 bits, or in a TypeScript model is past what a JavaScript
+    /// number holds exactly.
     Overflow,
     /// A remainder with a negative number or a divisor below 1, where languages disagree.
     Remainder,
@@ -221,6 +222,8 @@ fn apply(op: Op, arguments: &[Expr], frame: &mut Frame<'_>) -> Evaluated {
             .ok_or(Fault::Overflow),
         Op::Unwrap if first == Value::Null => Err(Fault::NullRead),
         Op::SomeOf | Op::Unwrap => Ok(first),
+        Op::Safe if as_int(&first)?.unsigned_abs() <= MOST_SAFE_INTEGER.unsigned_abs() => Ok(first),
+        Op::Safe => Err(Fault::Overflow),
         Op::Fit(ty) if ty.holds(as_int(&first)?) => Ok(first),
         Op::Fit(ty) => Err(Fault::Outside(ty)),
         Op::Equal => Ok(Value::Bool(first == second.ok_or(Fault::WrongKind)?)),

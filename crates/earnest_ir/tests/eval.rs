@@ -4,7 +4,7 @@
 use earnest_ir::{
     Expr, Fault, Frame, MapOp, Math, Op, Order, SeqOp, SetOp, Shelf, Sweep, eval, truth,
 };
-use earnest_value::{IntType, Symbols, Value};
+use earnest_value::{IntType, MOST_SAFE_INTEGER, Symbols, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 const SLOTS: usize = 4;
@@ -771,4 +771,34 @@ fn only_a_number_can_fit_an_integer_type() {
     assert_eq!(fitted(null()), Err(Fault::NullRead));
     assert_eq!(fitted(yes()), Err(Fault::WrongKind));
     assert_eq!(fitted(faulting()), Err(Fault::NullRead), "the fault inside");
+}
+
+#[test]
+fn a_number_past_the_safe_integers_is_an_overflow_when_it_must_be_safe() {
+    let safe = |number: i64| value_of(&apply(Op::Safe, &[int(number)]));
+    assert_eq!(
+        safe(MOST_SAFE_INTEGER),
+        Ok(Value::Int(MOST_SAFE_INTEGER)),
+        "2^53 - 1 is the last number JavaScript holds exactly"
+    );
+    assert_eq!(
+        safe(-MOST_SAFE_INTEGER),
+        Ok(Value::Int(-MOST_SAFE_INTEGER)),
+        "and -(2^53 - 1) the last below"
+    );
+    assert_eq!(
+        safe(MOST_SAFE_INTEGER + 1),
+        Err(Fault::Overflow),
+        "2^53 has a neighbour that rounds to it"
+    );
+    assert_eq!(
+        safe(-MOST_SAFE_INTEGER - 1),
+        Err(Fault::Overflow),
+        "-2^53 likewise"
+    );
+    assert_eq!(
+        value_of(&apply(Op::Safe, &[yes()])),
+        Err(Fault::WrongKind),
+        "only a number can be safe"
+    );
 }

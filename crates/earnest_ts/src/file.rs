@@ -207,6 +207,15 @@ impl Reader<'_> {
                 );
                 continue;
             };
+            if self.library.as_deref() == Some(name.name.as_str()) {
+                self.refuse(
+                    declarator.span.start,
+                    name.name.as_str(),
+                    "this name is the library's: a model file would throw on it, and the checker \
+                     would read every `m.` after it as the library",
+                );
+                continue;
+            }
             self.top_names.push(name.name.to_string());
             self.top_level(name.name.as_str(), init, start, top);
         }

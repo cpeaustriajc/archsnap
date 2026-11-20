@@ -1,5 +1,5 @@
 use crate::reader::{Reader, at, attribute, path_text, place_of};
-use earnest_ast::{Shape, ShapeKind, Term, TermKind};
+use earnest_ast::{MOST_NESTING, Shape, ShapeKind, TOO_DEEP, Term, TermKind};
 use earnest_value::IntType;
 use proc_macro2::Span;
 use syn::punctuated::Punctuated;
@@ -57,6 +57,18 @@ impl Reader<'_> {
 
     fn declared_shape(&mut self, ty: &Type, declares: Declares<'_>) -> Shape {
         let span = ty.span();
+        if self.depth >= MOST_NESTING {
+            let feature = self.short_text(span);
+            self.refuse(span, &feature, TOO_DEEP);
+            return shaped(span, ShapeKind::Bool);
+        }
+        self.depth = self.depth.saturating_add(1);
+        let found = self.shape_inside(ty, declares, span);
+        self.depth = self.depth.saturating_sub(1);
+        found
+    }
+
+    fn shape_inside(&mut self, ty: &Type, declares: Declares<'_>, span: Span) -> Shape {
         let kind = match ty {
             Type::Paren(inner) => return self.declared_shape(&inner.elem, declares),
             Type::Group(inner) => return self.declared_shape(&inner.elem, declares),

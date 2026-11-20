@@ -263,16 +263,24 @@ impl<'a> Drawing<'a> {
     }
 
     fn left_out(&self) -> Option<String> {
-        let states = self.graph.nodes.len();
+        let boxes = self.graph.nodes.len();
         let arrows = self.graph.edges.len();
-        let hidden_states = states.saturating_sub(self.selection.states.len());
+        let hidden_boxes = boxes.saturating_sub(self.selection.states.len());
         let hidden_arrows = arrows.saturating_sub(self.selection.arrows.len());
+        let states: usize = self.graph.nodes.iter().map(|node| node.states).sum();
+        let shown: usize = self
+            .selection
+            .states
+            .iter()
+            .map(|position| self.graph.nodes[*position].states)
+            .sum();
+        let hidden_states = states.saturating_sub(shown);
         let beyond = match self.selection.beyond {
             0 => String::new(),
             1 => " A broken state lies beyond what is shown.".to_owned(),
             many => format!(" {many} broken states lie beyond what is shown."),
         };
-        (hidden_states > 0 || hidden_arrows > 0).then(|| {
+        (hidden_boxes > 0 || hidden_arrows > 0).then(|| {
             format!(
                 "Not shown: {hidden_states} of {states} states and {hidden_arrows} of {arrows} arrows.{beyond}"
             )
@@ -293,7 +301,9 @@ impl<'a> Drawing<'a> {
 ///
 /// At most [`ARROW_LIMIT`](crate::ARROW_LIMIT) arrows are drawn. When the graph has more, or
 /// has a state no start state leads to, the block is followed by a blank line and one line of
-/// the form `Not shown: 16 of 36 states and 40 of 60 arrows.` When the route to a state that
+/// the form `Not shown: 16 of 36 states and 40 of 60 arrows.` It counts states, as the boxes
+/// they stand for are drawn together: a box left out takes every state it stands for with it,
+/// and an arrow is one box to another, however many actions it carries. When the route to a state that
 /// breaks a rule or is out of range does not fit, its first arrows are drawn as far as the
 /// limit allows, the state itself is not, and the line goes on with `A broken state lies
 /// beyond what is shown.` or `2 broken states lie beyond what is shown.`

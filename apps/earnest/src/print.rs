@@ -130,17 +130,28 @@ fn model_line(result: &ModelResult) -> String {
     fields.join(INDENT)
 }
 
+pub(crate) fn problem_lines(file: &ModelFile) -> Vec<String> {
+    file.problems()
+        .iter()
+        .map(|problem| {
+            format!(
+                "{}:{}:{}{INDENT}{}{INDENT}{}",
+                problem.file, problem.line, problem.column, problem.feature, problem.message
+            )
+        })
+        .collect()
+}
+
 pub(crate) fn unreadable_lines(file: &ModelFile) -> Vec<String> {
     let mut lines = vec![format!(
         "{:<STATUS_WIDTH$}{INDENT}{}",
         "unreadable", file.path
     )];
-    lines.extend(file.problems().iter().map(|problem| {
-        format!(
-            "{INDENT}{}:{}:{}{INDENT}{}{INDENT}{}",
-            problem.file, problem.line, problem.column, problem.feature, problem.message
-        )
-    }));
+    lines.extend(
+        problem_lines(file)
+            .into_iter()
+            .map(|line| format!("{INDENT}{line}")),
+    );
     lines
 }
 

@@ -145,3 +145,200 @@ Test: `a_rule_removed_with_its_model_is_listed_as_removed`.
 | `second/either.model.ts` | `Either` | 3: `null`, `{qty: 0, who: "ann"}`, `{qty: 1, who: null}` | `named` broken after `pick` with `g = "bob"` (1 step) | `g === "ann" ? { qty: 0, who: g } : { qty: 1, who: null }`: "a choice between a record and a record". A record literal that gives an optional field a value is another kind of record than one that gives it `null`, or than the declared record | `a_choice_between_two_records_of_one_declaration_is_read` |
 | `second/bound.model.ts` | `Bound` | 3: `null`, `{qty: 1, who: "ann"}`, `{qty: 1, who: "bob"}` | `one` holds | `const fresh = { qty: 0, who: g }; return { chosen: { ...fresh, qty: 1 } };`: "a record where a record is needed" | `a_record_bound_to_a_name_is_spread_into_its_declaration` |
 | `second/within.rs` | `Within` | 4: `n` is 0, 1, 2, 3 | `low` (`self.below(double(1))`) broken after 2 steps | The helper method `fn below(&self, limit: u8)`: "a number needs `#[range(lo, hi)]`". Rust refuses `#[range]` there ("cannot find attribute `range`"), because `#[model]` takes it only off an action's parameters, so no helper method can take a number. The function `double(number: u8)` outside the model is read | `a_helper_method_in_rust_takes_a_number` |
+
+## Third pass
+
+A third adversarial pass, made after the second pass's findings were fixed. Its tests are in
+`tests/break_it/third.rs` and its files in `models/third/`. Each Rust file was compiled as real
+Rust and searched breadth first over `starts()` and `steps()` in a test build and a release
+build, and each TypeScript file was run with `explore` in Node; "in Rust" and "in Node" below
+are what those searches reported. Every `.model.ts` file here except `early.model.ts` passes
+`tsc` with `strict`. Each test fails today.
+
+### A broken rule reported as `pass`
+
+| File | Model | By hand | Today | Test |
+|---|---|---|---|---|
+| `third/alias.rs` | `Alias`: `gate` goes `Locked`, `Open` (2 states) | The file has `use earnest::model::forall as exists;`, so the rule `known`, `exists::<Gate>(\|value\| value == self.gate)`, calls the library's `forall`, which is false for either gate. In Rust `known` is broken in the start state (0 steps). Right result: that, or `unreadable` | `pass`, 2 states, `known` holds: the call is read by its written name as `exists` | `a_quantifier_imported_under_the_other_name_is_not_read_as_the_other` |
+| `third/huge.model.ts` | `Huge`: `n` goes 0, 1, 2 (3 states) | The rule `apart` is `s.n * HALF * 2 + 1 !== s.n * HALF * 2` with `HALF = 2^52`. At `n = 1` both sides are 2^53 in JavaScript, whose numbers are 64-bit floats, so `apart` is broken after 1 step, as Node reports. Every literal is exact; only the arithmetic differs | `pass`, 3 states: the checker computes in 64-bit integers, so 2^53 + 1 differs from 2^53 | `typescript_arithmetic_beyond_two_to_the_fifty_three_is_not_a_pass` |
+| `third/unsafe.model.ts` | `Unsafe`: `n` is `m.int(9007199254740991, 9007199254740992)`, every state an end (2 states) | The library throws on the declaration (`Number.isSafeInteger` is false for 2^53), and the file is refused for any other declaration the library throws on. Read as JavaScript, the rule `sane` (`s.n + 1 > s.n`) is false at 2^53, broken in a start state. Right result: `unreadable`, or `sane` broken after 0 steps | `pass`, 2 states | `a_typescript_range_beyond_the_safe_integers_is_refused` |
+| `third/early.model.ts` | `Early`: `n` goes 0 to 3 (4 states), a top-level `const LIMIT = 5` | The rule `low` is `{ const most = LIMIT; const LIMIT = 1; return s.n <= most + LIMIT - LIMIT; }`. In TypeScript the first `LIMIT` is the block's own constant, read before its declaration: `tsc` refuses it (TS2448) and Node throws a `ReferenceError`. It is never the top-level 5. Right result: `unreadable`, or the rule faulting | `pass`, 4 states: the first `LIMIT` is read as the top-level constant. `const a = a + 1;` in a block, and the same in a helper's block, read the outer constant the same way | `a_block_constant_read_before_its_declaration_is_not_the_top_level_one` |
+
+The library itself treats a number beyond 2^53 in a next state as the fault "computes a number
+too large to hold" (`npm/model/src/search.ts`); the checker does not, and neither checks a
+number computed inside a rule or a `when`.
+
+### A legal file read as something else
+
+| File | Model | By hand | Today | Test |
+|---|---|---|---|---|
+| `third/lowest.rs` | `Lowest`: `x: i8` with `#[range(-128, -126)]`, from -127 down to -128 (2 states) | `-128` is an `i8` in Rust, so `self.x > -128` and the rule `above`, `self.x >= -128`, are plain comparisons: `above` holds in both states. Right result: `pass` with 2 states, or `unreadable` | `fail`, 1 state: a fault "the rule `above` computes a number outside `i8`" in the start state, because `128` is fitted to `i8` before it is negated. `#[initial(-128)]` on an `i8` is refused for the same reason ("a starting value computes a number outside `i8`"), and the TLA+ export carries the same reading (`128 \in (-128)..127`) | `the_smallest_i8_written_as_a_negative_literal_is_an_i8` |
+
+### A legal file that is refused
+
+| File | Model | States | Rules | What is refused today | Test |
+|---|---|---|---|---|---|
+| `third/keyed.model.ts` | `Keyed` | 2: `{}`, then `{"ann" -> {qty: 1, tag: {size: 1}}}` | `empty` broken after 1 step | `m.mapOf(["ann", { qty: 1, tag: { size: 1 } }])` where `tag` is an optional record: "a map where a map is needed". The same record is read in `m.setOf`, `m.seqOf` and `s.byWho.set("ann", ...)` | `a_map_literal_takes_a_record_whose_optional_field_has_a_value` |
+
+### A run that aborts
+
+A TypeScript condition nested in 6,000 brackets (4,000 are read), a chain of 20,000 `!`, of
+10,000 `? :` or of 10,000 `+`, or a Rust condition nested in 2,000 brackets (1,000 are read),
+overflows the checker's stack: the process aborts with `fatal runtime error: stack
+overflow, aborting` (exit code 134), and no model of the run is reported, including the
+readable files beside it. `rustc` also crashes on the Rust file, so only the TypeScript case is
+a legal file. Right result: the deep file `unreadable` and the other files checked.
+
+Test: `a_deeply_nested_condition_does_not_abort_the_run`, which writes a condition in 20,000
+brackets beside `huge.model.ts`.
+
+## Third pass, second tester
+
+A third adversarial pass, made after the second round of fixes. Its tests are in
+`tests/break_it/third_b.rs` and its files in `models/third_b/`. Each Rust file here was also
+compiled as real Rust and searched breadth first over `starts()` and `steps()`, in a test build
+and in a release build, and each `.model.ts` file was run through `explore` in Node. Every
+number below is derived by hand. Each test fails today.
+
+### A rule that holds in the checker and is broken in Node
+
+| File | Model | By hand | Today | Test |
+|---|---|---|---|---|
+| `third_b/round.model.ts` | `Round`: `n` is 0, 1, 2, 3 (4 states) | The rule `exact` is `s.n + 9007199254740992 - 9007199254740992 === s.n`. JavaScript adds and subtracts in 64-bit floating point: `2^53 + 1` is half way between two numbers it can hold and rounds to `2^53`, so at `n = 1` the left side is 0 and the rule is broken after one step. `explore` in Node reports exactly that | `pass`, 4 states, `exact` holds: the checker adds exact integers | `a_number_beyond_two_to_the_53_is_not_added_exactly` |
+| `third_b/wide_range.model.ts` | `Wide` | `m.int(9007199254740990, 9007199254740996)` throws in Node ("needs two whole numbers"), so the file does not run. The checker reads it, searches 7 states and reports `skips` broken | `fail`, 7 states | `a_range_the_library_throws_on_is_unreadable` |
+
+The root `README.md` says a number in a model is "a whole number that fits in 64 bits" and that
+TypeScript has one kind of number "held in 64 bits". It does not say how far a TypeScript number
+is exact. Two readings: the model's numbers are JavaScript's (exact to 2^53, as `explore`
+already treats a next state past `Number.MAX_SAFE_INTEGER` as a fault), or they are exact 64-bit
+integers (then Node and `explore` are the ones that are wrong). The first is the one the file
+runs with. The smallest fix is to make a number of a TypeScript model past 2^53 in magnitude
+unreadable when written out and a fault when computed, as `explore` does for a next state.
+
+### Legal Rust that is judged as a fault
+
+`third_b/min.rs`, model `Min`: `y: i8` runs from -126 down to -128 (3 states). `least`
+(`self.y >= -128`) holds, and `never` (`self.y != -128`) and `never_low` (`self.y != LOW`, with
+`const LOW: i8 = -128`) are broken after two steps, in a test build and a release build. The
+checker reads `-128` as the negation of `128`, which is outside `i8`: the rule is a fault in the
+start state, the action's `when` too, and the search stops at 1 state with every rule `unknown`.
+`#[initial(-128)]` on an `i8`, and `-2147483648` on an `i32`, are refused for the same reason
+("computes a number outside `i8`"). Test: `the_smallest_i8_is_a_number_of_its_type`.
+
+### Model files that are left out without a word
+
+| File | What is wrong | Right result | Today | Test |
+|---|---|---|---|---|
+| `third_b/escaped.model.ts` | `from "@earnest\x2fmodel"`. The specifier is `@earnest/model` in JavaScript (Node runs the file and `explore` reports `low` broken after 2 steps). A Unicode escape for the `@` or for the `o`, and a line continuation inside the text, do the same | `low` broken after 2 steps, or unreadable | `0 models`, exit 0, also named explicitly | `a_typescript_model_imported_through_an_escaped_specifier_is_not_left_out` |
+| `third_b/comment_path.rs` | `use earnest::/* the model module */model::{..}` compiles; so does a `//` comment on the line between the two segments. The file holds `earnest::` and `model::` but not `earnest::model` | the same | `0 models`, exit 0 | `a_rust_model_with_a_comment_inside_its_use_path_is_not_left_out` |
+| `third_b/utf16_mark.model.ts` | The first two bytes are FF FE and the rest is ASCII text that imports the library. The file is not UTF-8, and the reader decodes it as UTF-16, finds no import in the nonsense and drops it. The same holds for a file that starts FE FF | unreadable (the contract says a model file that is not UTF-8 is `unreadable`) | `0 models`, exit 0 | `a_file_that_starts_with_a_utf16_mark_and_holds_ascii_text_is_not_left_out` |
+
+### The process aborts
+
+A rule that is a long chain makes the reader or the lowering recurse until the main thread's
+stack is gone: "thread 'main' has overflowed its stack", exit 134, nothing printed, so the
+other models of the same run print nothing either. Found at 20 000 `!`, 20 000 `+ 0`, and 10 000
+parentheses or `? :` in TypeScript, and at 3 000 parentheses, `{ }` or `+ 0` in Rust (at
+3 000 `+ 0` the abort is in a worker thread). 1 000 of each is read. A chain of `&&` or `else
+if` is also quadratic in the Rust reader: 3 000 take 1.3 s and 10 000 take 17 s before they
+abort. The right result is a refusal that names the depth, or the model checked.
+
+Tests: `twenty_thousand_negations_in_a_typescript_rule_do_not_abort_the_run`,
+`twenty_thousand_additions_in_a_typescript_rule_do_not_abort_the_run`,
+`three_thousand_parentheses_in_a_rust_rule_do_not_abort_the_run` and
+`three_thousand_additions_in_a_rust_rule_do_not_abort_the_run`. Each puts a second, good model
+beside the deep one and asserts that it is still reported.
+
+### `explore` and `%` of a negative number
+
+`third_b/remainder.model.ts`, model `Rem`, `n` from 0 to 2 (3 states). The rule `below` is
+`(s.n - 1) % 3 !== 99`. At `n = 0` the left side is `-1 % 3`. The root `README.md` makes `%` on
+a negative number a fault, so `below` is `unknown` with a fault after 0 steps, which is what the
+checker reports. `explore` runs the file as JavaScript and reports `holds`, and no finding.
+`explore` cannot intercept `%`, so the smallest fix may be one sentence in the contract that it
+does not. Test: `explore_in_node_gives_unknown_for_a_remainder_of_a_negative_number`.
+
+### Suspected, no test
+
+- `--model Name` for a model that was removed: the root `README.md` says "with `--model`, only
+  removed models of that name are listed", and also that no model matching `--model` is exit 2.
+  `earnest verify --base HEAD --model Cafe` for a deleted `Cafe` prints "no model is named `Cafe`"
+  and exits 2, so the removed model can never be listed. Two readings: list it, or drop the
+  sentence.
+- `replay()` finds a step's action by id and then, when no action has that id, by its sentence. A
+  path whose action id is renamed to a name no action has is replayed. A path is therefore not
+  refused for a wrong id when the label is right. The interface comment says so; the contract
+  does not.
+- A model file saved as UTF-16 without a byte order mark is not found: it holds no
+  `@earnest/model` in UTF-8, and it is valid UTF-8 (NUL bytes between letters).
+- A TLA+ module has no bound check in an action's guard for a field of `i32`, `u32` above 2^31 - 1
+  or `i64` (`inside` leaves out any bound that TLC's 32-bit integers can't hold), where the
+  checker faults at the type's bound. `earnest confirm` would show a difference in a model whose
+  number reaches 2^31 - 1. Not run: there is no `tla2tools.jar` in the repository or in
+  `target/tools`, and this session has no way to fetch it.
+
+### Attacked and found correct
+
+- Rust integer types `u8 i8 u16 i16 u32 i32 u64 i64 usize` in rules and actions, at their
+  bounds: add, subtract, multiply, negate (not the minimum, see above), remainder, `%` of a
+  negative, a size or an `attempts()` less one, a `u64` product past `i64`; a literal typed
+  through a helper's parameter, a constant, a record field, a map value, a set item, a `Seq`
+  item, a closure over a collection, `Some(..)`, an `if` expression and a comparison; a `let`
+  of a number with no stated type is refused. About 200 rules were compared with the checker
+  against a test build (overflow panics) and a release build (wraps), and in every case the
+  checker gave the verdict of a build that did not overflow, a fault where either did, or a
+  refusal (`as`, `/`, `.abs()`, `.pow()`, `i32::MAX`, `matches!`, tuples, `|`, `&`, `^`).
+- Arithmetic inside a record, `Seq`, `Set`, `Map` and `Option` literal, in a rule and in an
+  action's result, is judged, with a fault at the first overflow in every action.
+- A method and a function of one name with different arities, `self.helper(..)` calling a
+  function that calls a method, two models in one file with helpers of the same names, a helper
+  taking `&self` and a record, a helper returning an `Option`, a closure capturing a `let`.
+  `Self::name(self, ..)` and mutual recursion are refused.
+- TypeScript: about 180 rules over operators, precedence, `-` and `!` chains, string comparison
+  (refused), `%`, `? :`, optionals, helpers with shadowed parameters, constants computed from
+  constants, short-circuit around a fault: Node and the checker agree, or the checker is more
+  careful (a fault where Node gives a value), or the file is refused (`/`, `**`, `|`, `==`,
+  `??`, `?.`, `typeof`, default parameters, recursion, a call of a function literal).
+- A TypeScript record with an optional field that is a record with an optional field, in a set,
+  a map, a sequence and a queue, from a helper's branches, spread from an optional, and tested
+  for membership of a set: 1 472 states, 8 verdicts, equal in Node and the checker. The TLA+
+  module writes an optional as `<<>>` or `<<x>>`, guards `o[1]` behind `o = <<>>`, and keeps a
+  record in a set as a record.
+- `--max-states` from 1 to the exact count and one under it, on a three-flag model (4, 7, 8
+  states), a five-start model, a 10 370-state model with several starts and a 4 879 681-state
+  model: the counted states are judged, the paths are the shortest and replay in Node; a rule
+  that breaks in the last counted state is `broken`. `--time-limit` counts what it saw.
+- `--jobs` 1, 2, 3, 4 and 8 on 47^4 = 4 879 681 states: identical JSON, 13.5 s on one worker
+  and 6.3 s on four, 937 MB.
+- `replay()` on every path of a model with a record, optional, set, number and enum input, two
+  start states and a path of zero steps: each replays; a changed state, a reversed path, a
+  changed start, a dropped input and a repeated step are refused.
+- Discovery: a folder named like a model file, a link to a folder, a broken link, a NUL byte, a
+  UTF-8 byte order mark, a Latin-1 byte in a comment, UTF-16 with a mark in `.ts`, `.mts`, `.tsx`
+  and `.rs`, an overlong, a surrogate and a too-large UTF-8 sequence, in a subfolder and named
+  explicitly: each is listed or refused with the first bad byte, exit 1, and with `--model`,
+  `--rule`, `chart`, `report` and `tla` too.
+- `--base` with a deleted file, a renamed file, a moved file, a file that no longer imports the
+  library, a renamed rule, a loosened rule, an added model and a file that became unreadable,
+  in one commit in a real repository; file names with a space, an accent, a quotation mark and
+  a tab; from a subfolder; a base that is not a commit (exit 2).
+- The cache: four `earnest verify` runs at once on three files, 60 times: identical output, no
+  stderr. A cache entry cut to half, to nothing, and by one byte is not trusted. A key holds the
+  file, its text, the limits, the rule and a fingerprint of every crate's `Cargo.toml` and `src`.
+  `--model` runs share entries by file and keep each model's own result.
+- Hostile text that does not abort: a 5 MB comment, 20 000 rules, 5 000 actions, identifiers
+  named `Next`, `Init`, `vars`, `MODULE`, `EXTENDS`, `VARIABLES`, `UNCHANGED`, `ENABLED`,
+  `Rule_x`, `InRange`, `Stop`, `Fault`, `Judged_r`, `TRUE`, `BOOLEAN`, `Len`, `DOMAIN`, `class`,
+  `function`, `constructor`, `__proto__`, `toString`, `prototype`, Unicode identifiers, CRLF in
+  a template string, a lone surrogate, U+2028 and U+0000 in a text. 31 models equal in Node.
+- The chart's left-out note for 5 broken states beyond 20 arrows: 10 of 31 states and 10 of 30
+  arrows, as derived.
+- `--rule` keeps the findings of the model (stuck, out of range, fault).
+
+### Not covered
+
+`earnest confirm --tlc` and TLC itself (no jar; the TLA+ modules were read by hand only). A
+rebuild of the checker after a change in a crate (the fingerprint code was read, not run).
+`report` with several unfinished models. A view with every label form against an independent
+reading of the labels. `Timer` and `Lock` beyond one `Retry` model. A `.rs` file with `#[cfg]`
+inside a model.

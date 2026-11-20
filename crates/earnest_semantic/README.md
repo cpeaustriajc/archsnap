@@ -25,7 +25,11 @@ owner held in a map, a sequence or a queue, or a declaration with more than a mi
 try. In a draft read from Rust it also refuses what the checker would read differently from
 Rust: an optional value held in a map, a sequence or a queue, or read out of a written
 collection of optional values; numbers of two integer types that meet; and a `let` that binds a
-number nothing gives a type.
+number nothing gives a type. A draft read from TypeScript has JavaScript's numbers: each sum,
+difference, product and remainder is wrapped in `Op::Safe`, so a result past 2^53 - 1 is the
+fault "computes a number too large to hold". An expression nested more than 1000 levels deep is
+refused, counting the helpers and constants it reads, as is a map literal whose entries cannot
+join into one type.
 
 `lower_with_earlier` also lowers the rules of an older version of the model, each with the
 constants and helper functions of its own file, so `earnest verify --base` can evaluate an old

@@ -1,6 +1,8 @@
 use super::types::{Binding, Scope, Type, Typed, fitted, fitted_when_present};
 use super::{Lowerer, Lowering};
-use earnest_ast::{Binary, HelperKind, Language, Reach, Shape, Term, TermKind, Unary};
+use earnest_ast::{
+    Binary, HelperKind, Language, MOST_NESTING, Reach, Shape, TOO_DEEP, Term, TermKind, Unary,
+};
 use earnest_diagnostics::Place;
 use earnest_ir::{Expr, Math, Op, Order, Shelf, Sweep};
 use earnest_value::{IntType, Sym, Value};
@@ -32,6 +34,16 @@ fn is_null(expr: Expr) -> Expr {
 
 impl Lowerer<'_> {
     pub(super) fn term(&mut self, term: &Term, scope: &mut Scope) -> Lowering<Typed> {
+        if self.depth >= MOST_NESTING {
+            return Err(self.stop(term.place, "a deeply nested expression", TOO_DEEP));
+        }
+        self.depth = self.depth.saturating_add(1);
+        let lowered = self.term_of(term, scope);
+        self.depth = self.depth.saturating_sub(1);
+        lowered
+    }
+
+    fn term_of(&mut self, term: &Term, scope: &mut Scope) -> Lowering<Typed> {
         let place = term.place;
         match &term.kind {
             TermKind::Null => Ok(Typed::new(Expr::Const(Value::Null), Type::Null)),
@@ -141,6 +153,14 @@ impl Lowerer<'_> {
     pub(super) fn truth(&mut self, term: &Term, scope: &mut Scope) -> Lowering<Expr> {
         let lowered = self.term(term, scope)?;
         self.coerce(lowered, &Type::Bool, term.place)
+    }
+
+    fn number_kind(&self) -> Numbers {
+        if self.is_rust() {
+            Numbers::Wide
+        } else {
+            Numbers::Javascript
+        }
     }
 
     pub(super) fn is_rust(&self) -> bool {
@@ -401,7 +421,7 @@ impl Lowerer<'_> {
                 let ty = lowered.ty.int_type();
                 let number = self.coerce(lowered, &Type::Int(ty), inner.place)?;
                 Ok(Typed::new(
-                    in_type(apply(Op::Negate, vec![number]), ty),
+                    in_type(apply(Op::Negate, vec![number]), ty, self.number_kind()),
                     Type::Int(ty),
                 ))
             }
@@ -456,7 +476,7 @@ impl Lowerer<'_> {
         let second = self.term(right, scope)?;
         let (lower, upper, ty) = self.numbers((left, first), (right, second), place, None)?;
         Ok(Typed::new(
-            in_type(apply(op, vec![lower, upper]), ty),
+            in_type(apply(op, vec![lower, upper]), ty, self.number_kind()),
             Type::Int(ty),
         ))
     }
@@ -622,15 +642,7 @@ impl Lowerer<'_> {
         for item in items {
             lowered.push(self.term(item, scope)?);
         }
-        let first_known = lowered
-            .iter()
-            .map(|typed| &typed.ty)
-            .find(|ty| !matches!(ty, Type::Unknown | Type::Null))
-            .cloned()
-            .unwrap_or(Type::Unknown);
-        let item_type = lowered.iter().fold(first_known, |joined, typed| {
-            joined.union(&typed.ty).unwrap_or(joined)
-        });
+        let item_type = joined_type(lowered.iter().map(|typed| &typed.ty));
         let mut exprs = Vec::with_capacity(lowered.len());
         for typed in lowered {
             exprs.push(self.coerce(typed, &item_type, place)?);
@@ -652,11 +664,8 @@ impl Lowerer<'_> {
         for (key, value) in entries {
             lowered.push((self.term(key, scope)?, self.term(value, scope)?));
         }
-        let (key_type, value_type) = lowered
-            .first()
-            .map_or((Type::Unknown, Type::Unknown), |(key, value)| {
-                (key.ty.clone(), value.ty.clone())
-            });
+        let key_type = joined_type(lowered.iter().map(|(key, _)| &key.ty));
+        let value_type = joined_type(lowered.iter().map(|(_, value)| &value.ty));
         let mut exprs = Vec::with_capacity(lowered.len());
         for (key, value) in lowered {
             exprs.push((
@@ -742,6 +751,20 @@ impl Lowerer<'_> {
             }
             (Expr::SeqOf(items), Type::Seq(item), Type::Seq(wanted) | Type::Queue(wanted, _)) => {
                 Ok(Expr::SeqOf(self.coerce_each(items, &item, wanted, place)?))
+            }
+            (Expr::MapOf(entries), Type::Map(key, value), Type::Map(wanted_key, wanted_value)) => {
+                let mut coerced = Vec::with_capacity(entries.len());
+                for (entry_key, entry_value) in entries {
+                    coerced.push((
+                        self.coerce(Typed::new(entry_key, (*key).clone()), wanted_key, place)?,
+                        self.coerce(
+                            Typed::new(entry_value, (*value).clone()),
+                            wanted_value,
+                            place,
+                        )?,
+                    ));
+                }
+                Ok(Expr::MapOf(coerced))
             }
             (_, ty, wanted) => {
                 let feature = format!("{} where {} is needed", ty.kind(), wanted.kind());
@@ -840,9 +863,25 @@ impl Lowerer<'_> {
     }
 }
 
-fn in_type(expr: Expr, ty: Option<IntType>) -> Expr {
-    match ty {
-        Some(known) => apply(Op::Fit(known), vec![expr]),
-        None => expr,
+fn joined_type<'t>(types: impl Iterator<Item = &'t Type> + Clone) -> Type {
+    let first_known = types
+        .clone()
+        .find(|ty| !matches!(ty, Type::Unknown | Type::Null))
+        .cloned()
+        .unwrap_or(Type::Unknown);
+    types.fold(first_known, |joined, ty| joined.union(ty).unwrap_or(joined))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Numbers {
+    Wide,
+    Javascript,
+}
+
+fn in_type(expr: Expr, ty: Option<IntType>, numbers: Numbers) -> Expr {
+    match (ty, numbers) {
+        (Some(known), _) => apply(Op::Fit(known), vec![expr]),
+        (None, Numbers::Wide) => expr,
+        (None, Numbers::Javascript) => apply(Op::Safe, vec![expr]),
     }
 }

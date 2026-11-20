@@ -27,8 +27,10 @@ sentence: a loop, `match`, `if let`, a clock, a random number, input or output, 
 unknown macro or method, a change in place (`let mut`, `=`, `+=`, `&mut self`), a cast, text in
 quotes, an import from outside `earnest`, any other top-level item, an `Option` as the value of a
 `Map` or the item of a `Seq` or a `Queue` (reading it would give `Some(None)`, which the checker
-can't tell from `None`), a `#[range]` that reaches outside its integer type, a function named
-`forall`, `exists` or `Some`, any other `#[cfg]` or
+can't tell from `None`), a `#[range]` that reaches outside its integer type, an item or a value
+named `forall`, `exists`, `Some`, `None`, `Set`, `Seq` or `Map` that the file calls or uses as the
+library's, an item of the library imported under another name, a nesting deeper than 1000 levels,
+any other `#[cfg]` or
 `#[cfg_attr]` (a part of a model kept in one build only can't be checked for every build), and
 `#[action]`, `#[rule]` or `#[end]` written with a path, which `#[model]` would not see. Every
 problem in the file is reported, and a file with a problem gives no drafts. Names and kinds are not checked here:

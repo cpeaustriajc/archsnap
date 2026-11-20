@@ -250,3 +250,18 @@ fn an_arrow_to_a_state_the_graph_does_not_hold_is_left_out() {
         Some("Not shown: 0 of 2 states and 1 of 2 arrows.")
     );
 }
+
+#[test]
+fn the_note_counts_the_states_the_boxes_stand_for_and_not_the_boxes() {
+    let mut merged = chain(ARROW_LIMIT + 1);
+    for node in &mut merged.nodes {
+        node.states = 3;
+    }
+    let drawn = read(&chart(&merged));
+    assert_eq!(drawn.states.len(), 21, "21 boxes are drawn of 22");
+    assert_eq!(
+        drawn.note.as_deref(),
+        Some("Not shown: 3 of 66 states and 1 of 21 arrows."),
+        "the box left out stands for 3 of the 66 states"
+    );
+}

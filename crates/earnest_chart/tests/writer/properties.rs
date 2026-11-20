@@ -166,7 +166,14 @@ proptest! {
     fn the_note_counts_what_the_chart_leaves_out(graph in graphs()) {
         let text = chart(&graph);
         let drawn = read(&text);
-        let states = graph.nodes.len() - drawn.states.len();
+        let boxes = graph.nodes.len() - drawn.states.len();
+        let all: usize = graph.nodes.iter().map(|node| node.states).sum();
+        let shown: usize = drawn
+            .states
+            .iter()
+            .map(|(id, _)| graph.nodes[id[1..].parse::<usize>().expect("an id is `s` and a number")].states)
+            .sum();
+        let states = all - shown;
         let arrows = graph.edges.len() - drawn.arrows.len();
         let from_a_start = steps_from_a_start(&graph);
         let beyond = graph
@@ -184,15 +191,14 @@ proptest! {
             1 => " A broken state lies beyond what is shown.".to_owned(),
             many => format!(" {many} broken states lie beyond what is shown."),
         };
-        let expected = (states > 0 || arrows > 0).then(|| format!(
-            "Not shown: {states} of {} states and {arrows} of {} arrows.{lies_beyond}",
-            graph.nodes.len(),
+        let expected = (boxes > 0 || arrows > 0).then(|| format!(
+            "Not shown: {states} of {all} states and {arrows} of {} arrows.{lies_beyond}",
             graph.edges.len()
         ));
         prop_assert_eq!(drawn.note, expected, "the note of\n{}", text);
         let reachable = from_a_start.iter().all(Option::is_some);
         if graph.edges.len() <= ARROW_LIMIT && reachable {
-            prop_assert_eq!(states + arrows, 0, "a small graph is drawn whole:\n{}", text);
+            prop_assert_eq!(boxes + arrows, 0, "a small graph is drawn whole:\n{}", text);
         }
     }
 
@@ -249,7 +255,7 @@ proptest! {
             now: side,
         }];
         let since = RuleChanges { base: &base, changes: &changes };
-        let text = report(&sections, Some(&since));
+        let text = report(&sections, &[], Some(&since));
         let fences: Vec<&str> = text
             .split(['\n', '\r'])
             .filter(|line| line.trim_start().starts_with("```"))

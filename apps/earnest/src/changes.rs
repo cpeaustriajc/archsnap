@@ -144,14 +144,14 @@ fn understood(language: Language, file: &str, bytes: Vec<u8>) -> AtBase {
         Ok(source) => source,
         Err(refused) => {
             let lossy = String::from_utf8_lossy(refused.as_bytes());
-            return if is_model_source(language, &lossy) {
+            return if is_model_source(language, file, &lossy) {
                 AtBase::Unreadable
             } else {
                 AtBase::Absent
             };
         }
     };
-    if !is_model_source(language, &source) {
+    if !is_model_source(language, file, &source) {
         return AtBase::Absent;
     }
     let reading = read(language, file, &source);
@@ -421,6 +421,15 @@ pub(crate) fn rule_changes(compare: &Compare<'_>, targets: &[Target<'_>]) -> Com
             continue;
         };
         if !file.problems().is_empty() {
+            match at_base(compare.base, language, &file.path) {
+                AtBase::Models(drafts) => {
+                    compared
+                        .changes
+                        .extend(removed_with_their_model(compare, &drafts, &[]));
+                }
+                AtBase::Unreadable => compared.unreadable_at_base.push(file.path.clone()),
+                AtBase::Absent => {}
+            }
             continue;
         }
         let old = match at_base(compare.base, language, &file.path) {
@@ -479,7 +488,7 @@ mod tests {
     use crate::discovery::discover;
     use crate::reading::{ModelFile, load};
     use crate::run::Bounds;
-    use crate::select::select;
+    use crate::select::select_with_removed;
     use earnest_ast::Draft;
     use std::fmt::Write;
     use std::fs;
@@ -899,7 +908,9 @@ mod tests {
             .into_iter()
             .map(load)
             .collect();
-        let targets = select(&files, model, None).expect("the selection names a model");
+        let selected = select_with_removed(&files, model, None, Some("HEAD"))
+            .expect("the selection names a model or a removed one");
+        let targets = selected.targets;
         let compare = Compare {
             base: "HEAD",
             roots: &roots,
@@ -977,5 +988,75 @@ mod tests {
         let folder = repository_with_a_base_commit();
         let listed = changes_since_the_base(&PathBuf::from(folder.path()), None);
         assert_eq!(listed, [], "the files are as the base has them");
+    }
+
+    #[test]
+    fn a_file_that_became_unreadable_lists_its_base_rules_as_removed() {
+        let folder = repository_with_a_base_commit();
+        let root = folder.path();
+        put(
+            root,
+            "kept.model.ts",
+            "import { m } from \"@earnest/model\";\nexport const now = Date.now();\n",
+        );
+        assert_eq!(
+            changes_since_the_base(root, None),
+            [
+                change("Tank", "capped", Kind::Removed),
+                change("Lamp", "dim", Kind::Removed),
+            ],
+            "the rules the run can no longer read are gone from it, and the file is listed as \
+             unreadable beside them"
+        );
+        assert_eq!(
+            changes_since_the_base(root, Some("Lamp")),
+            [change("Lamp", "dim", Kind::Removed)],
+            "`--model` narrows them as it does the others"
+        );
+    }
+
+    #[test]
+    fn a_model_that_was_deleted_is_listed_when_it_is_named() {
+        let folder = repository_with_a_base_commit();
+        let root = folder.path();
+        fs::remove_file(root.join("gone.model.ts")).expect("a file can be deleted");
+        assert_eq!(
+            changes_since_the_base(root, Some("Bell")),
+            [change("Bell", "rings", Kind::Removed)],
+            "no model is named `Bell` now, and the base had one"
+        );
+    }
+
+    #[test]
+    fn a_file_unreadable_at_the_base_and_now_is_warned_of() {
+        let folder = tempfile::tempdir().expect("a temporary folder can be made");
+        let root = folder.path();
+        let broken = "import { m } from \"@earnest/model\";\nexport const now = Date.now();\n";
+        put(root, "a.model.ts", broken);
+        run_git(root, &["init", "--quiet", "."]);
+        run_git(root, &["add", "--all"]);
+        run_git(root, &["commit", "--quiet", "--message", "base"]);
+        let roots = [root.to_path_buf()];
+        let files: Vec<ModelFile> = discover(&roots)
+            .expect("the root exists")
+            .into_iter()
+            .map(load)
+            .collect();
+        let compare = Compare {
+            base: "HEAD",
+            roots: &roots,
+            files: &files,
+            model: None,
+            rule: None,
+            bounds: bounds(),
+        };
+        let compared = rule_changes(&compare, &[]);
+        assert_eq!(compared.changes, [], "nothing can be told of either side");
+        assert_eq!(
+            compared.warnings("HEAD").len(),
+            1,
+            "the file is named as unreadable at the base: {:?}",
+            compared.warnings("HEAD")
+        );
     }
 }

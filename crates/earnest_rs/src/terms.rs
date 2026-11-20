@@ -1,4 +1,4 @@
-use crate::reader::{OUTSIDE, Reader, at, path_text, why_outside};
+use crate::reader::{OUTSIDE, Reader, Sign, at, path_text, start_of, unwrapped, why_outside};
 use earnest_ast::{Binary, HelperKind, Reach, Shape, ShapeKind, Term, TermKind, Unary};
 use earnest_value::IntType;
 use proc_macro2::Span;
@@ -63,6 +63,7 @@ const PRIMITIVES: [&str; 50] = [
 ];
 
 const OPTION_TESTS: [&str; 2] = ["is_none", "is_some_and"];
+const LIBRARY_CALLS: [&str; 3] = ["forall", "exists", "Some"];
 
 const LOOP: &str = "a loop is outside the library: use `every`, `some`, `forall` or `exists`";
 const CHANGE: &str =
@@ -71,14 +72,6 @@ const WAIT: &str = "waiting is outside the library: model it with a `Request` or
 const PRINTING: [&str; 7] = [
     "println", "print", "eprintln", "eprint", "dbg", "write", "writeln",
 ];
-
-fn unwrapped(expr: &Expr) -> &Expr {
-    match expr {
-        Expr::Paren(inner) => unwrapped(&inner.expr),
-        Expr::Group(inner) => unwrapped(&inner.expr),
-        other => other,
-    }
-}
 
 fn attributes_of(expr: &Expr) -> &[Attribute] {
     match expr {
@@ -141,11 +134,21 @@ fn changes_in_place(op: &BinOp) -> bool {
 
 impl Reader<'_> {
     pub(crate) fn term(&mut self, expr: &Expr) -> Term {
+        if let Some(refused) = self.too_deep(|| start_of(expr)) {
+            return refused;
+        }
+        self.depth = self.depth.saturating_add(1);
+        let read = self.term_inside(expr);
+        self.depth = self.depth.saturating_sub(1);
+        read
+    }
+
+    fn term_inside(&mut self, expr: &Expr) -> Term {
         self.refuse_conditional(attributes_of(expr));
         match expr {
             Expr::Paren(inner) => self.term(&inner.expr),
             Expr::Group(inner) => self.term(&inner.expr),
-            Expr::Lit(literal) => self.literal(literal),
+            Expr::Lit(literal) => self.literal(literal, Sign::Plus, literal.span()),
             Expr::Path(name) => self.path(name),
             Expr::Field(read) => self.field_read(read),
             Expr::MethodCall(call) => self.method_call(call),
@@ -163,12 +166,11 @@ impl Reader<'_> {
         }
     }
 
-    fn literal(&mut self, literal: &ExprLit) -> Term {
-        let span = literal.span();
+    fn literal(&mut self, literal: &ExprLit, sign: Sign, span: Span) -> Term {
         match &literal.lit {
             Lit::Bool(flag) => at(span, TermKind::Bool(flag.value)),
             Lit::Int(number) => {
-                let Ok(value) = number.base10_parse() else {
+                let Some(value) = Self::literal_number(literal, sign) else {
                     let feature = self.short_text(span);
                     return self.nothing(span, &feature, "the number is too large for the checker");
                 };
@@ -237,7 +239,7 @@ impl Reader<'_> {
         let target = self.term(&read.base);
         match &read.member {
             Member::Named(field) => at(
-                read.span(),
+                start_of(&read.base),
                 TermKind::Member(Box::new(target), field.to_string()),
             ),
             Member::Unnamed(index) => {
@@ -252,7 +254,7 @@ impl Reader<'_> {
     }
 
     fn method_call(&mut self, call: &ExprMethodCall) -> Term {
-        let span = call.span();
+        let span = start_of(&call.receiver);
         let name = call.method.to_string();
         if name == "clone" && call.args.is_empty() {
             return self.term(&call.receiver);
@@ -300,7 +302,7 @@ impl Reader<'_> {
             );
         }
         at(
-            call.span(),
+            call.receiver.span(),
             TermKind::Helper {
                 kind: HelperKind::Method,
                 name: name.to_owned(),
@@ -310,7 +312,7 @@ impl Reader<'_> {
     }
 
     fn call(&mut self, call: &ExprCall) -> Term {
-        let span = call.span();
+        let span = call.func.span();
         let Expr::Path(function) = unwrapped(&call.func) else {
             let feature = self.short_text(call.func.span());
             return self.nothing(call.func.span(), &feature, OUTSIDE);
@@ -318,6 +320,17 @@ impl Reader<'_> {
         let text = path_text(&function.path);
         let parts: Vec<&str> = text.split("::").collect();
         let arguments: Vec<&Expr> = call.args.iter().collect();
+        if let [name] = parts.as_slice()
+            && self.bound.iter().any(|local| local == name)
+            && (self.functions.contains(*name) || LIBRARY_CALLS.contains(name))
+        {
+            return self.nothing(
+                function.span(),
+                &text,
+                "a value of this body has this name, so a call of it is not a call of the \
+                 library's or the file's function of the same name: give the value another name",
+            );
+        }
         match (parts.as_slice(), arguments.as_slice()) {
             (["Some"], [inner]) => {
                 let wrapped = self.term(inner);
@@ -407,14 +420,17 @@ impl Reader<'_> {
     }
 
     fn lambda(&mut self, closure: &ExprClosure) -> Term {
-        let parameters = closure
+        let parameters: Vec<String> = closure
             .inputs
             .iter()
             .map(|input| self.parameter(input).0)
             .collect();
+        let kept = self.bound.len();
+        self.bound.extend(parameters.iter().cloned());
         let body = self.term(&closure.body);
+        self.bound.truncate(kept);
         at(
-            closure.span(),
+            closure.or1_token.span,
             TermKind::Lambda {
                 parameters,
                 body: Box::new(body),
@@ -423,7 +439,7 @@ impl Reader<'_> {
     }
 
     fn across(&mut self, call: &ExprCall, function: &ExprPath, reach: Reach) -> Term {
-        let span = call.span();
+        let span = call.func.span();
         let word = path_text(&function.path);
         let arguments: Vec<&Expr> = call.args.iter().collect();
         let inputs: Vec<&Pat> = match arguments.as_slice() {
@@ -458,7 +474,9 @@ impl Reader<'_> {
             );
         };
         let shape = self.shape(ty, &[]);
+        self.bound.push(parameter.clone());
         let body = self.term(&closure.body);
+        self.bound.pop();
         at(
             span,
             TermKind::Across {
@@ -473,7 +491,14 @@ impl Reader<'_> {
     fn unary(&mut self, unary: &ExprUnary) -> Term {
         let op = match unary.op {
             UnOp::Not(_) => Unary::Not,
-            UnOp::Neg(_) => Unary::Negate,
+            UnOp::Neg(_) => {
+                if let Expr::Lit(literal) = unwrapped(&unary.expr)
+                    && matches!(literal.lit, Lit::Int(_))
+                {
+                    return self.literal(literal, Sign::Minus, unary.op.span());
+                }
+                Unary::Negate
+            }
             _ => {
                 return self.nothing(
                     unary.span(),
@@ -483,7 +508,7 @@ impl Reader<'_> {
             }
         };
         let inner = self.term(&unary.expr);
-        at(unary.span(), TermKind::Unary(op, Box::new(inner)))
+        at(unary.op.span(), TermKind::Unary(op, Box::new(inner)))
     }
 
     fn binary(&mut self, binary: &ExprBinary) -> Term {
@@ -491,7 +516,7 @@ impl Reader<'_> {
         let right = self.term(&binary.right);
         if let Some(op) = operator(&binary.op) {
             return at(
-                binary.span(),
+                start_of(&binary.left),
                 TermKind::Binary(op, Box::new(left), Box::new(right)),
             );
         }
@@ -516,13 +541,13 @@ impl Reader<'_> {
             ),
         };
         at(
-            branch.span(),
+            branch.if_token.span,
             TermKind::Choose(Box::new(test), Box::new(yes), Box::new(no)),
         )
     }
 
     fn record(&mut self, literal: &ExprStruct) -> Term {
-        let span = literal.span();
+        let span = literal.path.span();
         let name = path_text(&literal.path);
         if name != "Self" && !self.records.contains_key(&name) {
             return self.nothing(

@@ -24,7 +24,8 @@ pub enum Order {
     GreaterOrEqual,
 }
 
-/// Arithmetic on two numbers. A result that does not fit in 64 bits is [`Fault::Overflow`].
+/// Arithmetic on two numbers. A result that does not fit in 64 bits is [`Fault::Overflow`], and
+/// so is one past the safe integers when it is wrapped in [`Op::Safe`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Math {
@@ -115,6 +116,10 @@ pub enum Op {
     SomeOf,
     /// The value of an optional that must be present. `null` is [`Fault::NullRead`].
     Unwrap,
+    /// A number that must be one a JavaScript number holds exactly. It gives its argument back
+    /// unchanged, and a number beyond `-MOST_SAFE_INTEGER` or `MOST_SAFE_INTEGER` is
+    /// [`Fault::Overflow`].
+    Safe,
     /// A number that must be a value of this integer type. It gives its argument back
     /// unchanged, and a number outside the type is [`Fault::Outside`].
     Fit(IntType),

@@ -2,8 +2,8 @@ use crate::Reader;
 use crate::bodies::body_span;
 use crate::terms::bare;
 use earnest_ast::{
-    ActionBody, ActionDraft, Draft, EndDraft, LabelDraft, RuleDraft, Shape, Term, TermKind,
-    ViewDraft, condition_text,
+    ActionBody, ActionDraft, COLORED_PARTS, Draft, EndDraft, LabelDraft, RuleDraft, Shape, Term,
+    TermKind, ViewDraft, condition_text, is_color,
 };
 use oxc_ast::ast::{
     Argument, ArrowFunctionExpression, BindingPattern, CallExpression, Expression, ObjectPattern,
@@ -316,7 +316,7 @@ impl Reader<'_> {
             state: pick(&entries, "state").and_then(|label| self.label(label)),
             group: pick(&entries, "group").and_then(|label| self.label(label)),
             steps: pick(&entries, "step").map_or_else(Vec::new, |steps| self.texts(steps)),
-            colors: pick(&entries, "colors").map_or_else(Vec::new, |colors| self.texts(colors)),
+            colors: pick(&entries, "colors").map_or_else(Vec::new, |colors| self.colors(colors)),
         }
     }
 
@@ -326,6 +326,30 @@ impl Reader<'_> {
             state_name: function.state_name,
             term: function.term,
         })
+    }
+
+    fn colors(&mut self, wrapped: &Expression<'_>) -> Vec<(String, String)> {
+        let mut found = Vec::new();
+        for (name, start, value) in self.entries(wrapped) {
+            let color = self.sentence(value);
+            if !COLORED_PARTS.contains(&name.as_str()) {
+                self.refuse(
+                    start,
+                    &name,
+                    "`colors` colors `broken`, `start` and `end`, and no other part",
+                );
+            } else if !is_color(&color) {
+                let written = self.quoted(value.span());
+                self.refuse(
+                    value.span().start,
+                    &written,
+                    "a color is `#` and 3, 4, 6 or 8 hexadecimal digits, or a color name of \
+                     letters such as `red`; the chart would leave anything else out",
+                );
+            }
+            found.push((name, color));
+        }
+        found
     }
 
     fn texts(&mut self, wrapped: &Expression<'_>) -> Vec<(String, String)> {

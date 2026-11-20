@@ -621,7 +621,6 @@ pub struct Lamp {
     );
     assert_eq!(
         refused_messages(source)[0],
-        "the checker reads a call of `forall` as the library's, so a function of the file \
-         can't have this name"
+        "the checker reads `forall` as the library's, so a fn of the file can't have this name"
     );
 }

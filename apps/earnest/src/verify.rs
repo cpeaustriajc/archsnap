@@ -4,7 +4,7 @@ use crate::changes::{Compare, check_base, rule_changes};
 use crate::commands::{Exit, gather, limits_of};
 use crate::print::{Since, Verified, to_stderr, to_stdout};
 use crate::run::{Bounds, Checked, Graphs, Search, checked, explore_each};
-use crate::select::{Target, select};
+use crate::select::{Target, select_with_removed};
 use std::path::Path;
 
 const HERE: &str = ".";
@@ -146,11 +146,13 @@ pub(crate) fn verify(arguments: &Verify) -> Result<Exit, String> {
         check_base(base)?;
     }
     let files = gather(&arguments.selection.models)?;
-    let targets = select(
+    let selected = select_with_removed(
         &files,
         arguments.selection.models.model.as_deref(),
         arguments.selection.rule.as_deref(),
+        arguments.base.as_deref(),
     )?;
+    let targets = selected.targets;
     let checked = match check_all(&targets, arguments, bounds) {
         Ok(checked) => checked,
         Err(error) => {
@@ -171,6 +173,13 @@ pub(crate) fn verify(arguments: &Verify) -> Result<Exit, String> {
     });
     if let Some((base, compared)) = &compared {
         to_stderr(&compared.warnings(base).join("\n"));
+    }
+    if let Some(error) = selected.unmatched
+        && compared
+            .as_ref()
+            .is_none_or(|(_, compared)| compared.changes.is_empty())
+    {
+        return Err(error);
     }
     let verified = Verified {
         files: &files,

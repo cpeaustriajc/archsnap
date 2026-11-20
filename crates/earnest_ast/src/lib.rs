@@ -7,6 +7,12 @@
 //! name as the file writes it, because a reader can't tell a record's field from a primitive's
 //! property: the lowering decides by the kind of the value that is read.
 
+mod color;
+mod nesting;
+
+pub use color::{COLORED_PARTS, is_color};
+pub use nesting::{MOST_NESTING, TOO_DEEP, nesting_problem};
+
 use earnest_diagnostics::{Place, Problem};
 use earnest_value::IntType;
 

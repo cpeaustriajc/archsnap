@@ -13,3 +13,6 @@ each: in Rust a number has an integer type that its results must stay inside, an
 is another value than `None`. A number's `Shape` carries its integer type, a `Declared` term is
 a value with its type written out, and a helper is a `Function` of the file or a `Method` of
 the model, which may share a name.
+
+`nesting_problem` and `MOST_NESTING` are the one limit on how deep a model file or an expression
+may nest, which both readers and the lowering apply, and `is_color` is what a view's color may be.

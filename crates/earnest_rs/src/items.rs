@@ -2,9 +2,9 @@ use crate::bodies::Body;
 use crate::reader::{Reader, attribute, path_text, place_of, why_outside};
 use earnest_ast::{
     ActionBody, ActionDraft, Draft, EndDraft, FieldDraft, HelperDraft, HelperKind, Language,
-    Reading, RuleDraft, Shape, Term, TermKind, ViewDraft, condition_text,
+    Reading, RuleDraft, Shape, Term, TermKind, ViewDraft, condition_text, nesting_problem,
 };
-use proc_macro2::Span;
+use proc_macro2::{Ident, Span};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{
@@ -14,7 +14,7 @@ use syn::{
 };
 
 const ROLES: [&str; 3] = ["action", "rule", "end"];
-const LIBRARY_CALLS: [&str; 3] = ["forall", "exists", "Some"];
+const LIBRARY_NAMES: [&str; 7] = ["forall", "exists", "Some", "None", "Set", "Seq", "Map"];
 const STATE: &str = "self";
 const ONLY_MODELS: &str =
     "a model file holds only models, the types they use, constants and helper functions";
@@ -122,6 +122,12 @@ const BYTE_ORDER_MARK: char = '\u{feff}';
 
 pub(crate) fn read_file(file: &str, source: &str) -> Reading {
     let source = source.strip_prefix(BYTE_ORDER_MARK).unwrap_or(source);
+    if let Some(problem) = nesting_problem(file, source) {
+        return Reading {
+            drafts: Vec::new(),
+            problems: vec![problem],
+        };
+    }
     let mut reader = Reader::new(file, source);
     let drafts = match syn::parse_file(source) {
         Ok(parsed) => reader.drafts(&parsed.items),
@@ -201,17 +207,25 @@ impl Reader<'_> {
             self.refuse_conditional(attributes);
             match item {
                 Item::Use(import) => self.import(import),
-                Item::Enum(choices) => self.declare_enum(choices),
+                Item::Enum(choices) => {
+                    self.refuse_library_name(&choices.ident, "enum");
+                    self.declare_enum(choices);
+                }
                 Item::Struct(state) if derives(&state.attrs, "Model") => {
+                    self.refuse_library_name(&state.ident, "struct");
                     self.plain(state);
                     self.models.insert(state.ident.to_string());
                     found.models.push(state);
                 }
-                Item::Struct(record) => self.declare_record(record),
+                Item::Struct(record) => {
+                    self.refuse_library_name(&record.ident, "struct");
+                    self.declare_record(record);
+                }
                 Item::Impl(block) if marks_model(&block.attrs) => found.blocks.push(block),
                 Item::Impl(block) => self.refuse(block.impl_token.span, "impl", ONLY_MODELS),
                 Item::Const(constant) => {
                     let name = constant.ident.to_string();
+                    self.refuse_library_name(&constant.ident, "const");
                     if let Some(number) = self.whole_number(&constant.expr) {
                         self.numbers.insert(name.clone(), number);
                     }
@@ -221,16 +235,7 @@ impl Reader<'_> {
                 }
                 Item::Fn(function) => {
                     let name = function.sig.ident.to_string();
-                    if LIBRARY_CALLS.contains(&name.as_str()) {
-                        self.refuse(
-                            function.sig.ident.span(),
-                            &format!("fn {name}"),
-                            &format!(
-                                "the checker reads a call of `{name}` as the library's, so a \
-                                 function of the file can't have this name"
-                            ),
-                        );
-                    }
+                    self.refuse_library_name(&function.sig.ident, "fn");
                     self.functions.insert(name);
                     found.functions.push(function);
                 }
@@ -251,10 +256,45 @@ impl Reader<'_> {
             UseTree::Glob(_) | UseTree::Group(_) => None,
         };
         if root.is_some_and(|name| name == "earnest") {
+            self.refuse_renames(&import.tree);
             return;
         }
         let path = self.short_text(import.tree.span()).replace(' ', "");
         self.refuse(import.tree.span(), &path, why_outside(&path));
+    }
+
+    fn refuse_renames(&mut self, tree: &UseTree) {
+        match tree {
+            UseTree::Path(path) => self.refuse_renames(&path.tree),
+            UseTree::Group(group) => {
+                for item in &group.items {
+                    self.refuse_renames(item);
+                }
+            }
+            UseTree::Rename(renamed) if renamed.rename != "_" => {
+                let feature = format!("{} as {}", renamed.ident, renamed.rename);
+                self.refuse(
+                    renamed.rename.span(),
+                    &feature,
+                    "the checker reads a library name by the name it is written with, so an \
+                     item of the library can't be imported under another name",
+                );
+            }
+            UseTree::Rename(_) | UseTree::Name(_) | UseTree::Glob(_) => {}
+        }
+    }
+
+    fn refuse_library_name(&mut self, name: &Ident, what: &str) {
+        if LIBRARY_NAMES.contains(&name.to_string().as_str()) {
+            self.refuse(
+                name.span(),
+                &format!("{what} {name}"),
+                &format!(
+                    "the checker reads `{name}` as the library's, so a {what} of the file can't \
+                     have this name"
+                ),
+            );
+        }
     }
 
     fn plain(&mut self, state: &ItemStruct) {
@@ -439,9 +479,12 @@ impl Reader<'_> {
                 taken: taken.clone(),
                 term,
             };
+            let kept = self.bound.len();
+            self.bound.extend(taken.iter().cloned());
             let guard = self.guard(&method.block.stmts).map(body);
             let close = method.block.brace_token.span.close();
             let change = body(self.rest(&method.block.stmts, Body::Action, close));
+            self.bound.truncate(kept);
             draft.actions.push(ActionDraft {
                 id,
                 label: says,
@@ -652,7 +695,10 @@ impl Reader<'_> {
                 }
             }
         }
+        let kept = self.bound.len();
+        self.bound.extend(parameters.iter().cloned());
         let mut body = self.value_of(block);
+        self.bound.truncate(kept);
         if let ReturnType::Type(_, ty) = &signature.output {
             body = self.of_type(ty, body);
         }

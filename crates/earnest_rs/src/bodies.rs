@@ -1,5 +1,5 @@
 use crate::reader::{Reader, at};
-use earnest_ast::{Binary, Term, TermKind};
+use earnest_ast::{Binary, MOST_NESTING, Term, TermKind};
 use proc_macro2::Span;
 use syn::spanned::Spanned;
 use syn::{Block, Expr, ExprIf, Local, Pat, Stmt, StmtMacro};
@@ -36,15 +36,27 @@ impl Reader<'_> {
     }
 
     pub(crate) fn rest(&mut self, statements: &[Stmt], body: Body, close: Span) -> Term {
+        if let Some(refused) = self.too_deep(|| close) {
+            return refused;
+        }
+        self.depth = self.depth.saturating_add(1);
+        let read = self.statements(statements, body, close);
+        self.depth = self.depth.saturating_sub(1);
+        read
+    }
+
+    fn statements(&mut self, statements: &[Stmt], body: Body, close: Span) -> Term {
         let Some((first, later)) = statements.split_first() else {
             return self.nothing(close, "}", "the body ends without giving a value");
         };
         match first {
             Stmt::Local(local) => {
                 let (name, value) = self.binding(local);
+                self.bound.push(name.clone());
                 let inner = self.rest(later, body, close);
+                self.bound.pop();
                 at(
-                    local.span(),
+                    local.let_token.span,
                     TermKind::Bind {
                         name,
                         value: Box::new(value),
@@ -80,7 +92,7 @@ impl Reader<'_> {
                     let yes = self.returning(branch, body);
                     let no = self.rest(later, body, close);
                     return at(
-                        branch.span(),
+                        branch.if_token.span,
                         TermKind::Choose(Box::new(test), Box::new(yes), Box::new(no)),
                     );
                 }
@@ -144,13 +156,26 @@ impl Reader<'_> {
     }
 
     pub(crate) fn guard(&mut self, statements: &[Stmt]) -> Option<Term> {
+        if self.depth >= MOST_NESTING {
+            return None;
+        }
+        self.depth = self.depth.saturating_add(1);
+        let read = self.guarded(statements);
+        self.depth = self.depth.saturating_sub(1);
+        read
+    }
+
+    fn guarded(&mut self, statements: &[Stmt]) -> Option<Term> {
         let (first, later) = statements.split_first()?;
         match first {
             Stmt::Local(local) => {
-                let inner = self.guard(later)?;
                 let (name, value) = self.binding(local);
+                self.bound.push(name.clone());
+                let inner = self.guard(later);
+                self.bound.pop();
+                let inner = inner?;
                 Some(at(
-                    local.span(),
+                    local.let_token.span,
                     TermKind::Bind {
                         name,
                         value: Box::new(value),
@@ -185,7 +210,7 @@ impl Reader<'_> {
                 if inside.is_none() && after.is_none() {
                     return None;
                 }
-                let span = branch.span();
+                let span = branch.if_token.span;
                 let test = self.term(&branch.cond);
                 let yes = inside.unwrap_or_else(|| at(span, always()));
                 let no = after.unwrap_or_else(|| at(span, always()));

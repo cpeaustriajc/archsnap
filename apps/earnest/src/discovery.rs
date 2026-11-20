@@ -8,14 +8,7 @@ use std::str::Utf8Error;
 
 const SKIPPED_FOLDERS: [&str; 4] = ["node_modules", "target", "dist", "build"];
 const TYPESCRIPT_EXTENSIONS: [&str; 3] = ["ts", "mts", "tsx"];
-const TYPESCRIPT_IMPORTS: [&str; 2] = ["\"@earnest/model\"", "'@earnest/model'"];
 const RUST_EXTENSION: &str = "rs";
-const RUST_MARKS: [&str; 4] = [
-    "earnest::model",
-    "earnest::{",
-    "useearnestas",
-    "externcrateearnest",
-];
 const HERE: &str = ".";
 pub(crate) const IN_EVERY_MODEL_FILE: &str = "earnest";
 const UTF16_LITTLE_ENDIAN: [u8; 2] = [0xFF, 0xFE];
@@ -71,16 +64,12 @@ pub(crate) fn language_of(path: &Path) -> Option<Language> {
     }
 }
 
-pub(crate) fn is_model_source(language: Language, source: &str) -> bool {
-    match language {
-        Language::TypeScript => TYPESCRIPT_IMPORTS
-            .iter()
-            .any(|import| source.contains(import)),
-        Language::Rust => {
-            let unspaced: String = source.split_whitespace().collect();
-            RUST_MARKS.iter().any(|mark| unspaced.contains(mark))
-        }
-    }
+pub(crate) fn is_model_source(language: Language, path: &str, source: &str) -> bool {
+    let reaches = |text: &str| match language {
+        Language::TypeScript => earnest_ts::reaches_library(path, text),
+        Language::Rust => earnest_rs::uses_library(text),
+    };
+    reaches(source) || (source.contains('\0') && reaches(&source.replace('\0', "")))
 }
 
 fn is_skipped_folder(name: &OsStr) -> bool {
@@ -143,12 +132,13 @@ fn utf16_text(bytes: &[u8]) -> Option<String> {
 
 fn not_utf8(path: &Path, language: Language, bytes: &[u8], error: Utf8Error) -> Option<Problem> {
     let shown = path.to_string_lossy();
-    if let Some(decoded) = utf16_text(bytes) {
-        return is_model_source(language, &decoded)
-            .then(|| Problem::new(&shown, TOP_OF_FILE, "`UTF-16`", NOT_UTF8));
+    let in_utf16 =
+        utf16_text(bytes).is_some_and(|decoded| is_model_source(language, &shown, &decoded));
+    if in_utf16 {
+        return Some(Problem::new(&shown, TOP_OF_FILE, "`UTF-16`", NOT_UTF8));
     }
     let lossy = String::from_utf8_lossy(bytes);
-    if !is_model_source(language, &lossy) {
+    if !is_model_source(language, &shown, &lossy) {
         return None;
     }
     let (before, after) = bytes.split_at_checked(error.valid_up_to())?;
@@ -169,7 +159,7 @@ fn model_file(path: &Path) -> Option<Found> {
         Err(error) => return Some(Found::unread(path, cant_be_opened(path, "file", &error))),
     };
     match String::from_utf8(bytes) {
-        Ok(source) => is_model_source(language, &source)
+        Ok(source) => is_model_source(language, &path.to_string_lossy(), &source)
             .then(|| Found::model(&path.to_string_lossy(), language, &source)),
         Err(refused) => {
             let error = refused.utf8_error();
@@ -499,6 +489,99 @@ mod tests {
                 ("little.model.ts", 1, 1, "`UTF-16`"),
             ],
             "the import is there once the file is decoded, so the file is a model"
+        );
+    }
+
+    #[test]
+    fn a_typescript_file_is_a_model_file_by_what_its_import_means_not_by_how_it_is_written() {
+        let folder = folder_with(&[
+            (
+                "hex.model.ts",
+                "import { m } from \"@earnest\\x2fmodel\";\n",
+            ),
+            (
+                "unicode.model.ts",
+                "import { m } from \"\\u0040earnest/model\";\n",
+            ),
+            (
+                "continued.model.ts",
+                "import { m } from \"@earnest/mo\\\ndel\";\n",
+            ),
+            ("require.ts", "const m = require(\"@earnest/model\");\n"),
+            ("other.ts", "import { m } from \"@earnest\\x2fmodels\";\n"),
+        ]);
+        assert_eq!(
+            names_under(folder.path(), &[folder.path().to_path_buf()]),
+            [
+                "continued.model.ts",
+                "hex.model.ts",
+                "require.ts",
+                "unicode.model.ts"
+            ],
+            "an escape or a line continuation in the specifier changes nothing"
+        );
+        assert_eq!(
+            names_under(folder.path(), &[folder.path().join("hex.model.ts")]),
+            ["hex.model.ts"],
+            "the same when the file is named on the command line"
+        );
+    }
+
+    #[test]
+    fn a_rust_file_is_a_model_file_whatever_lies_between_the_segments_of_its_path() {
+        let folder = folder_with(&[
+            (
+                "block.rs",
+                "use earnest::/* the model module */model::{Model};\n",
+            ),
+            (
+                "line.rs",
+                "use earnest:: // the model module\n    model::Model;\n",
+            ),
+            ("quiet.rs", "// use earnest::model::Model;\nfn f() {}\n"),
+        ]);
+        assert_eq!(
+            names_under(folder.path(), &[folder.path().to_path_buf()]),
+            ["block.rs", "line.rs"],
+            "a comment inside the path is nothing, and a path in a comment is not a use"
+        );
+    }
+
+    #[test]
+    fn a_file_that_starts_with_a_utf16_mark_and_holds_ascii_text_is_unread_at_its_first_byte() {
+        let folder = folder_with(&[]);
+        for (name, mark) in [
+            ("little.model.ts", [0xFF, 0xFE]),
+            ("big.model.ts", [0xFE, 0xFF]),
+        ] {
+            let mut bytes = mark.to_vec();
+            bytes.extend(TYPESCRIPT.as_bytes());
+            fs::write(folder.path().join(name), bytes).expect("a file can be written");
+        }
+        let unread = unread_under(folder.path(), &[folder.path().to_path_buf()]);
+        assert_eq!(
+            places(&unread),
+            [
+                ("big.model.ts", 1, 1, "`byte 0xFE`"),
+                ("little.model.ts", 1, 1, "`byte 0xFF`"),
+            ],
+            "the text is plain, so the first byte is the one that is not UTF-8, as a UTF-16 \
+             decoder would find nonsense and drop the file"
+        );
+    }
+
+    #[test]
+    fn a_file_of_text_with_a_null_between_every_letter_is_a_model_file_that_is_read() {
+        let folder = folder_with(&[]);
+        let spaced: String = TYPESCRIPT
+            .chars()
+            .flat_map(|letter| [letter, '\0'])
+            .collect();
+        fs::write(folder.path().join("spaced.model.ts"), spaced).expect("a file can be written");
+        assert_eq!(
+            names_under(folder.path(), &[folder.path().to_path_buf()]),
+            ["spaced.model.ts"],
+            "it is kept, and the reader then refuses the nulls"
         );
     }
 
