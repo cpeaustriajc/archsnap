@@ -1,0 +1,31 @@
+[package]
+name = "earnest_break_it"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+tlc = []
+tla_rs = []
+
+[[test]]
+name = "break_it"
+path = "tests/break_it/main.rs"
+
+[[test]]
+name = "tlc"
+path = "tests/tlc/main.rs"
+required-features = ["tlc"]
+
+[[test]]
+name = "tla_rs"
+path = "tests/tla_rs/main.rs"
+required-features = ["tla_rs"]
+
+[dev-dependencies]
+earnest = { path = "../../crates/earnest", version = "0.1.0" }
+serde_json.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

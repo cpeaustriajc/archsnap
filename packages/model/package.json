@@ -1,0 +1,39 @@
+{
+  "name": "@earnest/model",
+  "version": "0.1.0",
+  "description": "The TypeScript library that earnest models are written with",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsrs -p tsconfig.build.json",
+    "prepack": "node --eval \"fs.rmSync('dist', { recursive: true, force: true })\" && bun run build && node scripts/publish-manifest.ts apply",
+    "postpack": "node scripts/publish-manifest.ts restore",
+    "typecheck": "tsrs --noEmit",
+    "format": "oxfmt --check",
+    "format:fix": "oxfmt",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "oxfmt": "0.79.0",
+    "tsrs": "7.1.0-beta.tsrs3",
+    "vitest": "5.1.1"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}

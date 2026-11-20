@@ -1,8 +1,0 @@
-id: no-comments
-language: rust
-severity: error
-message: Delete the comment and make the code say it, through names, types or structure.
-rule:
-  any:
-    - kind: line_comment
-    - kind: block_comment

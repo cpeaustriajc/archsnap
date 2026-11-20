@@ -1,0 +1,141 @@
+use earnest::model::{Domain, Model, Set, exists, forall, model, require};
+
+const TOP: u8 = 3;
+const WARM: Phase = Phase::Busy;
+const YES: bool = true;
+const NAME: &str = "a";
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Domain)]
+struct Inner {
+    #[range(0, 2)]
+    q: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Domain)]
+struct Outer {
+    inner: Inner,
+    #[range(0, 2)]
+    count: u8,
+}
+
+fn take_outer(o: Outer) -> bool {
+    o.count > 0
+}
+
+fn take_inner(i: Inner) -> bool {
+    i.q > 0
+}
+
+fn take_u16(x: u16) -> bool {
+    x > 1
+}
+
+fn take_alpha(a: Alpha) -> bool {
+    a == Alpha::On
+}
+
+fn take_cold(c: Cold) -> bool {
+    c == Cold::Low
+}
+
+fn take_line(l: Line) -> u8 {
+    l.qty
+}
+
+fn take_set(s: Set<u8>) -> usize {
+    s.size()
+}
+
+fn take_opt(o: Option<Line>) -> bool {
+    o.is_some()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Domain)]
+enum Phase {
+    Idle,
+    Busy,
+    Done,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Domain)]
+enum Mode {
+    Slow,
+    Fast,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Domain)]
+enum Cold {
+    Low,
+    High,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Domain)]
+enum Alpha {
+    On,
+    Off,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Domain)]
+enum Beta {
+    On,
+    Off,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Domain)]
+struct Line2 {
+    #[range(0, 2)]
+    qty: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Domain)]
+struct Line {
+    #[range(0, 2)]
+    qty: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Model)]
+struct Shop {
+    #[initial(Phase::Idle)]
+    phase: Phase,
+    #[initial(Mode::Slow)]
+    mode: Mode,
+    #[initial(Cold::Low)]
+    cold: Cold,
+    #[range(0, 3)]
+    #[initial(0)]
+    n: u8,
+    #[range(0, 3)]
+    #[initial(0)]
+    w: u16,
+    #[range(0, 3)]
+    #[initial(None)]
+    last: Option<u8>,
+    #[initial(None)]
+    line: Option<Line>,
+    #[initial(None)]
+    cphase: Option<Phase>,
+    #[range(0, 3)]
+    seen: Set<u8>,
+    #[initial(Alpha::On)]
+    alpha: Alpha,
+    #[initial(Beta::On)]
+    beta: Beta,
+    #[initial(None)]
+    line2: Option<Line2>,
+}
+
+#[model]
+impl Shop {
+    #[action("bump")]
+    fn bump(&self, #[range(0, 3)] number: u8) -> Option<Self> {
+        require!(self.n < 3);
+        Some(Self { n: self.n + 1, last: Some(number), ..self.clone() })
+    }
+
+    METHOD
+
+    #[rule("fine")]
+    fn fine(&self) -> bool {
+        self.n <= 3 && CALL
+    }
+}

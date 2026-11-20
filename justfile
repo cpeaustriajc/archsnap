@@ -1,7 +1,7 @@
 default: check
 
 # One recipe per check. To add a check, write its recipe and name it here.
-check: format comments unused-dependencies dependencies lint test verify
+check: format unused-dependencies dependencies lint typescript test verify models
 
 format:
     cargo fmt --check
@@ -9,21 +9,47 @@ format:
 lint:
     cargo clippy --all-targets --locked -- -D warnings
 
-comments:
-    ast-grep test --skip-snapshot-tests
-    ast-grep scan
-
 dependencies:
     cargo deny check
 
 unused-dependencies:
     cargo machete
 
+typescript:
+    bun install --frozen-lockfile
+    bun run --cwd packages/model typecheck
+    bun run --cwd packages/model format
+    bun run --cwd packages/model test
+    bun run --cwd packages/cli typecheck
+    bun run --cwd packages/cli format
+    bun run --cwd packages/cli test
+
 test:
     cargo test --locked
 
+tlc:
+    cargo build --release --locked -p earnest-cli
+    for model in tasks/conformance/models/*.model.ts tasks/conformance/models/*.rs tasks/conformance/twins/*.model.ts tasks/conformance/twins/*.rs tasks/conformance/agreement/*.model.ts tasks/conformance/agreement/*.rs tasks/models/src/pool.rs tasks/models/src/cache.rs tasks/models/src/outcome.rs; do target/release/earnest confirm --tlc target/tools/tla2tools.jar "$model" || exit 1; done
+    cargo clippy --locked -p earnest_break_it --features tlc --test tlc -- -D warnings
+    cargo test --locked -p earnest_break_it --features tlc --test tlc
+
+tla-rs:
+    cargo install tla-tools --locked --version 0.3.0 --root target/tools
+    cargo build --release --locked -p earnest-cli
+    for model in tasks/conformance/models/*.model.ts tasks/conformance/models/*.rs tasks/conformance/twins/*.model.ts tasks/conformance/twins/*.rs; do target/release/earnest confirm --tla-rs target/tools/bin/tla-rs "$model" || exit 1; done
+    cargo clippy --locked -p earnest_break_it --features tla_rs --test tla_rs -- -D warnings
+    cargo test --locked -p earnest_break_it --features tla_rs --test tla_rs
+
+benchmark:
+    cargo build --release --locked -p earnest-cli
+    cargo run --release --locked -p earnest_benchmark -- --runs 5
+
 verify:
     cargo verus focus
+
+models:
+    cargo build --release --locked -p earnest-cli
+    target/release/earnest verify --no-cache tasks/models
 
 mutants:
     cargo mutants --jobs {{ num_cpus() }} --timeout 30 --build-timeout 300

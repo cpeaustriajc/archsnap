@@ -1,0 +1,14 @@
+{
+  "name": "@earnest/cli-win32-x64-msvc",
+  "version": "0.1.0",
+  "description": "The earnest binary for win32-x64-msvc, installed by @earnest/cli",
+  "files": [
+    "bin"
+  ],
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@earnest/cli-linux-x64-gnu",
+  "version": "0.1.0",
+  "description": "The earnest binary for linux-x64-gnu, installed by @earnest/cli",
+  "files": [
+    "bin"
+  ],
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "libc": [
+    "glibc"
+  ]
+}

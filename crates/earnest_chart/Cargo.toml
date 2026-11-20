@@ -1,0 +1,16 @@
+[package]
+name = "earnest_chart"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+earnest_check.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,38 @@
+{
+  "name": "@earnest/cli",
+  "version": "0.1.0",
+  "description": "The earnest model checker: a launcher that runs the binary from this machine's platform package",
+  "bin": {
+    "earnest": "dist/earnest.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "scripts": {
+    "build": "tsrs -p tsconfig.build.json",
+    "prepack": "node --eval \"fs.rmSync('dist', { recursive: true, force: true })\" && bun run build",
+    "assemble": "node scripts/assemble.ts",
+    "typecheck": "tsrs --noEmit",
+    "format": "oxfmt --check",
+    "format:fix": "oxfmt",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "oxfmt": "0.79.0",
+    "tsrs": "7.1.0-beta.tsrs3",
+    "vitest": "5.1.1"
+  },
+  "optionalDependencies": {
+    "@earnest/cli-darwin-arm64": "workspace:0.1.0",
+    "@earnest/cli-darwin-x64": "workspace:0.1.0",
+    "@earnest/cli-linux-arm64-gnu": "workspace:0.1.0",
+    "@earnest/cli-linux-x64-gnu": "workspace:0.1.0",
+    "@earnest/cli-win32-x64-msvc": "workspace:0.1.0"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}

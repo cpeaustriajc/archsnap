@@ -1,0 +1,8 @@
+{
+  "name": "earnest-workspace",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "packages/cli/platforms/*"
+  ]
+}

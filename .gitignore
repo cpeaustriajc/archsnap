@@ -2,3 +2,5 @@
 /.earnest
 /.claude/worktrees/
 /mutants.out
+node_modules
+/packages/*/dist

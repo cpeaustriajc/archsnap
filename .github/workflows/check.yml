@@ -16,7 +16,11 @@ env:
   CARGO_TERM_COLOR: always
   RUST_VERSION: 1.97.0
   JUST_VERSION: 1.59.0
-  AST_GREP_VERSION: 0.51.3
+  NODE_VERSION: 22.23.5
+  BUN_VERSION: 1.4.4
+  TYPESCRIPT_VERSION: 6.0.2
+  TLC_VERSION: 1.8.0
+  TLC_SHA256: fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713
   CARGO_DENY_VERSION: 0.21.0
   CARGO_MACHETE_VERSION: 0.9.1
   VERUS_VERSION: 0.2026.11.02.8bf68ee
@@ -33,7 +37,10 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt,clippy --no-self-update
       - run: rustup default "$RUST_VERSION"
-      - run: sudo npm install --global "rust-just@$JUST_VERSION" "@ast-grep/cli@$AST_GREP_VERSION"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: sudo npm install --global "rust-just@$JUST_VERSION" "bun@$BUN_VERSION" "typescript@$TYPESCRIPT_VERSION"
       - uses: actions/cache@v4
         with:
           path: ~/cargo-tools
@@ -56,3 +63,10 @@ jobs:
           key: cargo-build-${{ runner.os }}-${{ env.RUST_VERSION }}-verus-${{ env.VERUS_VERSION }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-build-${{ runner.os }}-${{ env.RUST_VERSION }}-verus-${{ env.VERUS_VERSION }}-
       - run: just check
+      - name: Install TLC
+        run: |
+          mkdir -p target/tools
+          curl --fail --silent --show-error --location --output target/tools/tla2tools.jar \
+            "https://github.com/tlaplus/tlaplus/releases/download/v$TLC_VERSION/tla2tools.jar"
+          echo "$TLC_SHA256  target/tools/tla2tools.jar" | sha256sum --check --quiet
+      - run: just tlc
