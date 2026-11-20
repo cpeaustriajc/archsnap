@@ -69,12 +69,15 @@ pub struct Path {
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum Verdict {
-    /// True in every reachable state.
+    /// True in every reachable state, and judged in every state the search counted: the
+    /// search ended at the last state, found no state out of range and no fault, so no state
+    /// is left unjudged or unexplored.
     Holds,
     /// False in a reachable state.
     Broken,
     /// Not seen broken, but not judged in every state either: the search stopped at a limit,
-    /// or the rule can't be evaluated in some state.
+    /// the rule can't be evaluated in some state, or a state out of range or a fault in an
+    /// action or an end cut the search short, so some state was not judged or not reached.
     Unknown,
 }
 

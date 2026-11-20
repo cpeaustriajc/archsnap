@@ -69,8 +69,8 @@ fn assert_gives(expected: &Expected) {
     );
     assert_eq!(
         verdicts(&outcome, Verdict::Unknown),
-        [""; 0],
-        "{name}: no rule is left unknown"
+        sorted(expected.unknown.iter().copied()),
+        "{name}: rules that are unknown"
     );
     assert_broken_paths(expected, &outcome);
     let findings: Vec<(FindingKind, Vec<String>)> = outcome

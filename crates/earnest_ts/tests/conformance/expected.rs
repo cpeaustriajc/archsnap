@@ -10,6 +10,7 @@ pub(crate) struct Expected {
     pub(crate) model: &'static str,
     pub(crate) states: usize,
     pub(crate) holds: &'static [&'static str],
+    pub(crate) unknown: &'static [&'static str],
     pub(crate) broken: &'static [(&'static str, Shortest)],
     pub(crate) starts_with: &'static [(&'static str, &'static str)],
     pub(crate) findings: &'static [(FindingKind, &'static [&'static str])],
@@ -26,6 +27,7 @@ const fn passing(
         model,
         states,
         holds,
+        unknown: &[],
         broken: &[],
         starts_with: &[],
         findings: &[],
@@ -35,7 +37,8 @@ const fn passing(
 pub(crate) const MODELS: &[Expected] = &[
     Expected {
         findings: &[(FindingKind::Fault, &["clear"])],
-        ..passing("basket.model.ts", "Basket", 4, &["capped"])
+        unknown: &["capped"],
+        ..passing("basket.model.ts", "Basket", 4, &[])
     },
     Expected {
         broken: &[("focusLands", Shortest::Steps(&["press", "land"]))],
@@ -67,7 +70,8 @@ pub(crate) const MODELS: &[Expected] = &[
     },
     Expected {
         findings: &[(FindingKind::Fault, &["drain", "drain"])],
-        ..passing("meter.model.ts", "Meter", 3, &["floor"])
+        unknown: &["floor"],
+        ..passing("meter.model.ts", "Meter", 3, &[])
     },
     Expected {
         broken: &[
@@ -100,7 +104,8 @@ pub(crate) const MODELS: &[Expected] = &[
     passing("switches.model.ts", "Hall", 3, &["hallKnown"]),
     Expected {
         findings: &[(FindingKind::OutOfRange, &["add", "add", "add", "add"])],
-        ..passing("tally.model.ts", "Tally", 5, &["bounded"])
+        unknown: &["bounded"],
+        ..passing("tally.model.ts", "Tally", 5, &[])
     },
     passing("ticket.model.ts", "Ticket", 12, &["seated"]),
     Expected {

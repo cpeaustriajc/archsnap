@@ -88,6 +88,7 @@ pub(crate) struct Expanded {
     pub(crate) trouble: Option<(Whence, Fault)>,
     pub(crate) ended: bool,
     pub(crate) stuck: bool,
+    pub(crate) cut_short: bool,
     pub(crate) clock: Clock,
     pub(crate) width: Width,
     pub(crate) successors: Vec<Successor>,
@@ -127,7 +128,10 @@ impl Expanded {
     fn note(&mut self, whence: Whence, fault: Fault) {
         if fault == Fault::Stopped {
             self.clock = Clock::Stopped;
-        } else if self.trouble.is_none() {
+            return;
+        }
+        self.cut_short |= !matches!(whence, Whence::Rule(_));
+        if self.trouble.is_none() {
             self.trouble = Some((whence, fault));
         }
     }
@@ -268,6 +272,7 @@ pub(crate) fn expand_state(
         ..Expanded::default()
     };
     if found.outside.is_some() {
+        found.cut_short = true;
         return found;
     }
     let mut frame = Frame::new(state, slots).until(budget.deadline);

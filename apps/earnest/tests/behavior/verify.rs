@@ -82,13 +82,16 @@ fn assert_model_matches(found: &Value, expected: &Expected) {
     for id in expected.holds {
         assert_eq!(rule(found, id)["verdict"], "holds", "rule {name}.{id}");
     }
+    for id in expected.unknown {
+        assert_eq!(rule(found, id)["verdict"], "unknown", "rule {name}.{id}");
+    }
     for (id, _) in expected.broken {
         assert_eq!(rule(found, id)["verdict"], "broken", "rule {name}.{id}");
     }
     let rule_count = found["rules"].as_array().map_or(0, Vec::len);
     assert_eq!(
         rule_count,
-        expected.holds.len() + expected.broken.len(),
+        expected.holds.len() + expected.unknown.len() + expected.broken.len(),
         "the number of rules of {name}"
     );
     let kinds: Vec<&str> = found["findings"]
@@ -562,8 +565,8 @@ fn readme_an_out_of_range_state_is_reported_with_the_path_to_it() {
     );
     assert_eq!(
         rule(tally, "bounded")["verdict"],
-        "holds",
-        "its rule still holds"
+        "unknown",
+        "its rule is not judged in the state out of range, so it is not known to hold"
     );
     let last = steps(&finding(tally, "out-of-range")["path"])
         .last()

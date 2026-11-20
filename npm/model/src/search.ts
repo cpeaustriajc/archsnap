@@ -43,8 +43,9 @@ export interface Path {
 }
 
 /**
- * `unknown` means the rule was not seen broken, but the search stopped early or the rule could
- * not be evaluated in a state it reached.
+ * `unknown` means the rule was not seen broken, but the search stopped early, the rule could
+ * not be evaluated in a state it reached, or a state out of range or a fault in an action or an
+ * end cut the search short, so some state was not judged or not reached.
  */
 export type Verdict = "holds" | "broken" | "unknown";
 
@@ -223,6 +224,7 @@ interface Expanded {
   readonly unjudged: RuleRunner[];
   readonly successors: Successor[];
   trouble: string | null;
+  isCutShort: boolean;
   isEnabled: boolean;
   isStuck: boolean;
 }
@@ -242,6 +244,7 @@ class Search {
   #outside: { readonly at: Visited; readonly field: string } | null = null;
   #trouble: { readonly at: Visited; readonly message: string } | null = null;
   #reason: string | null = null;
+  #isCutShort = false;
 
   constructor(fields: FieldList, parts: Runners, options: ExploreOptions) {
     this.#fields = fields;
@@ -303,6 +306,7 @@ class Search {
       unjudged: [],
       successors: [],
       trouble: null,
+      isCutShort: outside !== undefined,
       isEnabled: false,
       isStuck: false,
     };
@@ -340,6 +344,7 @@ class Search {
         hasEnded ||= ended.value;
       } else {
         found.trouble ??= `the end \`${this.#name(end.part, end.says)}\` ${ended.fault}`;
+        found.isCutShort = true;
         canTell = false;
       }
     }
@@ -354,6 +359,7 @@ class Search {
       const can = attempt(() => action.when(state, input));
       if (can.fault !== null) {
         found.trouble ??= `the \`when\` of the action \`${id}\` ${can.fault}`;
+        found.isCutShort = true;
         canTell = false;
         continue;
       }
@@ -366,6 +372,7 @@ class Search {
         found.successors.push({ action, input, next: next.value });
       } else {
         found.trouble ??= `the \`then\` of the action \`${id}\` ${next.fault}`;
+        found.isCutShort = true;
       }
     }
     return canTell;
@@ -386,6 +393,7 @@ class Search {
     if (expanded.trouble !== null) {
       this.#trouble ??= { at, message: `${expanded.trouble} in this state` };
     }
+    this.#isCutShort ||= expanded.isCutShort;
     if (expanded.isStuck) {
       this.#stuck ??= at;
     }
@@ -451,7 +459,7 @@ class Search {
   #outcome(): Exploration {
     const rules = this.#parts.rules.map((rule): RuleResult => {
       const first = this.#firstBroken.get(rule);
-      const isJudged = this.#reason === null && !this.#unjudged.has(rule);
+      const isJudged = this.#reason === null && !this.#isCutShort && !this.#unjudged.has(rule);
       const unbroken = isJudged ? "holds" : "unknown";
       return {
         id: this.#name(rule.part, rule.says),

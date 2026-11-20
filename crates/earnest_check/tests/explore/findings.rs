@@ -115,7 +115,11 @@ fn a_state_out_of_range_is_not_searched_further_and_its_rules_are_not_judged() {
     sketch.rule("small", below(&n, 4));
     let outcome = sketch.explored();
     assert_eq!(outcome.states, 5);
-    assert_eq!(outcome.rules[0].verdict, Verdict::Holds);
+    assert_eq!(
+        outcome.rules[0].verdict,
+        Verdict::Unknown,
+        "no rule is judged in the state out of range"
+    );
     assert_eq!(the_finding(&outcome).kind, FindingKind::OutOfRange);
 }
 
@@ -197,6 +201,38 @@ fn a_guard_that_reads_null_is_a_fault_and_the_state_is_not_called_stuck() {
     assert_eq!(
         finding.message,
         "the `when` of the action `go` reads a value that is null in this state"
+    );
+}
+
+#[test]
+fn a_rule_is_unknown_when_a_fault_in_an_action_or_an_end_cut_a_branch_short() {
+    let mut guard = Sketch::new();
+    let picked = optional_number(&mut guard);
+    let reads_null = apply(Op::Equal, &unwrapped(&picked), int(1));
+    guard.action("go", reads_null, &[(&picked, int(0))]);
+    guard.rule("fine", yes());
+    assert_eq!(
+        guard.explored().rules[0].verdict,
+        Verdict::Unknown,
+        "a guard that faults"
+    );
+    let mut update = Sketch::new();
+    let n = update.number("n", 0, i64::MAX, &[i64::MAX]);
+    update.action("inc", yes(), &[(&n, plus(&n, 1))]);
+    update.rule("fine", yes());
+    assert_eq!(
+        update.explored().rules[0].verdict,
+        Verdict::Unknown,
+        "an update that faults"
+    );
+    let mut end = Sketch::new();
+    let picked = optional_number(&mut end);
+    end.end("anywhere", apply(Op::Equal, &unwrapped(&picked), int(1)));
+    end.rule("fine", yes());
+    assert_eq!(
+        end.explored().rules[0].verdict,
+        Verdict::Unknown,
+        "an end that faults"
     );
 }
 

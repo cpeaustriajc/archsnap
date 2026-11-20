@@ -104,6 +104,7 @@ pub(crate) struct Search<'a> {
     pub(crate) trouble: Option<(usize, Whence, Fault)>,
     pub(crate) reason: Option<String>,
     pub(crate) wide: bool,
+    pub(crate) cut_short: bool,
     judged: usize,
 }
 
@@ -157,6 +158,7 @@ pub fn explore(model: &Model, limits: &Limits) -> Outcome {
         trouble: None,
         reason: None,
         wide: false,
+        cut_short: false,
         judged: 0,
     };
     search.run();
@@ -537,6 +539,7 @@ impl Search<'_> {
     fn record(&mut self, id: usize, expanded: &Expanded) {
         self.judged = self.judged.max(id.saturating_add(1));
         self.wide |= expanded.width == Width::Beyond32Bits;
+        self.cut_short |= expanded.cut_short;
         if let Some(field) = expanded.outside {
             self.outside.get_or_insert((id, field));
         }

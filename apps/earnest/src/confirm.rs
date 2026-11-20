@@ -17,6 +17,8 @@ const LEFT: &str = " states left on queue.";
 const BROKEN: &str = "broken";
 const HOLDS: &str = "holds";
 const UNKNOWN: &str = "unknown";
+const OUT_OF_RANGE: &str = "out-of-range";
+const FAULT: &str = "fault";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TlcRun {
@@ -105,6 +107,14 @@ impl Tool {
     }
 }
 
+fn cut_short(checked: &Checked) -> bool {
+    checked
+        .result
+        .findings
+        .iter()
+        .any(|finding| finding.kind == OUT_OF_RANGE || finding.kind == FAULT)
+}
+
 pub(crate) fn differences(
     checked: &Checked,
     counting: &TlcRun,
@@ -113,6 +123,7 @@ pub(crate) fn differences(
 ) -> Vec<String> {
     let name = tool.name();
     let result = &checked.result;
+    let unseen_by_tlc = cut_short(checked);
     let mut found = Vec::new();
     if let Some(reason) = &result.reason {
         found.push(format!(
@@ -141,7 +152,9 @@ pub(crate) fn differences(
             continue;
         };
         let verdict = tlc_verdict(theirs);
-        if verdict != ours.verdict {
+        let cut_short_where_tlc_sees_nothing =
+            unseen_by_tlc && ours.verdict == UNKNOWN && verdict == HOLDS;
+        if verdict != ours.verdict && !cut_short_where_tlc_sees_nothing {
             found.push(format!(
                 "rule {}: the checker says {}, {name} says {verdict}{}",
                 ours.id,
@@ -340,7 +353,7 @@ impl Checker<'_> {
 #[cfg(test)]
 mod tests {
     use super::{RuleRun, TlcRun, Tool, confirm_lines, differences, merged, read_tlc};
-    use crate::run::{Checked, ModelResult, RuleResult, Status};
+    use crate::run::{Checked, FindingResult, ModelResult, PathTaken, RuleResult, Status};
 
     const PASSING: &str = "\
 TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
@@ -569,6 +582,52 @@ State 1: <Initial predicate>
             differences(&holds, &read_tlc(PASSING), &runs, Tool::Tlc),
             ["rule capped: the checker says holds, TLC says unknown \
                  (Evaluating invariant Rule_capped failed.)"]
+        );
+    }
+
+    #[test]
+    fn a_rule_the_checker_could_not_finish_judging_because_a_state_was_cut_short_agrees_with_tlc() {
+        let finding = |kind: &str, message: &str| FindingResult {
+            kind: kind.to_owned(),
+            message: message.to_owned(),
+            path: PathTaken {
+                start: Vec::new(),
+                steps: Vec::new(),
+            },
+        };
+        let runs = [rule_run("bounded", PASSING)];
+        for (kind, message) in [
+            (
+                "out-of-range",
+                "the field `count` leaves the values it declares",
+            ),
+            (
+                "fault",
+                "the `then` of the action `price` reads a value that is null in this state",
+            ),
+        ] {
+            let mut ours = checked(4, &[("bounded", "unknown")]);
+            ours.result.findings.push(finding(kind, message));
+            assert!(
+                differences(&ours, &read_tlc(PASSING), &runs, Tool::Tlc).is_empty(),
+                "{kind}: TLC has no way to see the state that was cut short"
+            );
+        }
+        let mut both = checked(4, &[("bounded", "unknown"), ("other", "unknown")]);
+        both.result.findings.push(finding(
+            "fault",
+            "the rule `bounded` reads a value that is null in this state",
+        ));
+        let both_runs = [rule_run("bounded", PASSING), rule_run("other", PASSING)];
+        assert!(
+            differences(&both, &read_tlc(PASSING), &both_runs, Tool::Tlc).is_empty(),
+            "the first fault is a rule's own, and a later one of an action cut the search short"
+        );
+        let no_finding = checked(4, &[("bounded", "unknown")]);
+        assert_eq!(
+            differences(&no_finding, &read_tlc(PASSING), &runs, Tool::Tlc),
+            ["rule bounded: the checker says unknown, TLC says holds"],
+            "nothing cut the search short and TLC judged the rule everywhere"
         );
     }
 

@@ -469,8 +469,8 @@ fn a_state_out_of_range_is_counted_judged_by_no_rule_and_not_searched_from() {
     );
     assert_eq!(
         outcome.rules[0].verdict,
-        Verdict::Holds,
-        "no rule is judged in it"
+        Verdict::Unknown,
+        "no rule is judged in it, so the rule is not known to hold"
     );
     let kinds: Vec<_> = outcome.findings.iter().map(|found| found.kind).collect();
     assert_eq!(

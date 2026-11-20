@@ -136,7 +136,8 @@ impl Search<'_> {
 
     pub(crate) fn outcome(&self) -> Outcome {
         let only_rule = self.limits.only_rule.as_deref();
-        let judged_everywhere = |unjudged: bool| self.reason.is_none() && !unjudged;
+        let judged_everywhere =
+            |unjudged: bool| self.reason.is_none() && !self.cut_short && !unjudged;
         let rules: Vec<RuleOutcome> = self
             .model
             .rules

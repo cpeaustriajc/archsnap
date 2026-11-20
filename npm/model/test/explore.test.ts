@@ -296,8 +296,20 @@ test("a value outside its declaration is out of range, counted and not expanded"
     [{ name: "n", value: 3 }],
   ]);
   expect(found.rules).toStrictEqual([
-    { id: "small", says: "n stays below three", verdict: "holds", path: null },
+    { id: "small", says: "n stays below three", verdict: "unknown", path: null },
   ]);
+});
+
+test("a rule is unknown when an action's when faulted and cut a branch short", () => {
+  const Model = People();
+  const age = Model.action("the person ages", {
+    when: (s) => assumedPresent(s.who) && s.who.age === 0,
+    then: () => ({ who: { age: 1 } }),
+  });
+  const fine = Model.rule({ says: "Always true", holds: () => true });
+  const found = explore(Model, { exports: { age, fine } });
+  expect(kinds(found)).toStrictEqual(["fault"]);
+  expect(found.rules.map((rule) => rule.verdict)).toStrictEqual(["unknown"]);
 });
 
 test("sending to a full queue, pushing past max and retrying past the most are out of range", () => {

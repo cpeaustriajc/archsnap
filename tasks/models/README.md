@@ -15,9 +15,9 @@ against the inputs rather than against the code's own helpers, so a change to an
 breaks a promise breaks a rule. Every rule below was broken on purpose by at least one wrong
 version of an action (a mutation), listed per model.
 
-Every model passes. One rule that the code breaks is not in the files, because the crate's
-test asserts that the files pass; each is under "Findings" with the change that brings it back
-and the path the checker prints.
+Every model passes. Six rules that the code used to break were kept out of the files so that
+they passed; each is now in its file and under "Fixed", with the path the checker printed
+before the fix.
 
 `cargo test -p earnest_models` runs two checks per model: `tests/verify.rs` runs `earnest verify
 --json` on each file and asserts `pass`, the state count and every rule `holds`; and the
@@ -289,7 +289,7 @@ Not shown: 16 of 394 states and 46 of 66 arrows.
 | `selection` | no `--model`, `--model` naming a model the first file declares (read, or in an unreadable file whose declaration the reader got), or `--model` naming no model any file declares (`select.rs`) |
 | `phase_*`, action `stop` | the search of the file's model: still searching, or ended at the last state, at `--max-states` or at `--time-limit` (`Search::run`, `reason`) |
 | `found_*`, action `find` | what the search found so far: a broken rule (`first_broken`), a rule with no value in a state (`unjudged`), a stuck state, or a state cut short (out of range, or a fault of an action or end, `trouble`) |
-| action `report`, `status`, `verdict` | `Search::outcome` in `earnest_check/src/report.rs`: `Fail` when a finding or a broken rule, else `Unfinished` at a limit, else `Pass`; a rule is `Broken` when seen broken, `Holds` when the search ended with no reason and the rule was judged everywhere, else `Unknown` |
+| action `report`, `status`, `verdict` | `Search::outcome` in `earnest_check/src/report.rs`: `Fail` when a finding or a broken rule, else `Unfinished` at a limit, else `Pass`; a rule is `Broken` when seen broken, `Holds` when the search ended with no reason, the rule was judged everywhere and no state was cut short, else `Unknown` |
 | `exit_code`, `not_passed`, `matched` | `Summary::everything_passed` in `print.rs` and the `refusing` error path of `verify`: exit 2 when `--model` matches no declared model, else 0 only with no `fail`, no `unfinished` and no unreadable file |
 | `exit_without_skipped` | the exit code of the same run with the skipped test file deleted |
 | `error_names_skipped` | the `refusing` sentence naming the skipped test file that holds the model |
@@ -315,9 +315,9 @@ free, and every subset of the four findings with each of the three ways to end i
   `unfinished`.
 - `pass_only_when_whole`: `pass` only when the search ended at the last state with nothing
   found.
-- `holds_only_when_judged`: a rule holds only when the search ended at the last state and the
-  rule had a value in every state (README: "`unknown` (the rule was not seen broken, but the
-  model was unfinished or the rule faulted in a state)").
+- `holds_only_when_judged`: a rule holds only when the search ended at the last state, the rule
+  had a value in every state and no state out of range or fault in an action or an end cut the
+  search short, so no counted state was left unjudged and no reachable one unreached.
 - `broken_exactly_when_seen`: a checked rule is `broken` exactly when a counted state broke it.
 - `exit_zero_only_when_all_passed`: exit 0 only when every checked model passed and no file was
   unreadable.
@@ -364,6 +364,7 @@ stays at its start values):
 | a limit wins over what was found (`unfinished` with a broken rule) | `limit_with_broken_is_fail` |
 | a stuck state is not a failure | `limit_with_broken_is_fail`, `pass_only_when_whole`, `exit_zero_only_when_all_passed`, `exit_one_when_something_is_wrong` |
 | a rule holds although it faulted | `holds_only_when_judged` |
+| a rule holds although a state was cut short | `holds_only_when_judged` |
 | a rule holds at a limit | `holds_only_when_judged` |
 | a stuck state makes a rule `broken` | `broken_exactly_when_seen` |
 | `unfinished` exits 0 | `exit_zero_only_when_all_passed`, `exit_one_when_something_is_wrong` |
@@ -418,24 +419,8 @@ stateDiagram-v2
 
 ## Findings
 
-Each finding is a rule the code breaks. The rule is not in the file, so that the file passes;
-the change below brings it back, and the path is what `earnest verify` printed with it.
-
-### 5. A rule `holds` in a model whose search was cut short (outcome)
-
-Rule: `holds_only_when_judged` also requiring that nothing cut the search short: add
-`&& !self.found(file).has(Found::CutShort)`. Broken after `find[First, CutShort]`,
-`stop[First, Exhausted]`, `report`: `word_first: Fail`, `verdict_first: Holds`.
-
-`Search::outcome` (`crates/earnest_check/src/report.rs`) gives `Holds` when there is no `reason`
-and the rule was never unjudged; a state out of range is counted, "no rule is judged in it, and
-nothing is explored from it". So a counted state the rule was never asked about leaves it
-`holds`. With the binary: a `Climb` model whose action takes `n` from 0 to 3 in a `#[range(0,
-2)]` field and the rule `n < 3` prints `fail` with an `out-of-range` finding and the rule
-`"verdict": "holds"`, though the one state that breaks it is counted. `Verdict::Holds` is
-documented as "True in every reachable state" and `Unknown` as "not judged in every state". The
-root README lists only "unfinished or the rule faulted" for `unknown`, so code and README agree
-with each other and disagree with the verdict's own doc. A contract gap.
+None is left open. Each finding was a rule the code broke, kept out of the file so that the
+file passed; the six are fixed below.
 
 ## Fixed
 
@@ -507,6 +492,24 @@ judging of the states it had found (`judge_the_rest`), where it said `state limi
 left a result that depended on the clock. Reproduced and fixed: `verify --model Oven --rule
 closed --max-states 1 --time-limit 100 two.rs` twice now prints `(cached)` the second time.
 The model has 394 states, up from 330: the results that were never stored are stored now.
+
+### 5. A rule `holds` in a model whose search was cut short (outcome, fixed)
+
+`holds_only_when_judged` also requires that nothing cut the search short: `&&
+!self.found(file).has(Found::CutShort)`. Before the fix it broke after `find[First, CutShort]`,
+`stop[First, Exhausted]`, `report`: `word_first: Fail`, `verdict_first: Holds`. `Search::outcome`
+gave `Holds` when there was no `reason` and the rule was never unjudged, so a state out of
+range, which is counted and in which no rule is judged, left every rule `holds`; the same for a
+fault in a `when`, a `then` or an end, which leaves the states beyond it unreached. With the
+binary: a `Climb` model whose action takes `n` from 0 to 3 in a `#[range(0, 2)]` field and the
+rule `n < 3` printed `fail` with an `out-of-range` finding and the rule `"verdict": "holds"`.
+Now the verdict is `unknown` there, in `earnest_check` (`Search::cut_short`, set by a state out
+of range and by a fault that is not a rule's own, so another rule's fault does not take `holds`
+from a rule that was judged everywhere) and in the Node library's `explore`, so the two agree.
+`Verdict::Holds` and `Verdict::Unknown`, the README's definition of `unknown` and `earnest
+confirm` say the same: where the checker reports a state out of range or a fault of an action or
+an end, which TLC can not see, `confirm` accepts the checker's `unknown` against TLC's `holds`.
+The model's `verdict` does the same and has the same 7222 states.
 
 ### 6. `--model` naming a model in an unreadable file says no such model exists (outcome, fixed)
 

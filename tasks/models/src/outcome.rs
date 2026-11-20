@@ -185,7 +185,10 @@ fn verdict(outcome: &Outcome, file: File) -> Verdict {
         Verdict::Unasked
     } else if found.has(Found::Broken) {
         Verdict::Broken
-    } else if phase_of(outcome, file) == Phase::Exhausted && !found.has(Found::RuleFaults) {
+    } else if phase_of(outcome, file) == Phase::Exhausted
+        && !found.has(Found::RuleFaults)
+        && !found.has(Found::CutShort)
+    {
         Verdict::Holds
     } else {
         Verdict::Unknown
@@ -360,12 +363,15 @@ impl Outcome {
         forall::<File>(|file| self.word(file) != Word::Pass || self.passed(file))
     }
 
-    #[rule("A rule holds only when the search finished and the rule had a value in every state")]
+    #[rule(
+        "A rule holds only when the search finished, the rule had a value in every state and no state was left unjudged or unreached"
+    )]
     fn holds_only_when_judged(&self) -> bool {
         forall::<File>(|file| {
             self.verdict(file) != Verdict::Holds
                 || (self.phase(file) == Phase::Exhausted
-                    && !self.found(file).has(Found::RuleFaults))
+                    && !self.found(file).has(Found::RuleFaults)
+                    && !self.found(file).has(Found::CutShort))
         })
     }
 

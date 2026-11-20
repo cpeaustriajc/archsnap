@@ -244,8 +244,9 @@ unreadable  src/clock.model.ts
 - `stuck`, `out of range` and `fault` findings have the same path form. A model is out of range
   when an action gives a field a value outside what the field declares. That is a fault of the
   model, reported with the path to the state. The state out of range is counted, no rule is
-  judged in it, and nothing is explored from it. `explore` in the TypeScript library does the
-  same.
+  judged in it, and nothing is explored from it, so no rule is `holds` in a model with such a
+  state, and a rule that was not seen broken is `unknown`. `explore` in the TypeScript library
+  does the same.
 - Anything the model asks that can't be evaluated in a state is a `fault` in that state: a rule,
   the `when` or the `then` of an action, or the `when` of an end, for example because it reads a
   field of `null`. A state is `stuck` only when the `when` of every action is false and every
@@ -339,8 +340,12 @@ unreadable  src/clock.model.ts
 `skipped` lists, in path order, the test files that use the library and were not read (see
 "Which files are models"); it is `[]` when there are none. `noModel` lists, in path order, the
 Rust files that use the library and declare no model and were left out, and is `[]` too. `status` is `pass`, `fail` or
-`unfinished`. `verdict` is `holds`, `broken` or `unknown` (the rule
-was not seen broken, but the model was unfinished or the rule faulted in a state). `kind` is `stuck`, `out-of-range` or `fault`.
+`unfinished`. `verdict` is `holds`, `broken` or `unknown`.
+A rule is `broken` when a counted state breaks it. It is `holds` only when it was judged in
+every counted state: the search ended at the last state, the rule never faulted, and no state out
+of range and no fault in an action or an end cut the search short. Otherwise, when it was not
+seen broken, it is `unknown`: the model was unfinished, the rule faulted in a state, or a state
+out of range or a fault in an action or an end left a state unjudged or unreached. `kind` is `stuck`, `out-of-range` or `fault`.
 In JSON a set and a sequence are arrays, a map is an array of `[key, value]` pairs and a record is
 an object. Two runs on the same files give the same JSON apart from `milliseconds` and `cached`.
 
@@ -442,7 +447,9 @@ evaluated takes no step, so TLC counts every state and never stops on such a rul
 also defines `Judged_id` for a rule that can fault: a state where the rule has no value breaks
 it. `earnest confirm` checks both for each rule and compares TLC's verdict, `broken` when a state
 breaks `Rule_id`, else `unknown` when a state breaks `Judged_id`, else `holds`, with the
-checker's.
+checker's. TLC can't see a state out of range or a fault in an action or an end that cut the
+search short, so a rule that the checker leaves `unknown` only for that reason, and whose
+`Judged_id` no state breaks, is `holds` in TLC and still agrees with the checker.
 
 TLC has two limits of its own, and the export can't remove them. TLC holds integers to 32
 bits, from -2147483648 to 2147483647, and compares some texts that are not ASCII as equal when
