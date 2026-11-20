@@ -14,14 +14,21 @@ const NOT_AN_OPERATOR: &str = "this operator is outside the library";
 const NOT_IN_PLACE: &str =
     "changing a value in place is outside the library; every operation gives back a new value";
 
+const AN_ASSERTION: &str = "a type assertion hides a `null` from the type checker and changes \
+    nothing in JavaScript, so a value that is optional would be read as `null` where \
+    TypeScript saw a number: write `m.some(value)` for the value inside an optional, and \
+    only `as const` is read";
+
 pub(crate) fn bare<'p, 'a>(expr: &'p Expression<'a>) -> &'p Expression<'a> {
     let mut current = expr;
     loop {
         current = match current {
             Expression::ParenthesizedExpression(inner) => &inner.expression,
-            Expression::TSAsExpression(inner) => &inner.expression,
-            Expression::TSSatisfiesExpression(inner) => &inner.expression,
-            Expression::TSTypeAssertion(inner) => &inner.expression,
+            Expression::TSAsExpression(inner)
+                if inner.type_annotation.is_const_type_reference() =>
+            {
+                &inner.expression
+            }
             _ => return current,
         };
     }
@@ -193,6 +200,18 @@ impl Reader<'_> {
                      in JavaScript: write `m.some(value)`, which gives the value and is the same \
                      fault in Node",
                 )
+            }
+            Expression::TSAsExpression(inner) => {
+                self.term(&inner.expression);
+                ("as", AN_ASSERTION)
+            }
+            Expression::TSSatisfiesExpression(inner) => {
+                self.term(&inner.expression);
+                ("satisfies", AN_ASSERTION)
+            }
+            Expression::TSTypeAssertion(inner) => {
+                self.term(&inner.expression);
+                ("<type>", AN_ASSERTION)
             }
             Expression::ChainExpression(_) => (
                 "?.",
@@ -669,12 +688,55 @@ mod tests {
     }
 
     #[test]
-    fn type_marks_are_dropped() {
+    fn as_const_is_dropped_and_the_other_type_marks_are_refused() {
         assert_eq!(
-            holds("(s) => (s.n as number) === (1 satisfies number)"),
+            holds("(s) => s.n === (1 as const)"),
             "(=== s.n 1)",
-            "`as` and `satisfies`"
+            "`as const`"
         );
+        for rule in [
+            "(s) => (s.n as number) === 1",
+            "(s) => s.n === (1 satisfies number)",
+            "(s) => (<number>s.n) < 3",
+            "(s) => (s.o as number) < 3",
+            "(s) => (s.o as unknown as number) < 3",
+            "(s) => ((s.o as number)) < 3",
+            "(s) => s.o satisfies number < 3",
+            "(s) => m.some(s.o as number) < 3",
+            "(s) => (s.n as any) === 1",
+        ] {
+            let found = features(rule);
+            assert!(!found.is_empty(), "`{rule}` hides a null from the checker");
+        }
+        let sentence = read(
+            "m.model.ts",
+            &format!("{HEAD}export const r = M.rule({{ says: \"r\", holds: (s) => (s.o as number) < 3 }});\n"),
+        )
+        .problems;
+        assert!(
+            sentence
+                .iter()
+                .any(|problem| problem.message.contains("m.some(value)")),
+            "the sentence names `m.some(value)`: {sentence:?}"
+        );
+    }
+
+    #[test]
+    fn an_assertion_on_a_constant_a_declaration_or_a_helper_is_refused() {
+        for source in [
+            "const LIMIT = 3 as number;\n",
+            "const LIMIT = 3 satisfies number;\n",
+            "const SAME = ((n) => n) as (n: number) => number;\n",
+            "export const N = m.model(\"N\", { n: m.int(0, 3) as any });\n",
+            "export const O = m.model(\"O\", { n: m.enum([\"a\", \"b\"] as const) });\n",
+        ] {
+            let found = read("m.model.ts", &format!("{HEAD}{source}")).problems;
+            assert_eq!(
+                found.is_empty(),
+                source.contains("as const"),
+                "`{source}`: only `as const` is read: {found:?}"
+            );
+        }
     }
 
     #[test]

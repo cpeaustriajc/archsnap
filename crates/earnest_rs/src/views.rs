@@ -228,10 +228,15 @@ impl Reader<'_> {
         match unwrapped(expr) {
             Expr::Macro(called) if is_format(&called.mac) => self.format_label(&called.mac),
             Expr::MethodCall(call)
-                if call.args.is_empty()
-                    && matches!(name_of(&call.method).as_str(), "to_string" | "to_owned") =>
+                if call.args.is_empty() && is_conversion(&name_of(&call.method)) =>
             {
-                Some(self.term(&call.receiver))
+                let value = self.term(&call.receiver);
+                let piece = if name_of(&call.method) == "to_string" {
+                    TemplatePiece::Value(value)
+                } else {
+                    TemplatePiece::Owned(value)
+                };
+                Some(at(call.method.span(), TermKind::Template(vec![piece])))
             }
             other => {
                 let feature = self.short_text(other.span());
@@ -282,11 +287,22 @@ impl Reader<'_> {
                 }
                 '{' => {
                     let mut spec = String::new();
+                    let mut closed = false;
                     for inside in characters.by_ref() {
                         if inside == '}' {
+                            closed = true;
                             break;
                         }
                         spec.push(inside);
+                    }
+                    if !closed {
+                        self.refuse(
+                            format.span(),
+                            &format!("{{{spec}"),
+                            "this `{` is never closed, and Rust refuses the text: write a \
+                             literal `{` as `{{`",
+                        );
+                        return None;
                     }
                     if !spec.is_empty() && spec != ":?" {
                         self.refuse(
@@ -309,8 +325,12 @@ impl Reader<'_> {
                     if !text.is_empty() {
                         pieces.push(TemplatePiece::Text(std::mem::take(&mut text)));
                     }
-                    self.debug_text(value, &spec);
-                    pieces.push(TemplatePiece::Value(self.term(value)));
+                    let term = self.term(value);
+                    pieces.push(if spec.is_empty() {
+                        TemplatePiece::Value(term)
+                    } else {
+                        TemplatePiece::Debug(term)
+                    });
                 }
                 '}' => {
                     self.refuse(format.span(), "}", "write a literal `}` as `}}`");
@@ -332,25 +352,12 @@ impl Reader<'_> {
         }
         Some(pieces)
     }
-
-    fn debug_text(&mut self, value: &Expr, spec: &str) {
-        let Expr::Field(read) = unwrapped(value) else {
-            return;
-        };
-        let syn::Member::Named(field) = &read.member else {
-            return;
-        };
-        if spec == ":?" && self.texts.contains(&name_of(field)) {
-            let feature = self.short_text(value.span());
-            self.refuse(
-                value.span(),
-                &feature,
-                "`{:?}` prints a text in quotes and the chart prints it without: write `{}`",
-            );
-        }
-    }
 }
 
 fn is_format(called: &Macro) -> bool {
     called.path.is_ident("format")
+}
+
+fn is_conversion(method: &str) -> bool {
+    matches!(method, "to_string" | "to_owned")
 }

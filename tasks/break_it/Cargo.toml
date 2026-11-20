@@ -23,6 +23,7 @@ path = "tests/tla_rs/main.rs"
 required-features = ["tla_rs"]
 
 [dev-dependencies]
+earnest = { path = "../../crates/earnest", version = "0.1.0" }
 serde_json.workspace = true
 tempfile.workspace = true
 

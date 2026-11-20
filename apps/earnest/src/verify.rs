@@ -1,7 +1,7 @@
 use crate::arguments::Verify;
 use crate::cache::{Cache, Key};
 use crate::changes::{Compare, check_base, rule_changes};
-use crate::commands::{Exit, Gathered, gather, limits_of};
+use crate::commands::{Exit, Gathered, gather, limits_of, refusing};
 use crate::print::{Since, Verified, to_stderr, to_stdout};
 use crate::run::{Bounds, Checked, Graphs, Search, checked, explore_each};
 use crate::select::{Target, select_with_removed};
@@ -146,12 +146,10 @@ pub(crate) fn verify(arguments: &Verify) -> Result<Exit, String> {
         check_base(base)?;
     }
     let Gathered { files, skipped } = gather(&arguments.selection.models)?;
-    let selected = select_with_removed(
-        &files,
-        arguments.selection.models.model.as_deref(),
-        arguments.selection.rule.as_deref(),
-        arguments.base.as_deref(),
-    )?;
+    let model = arguments.selection.models.model.as_deref();
+    let rule = arguments.selection.rule.as_deref();
+    let selected = select_with_removed(&files, model, rule, arguments.base.as_deref())
+        .map_err(|error| refusing(&skipped, model, rule, error))?;
     let targets = selected.targets;
     let checked = match check_all(&targets, arguments, bounds) {
         Ok(checked) => checked,
@@ -179,7 +177,7 @@ pub(crate) fn verify(arguments: &Verify) -> Result<Exit, String> {
             .as_ref()
             .is_none_or(|(_, compared)| compared.changes.is_empty())
     {
-        return Err(error);
+        return Err(refusing(&skipped, model, rule, error));
     }
     let verified = Verified {
         files: &files,

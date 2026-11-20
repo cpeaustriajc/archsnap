@@ -78,7 +78,7 @@ fn arrival(guest: Guest, state: Party) -> Step<Party> {
     Step {
         action: "arrive",
         label: "a guest arrives",
-        input: vec![("guest", format!("{guest:?}"))],
+        input: vec![("guest", format!("\"{guest:?}\""))],
         state,
     }
 }
@@ -89,7 +89,7 @@ fn round(glasses: u8, measure: Measure, state: Party) -> Step<Party> {
         label: "the host pours a round",
         input: vec![
             ("glasses", glasses.to_string()),
-            ("measure", format!("{measure:?}")),
+            ("measure", format!("\"{measure:?}\"")),
         ],
         state,
     }

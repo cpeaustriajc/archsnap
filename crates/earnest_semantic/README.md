@@ -25,9 +25,11 @@ owner held in a map, a sequence or a queue, or a declaration with more than a mi
 try. In a draft read from Rust it also refuses what the checker would read differently from
 Rust: an optional value held in a map, a sequence or a queue, or read out of a written
 collection of optional values; numbers of two integer types that meet; a `let` that binds a
-number nothing gives a type; and a value in a view's label that is not a boolean, a number, an
+number nothing gives a type; a value in a view's label that is not a boolean, a number, an
 enum variant or a text, because `Debug` prints an optional value, a record or a collection
-differently from the chart. A list of choices read from `#[one_of(1, 5)]` is a list of `Declared`
+differently from the chart, and a label form `rustc` refuses or that prints other than the
+chart draws (`{}` and `.to_string()` of an enum variant, `{:?}` of a text, `.to_owned()` of
+anything but a text); and `is_multiple_of` on a type that is not unsigned. A list of choices read from `#[one_of(1, 5)]` is a list of `Declared`
 numbers, and the choices keep the integer type. A draft read from TypeScript has JavaScript's numbers: each sum,
 difference, product and remainder is wrapped in `Op::Safe`, so a result past 2^53 - 1 is the
 fault "computes a number too large to hold". An expression nested more than 1000 levels deep is

@@ -4,9 +4,9 @@ A model checker for models written in your app's own language. A coding agent st
 a change as a model in TypeScript or Rust, `earnest verify` visits every reachable state, and the
 result goes into the PR as a statechart and a report.
 
-Status: version 1 is built and passes its own checks, and is not yet proven. Four adversarial
+Status: version 1 is built and passes its own checks, and is not yet proven. Five adversarial
 passes each found models with a broken rule that were reported as passing; those are fixed
-except what "Where Node and the checker differ" in `npm/model/README.md` says, and a fifth pass
+except what "Where Node and the checker differ" in `npm/model/README.md` says, and a sixth pass
 has not been run. TLC has not confirmed the TLA+ export in CI. The spec is the
 Claude Doc "A formal verification suite for agents".
 
@@ -87,8 +87,11 @@ crate earnest`. A raw identifier is the same name as its plain spelling everywhe
 A file named on the command line is always read or refused, whatever it is called: a name that
 is only an extension (`.ts`, `.mts`, `.tsx`, `.rs`) is a file of that language, and a file of
 another kind is `unreadable` with a sentence saying the checker does not know how to read it.
-The same file given under two spellings of its path (`a.model.ts` and `./a.model.ts`, or a path
-through `..`) is checked and listed once.
+The same file reached by two spellings of its path (`a.model.ts` and `./a.model.ts`, a path
+through `..`), through two roots (`earnest verify . ./src`), by a link or by a root that is a
+folder and another that names a file in it, is checked and listed once: every file found is
+compared by its real path, whichever way it was found. It keeps the spelling of the first
+root that reached it.
 
 A file found by walking a folder is a test file, not a model file, when it follows the test
 convention of its language, so an app's own tests that import the library (a vitest test, a Node
@@ -108,13 +111,29 @@ in the text output of `earnest verify` (on stderr for the other commands), a sec
 files` that lists the paths in `earnest report`, and the paths in the `skipped` list of the
 JSON. A test file that does not use the library is not a model either way and is not listed.
 A file named on the command line is read or refused whatever it is called and wherever it is,
-so it is never skipped. A Rust `#[cfg(test)]` module inside a model file is not part of the
+so it is never skipped. A root that names a test folder (`earnest verify . ./tests`) is
+searched as it is told to, so below it no file is a test file: a file that is read through one
+root is never also listed as skipped through another. A test file that can't be opened (a link
+to nothing under `tests/`) is a test file, so it is skipped and listed as skipped, never
+`unreadable`, and does not change the exit code: the checker can't tell whether it uses the
+library, and says it left it out. A file that is no test file and can't be opened is
+`unreadable`, as below. When `--model` or `--rule` names a model that only a skipped test file
+holds, the error says so and names the file (`no model is named `Climb`; the model `Climb` is
+in `tests/climb.ts`, a test file that uses the library and was skipped: name the file, or
+search its folder, to read it`), and `verify`, `chart`, `report`, `tla` and `confirm` all print
+the skipped line before they exit 2. A Rust `#[cfg(test)]` module inside a model file is not part of the
 model, as before. `--base` applies the same convention to the files of the base commit.
 
 A model file may reach the library only by `import { m } from "@earnest/model"`. Reaching it
 any other way, such as `await import("@ear" + "nest/model")`, a `require`, or an import of a
 local module that passes the library on (`import { m } from "./kit.ts"`), is refused with a
-sentence. A file that is not named `.model.ts`, not named on the command line and that hides
+sentence, and so is the file that passes it on: any export of a binding that is the library
+or came from it (`export { m }`, `export { m as kit }`, `export { m as default }`, `export
+default m`, `export const kit = m`, a namespace import or any other imported name listed in
+`export { ... }`, `export * as lib from "@earnest/model"`, a part of it taken apart with
+`const { model } = m`) makes its own file unreadable, so a file that builds a model from it
+never runs on a library the checker has not seen. Imports are hoisted in JavaScript, so
+the export is refused wherever the import is. A file that is not named `.model.ts`, not named on the command line and that hides
 its import from its text, such as a joined specifier, is not found: name it or call it
 `.model.ts`. A file nested too deep to parse is a model file by its import only when it
 spells `earnest`. A file that mentions
@@ -129,7 +148,8 @@ extensions is `unreadable`, with a problem that names it, when it reaches the li
 UTF-8 text (the problem is at the first byte that is not, or at the top of a file that is UTF-16
 text; a file that starts with a UTF-16 byte order mark and holds ASCII text after it is not
 UTF-16 text, so its problem is its first byte), and when it can't be opened at all, as a file
-without read permission or a link to nothing: the checker can't tell that it holds no model. So
+without read permission or a link to nothing (a test file excepted, above): the checker can't
+tell that it holds no model. So
 is a folder that can't be listed. A folder whose name ends like a model file is searched as a
 folder, and a link to a folder is not followed. A file with a NUL byte between its letters is
 found and refused by the reader. `earnest report` names every unreadable file, with its
@@ -213,7 +233,7 @@ unreadable  src/clock.model.ts
 |---|---|
 | 0 | Every model passed |
 | 1 | A rule broke, a model was stuck, out of range or faulted, a model was unfinished, or a file was unreadable |
-| 2 | Bad flags, or no model matched `--model` or `--rule` |
+| 2 | Bad flags, or no model matched `--model` or `--rule`. The error names a skipped test file that holds the model or rule, and the skipped line comes before it |
 
 ### JSON output
 
@@ -431,7 +451,12 @@ export type State = m.Infer<typeof AddToCartFocus>;
   is the one found by walking `steps()` breadth first. `then` gives back only the fields that change.
 - The id of an action, rule or end is the name of its exported constant. A rule, action or end
   bound to a constant that is not exported, by `export const` or by an `export { name }`, makes
-  the file unreadable.
+  the file unreadable. So does an export that JavaScript refuses or that erases the name: the
+  same name exported twice (`export { low }; export { low };`, `export { low, low }`,
+  `export const low` and `export { low }`, or the same name reached by `as`), and a `type`
+  modifier on an exported part (`export { type low }`, `export { low, type top }`), which
+  erases the export from the JavaScript as `export type { low }` does. Write `export type {
+  Name }` for a type.
 - `end` marks states where stopping is correct. Any other state with no action is stuck.
 - `view` is optional. `step` maps an action id to its arrow label; the default is the action's
   sentence. `colors` accepts `broken`, `start` and `end`, each with `#` and 3, 4, 6 or 8
@@ -454,7 +479,7 @@ export type State = m.Infer<typeof AddToCartFocus>;
 - In a function: literals, `null`, field and input reads, `===`, `!==`, `<`, `<=`, `>`, `>=`,
   `&&`, `||`, `!`, `+`, `-` (also as a sign: `-1`), `*`, `m.rem(a, b)`, the `? :` choice, the `!` after a
   `m.some(value)`, the value inside an optional (`m.some(s.chosen).qty`), object literals with spread, calls to the
-  primitives below and to helper functions, and template strings in `view` labels. A function
+  primitives below and to helper functions, `as const`, and template strings in `view` labels. A function
   body is one expression, or a block of `const` declarations and `if (...) return ...;`
   statements that ends in a `return`. Nothing follows that `return`.
 - A name is declared once in its scope, as JavaScript requires: a second top-level `const` of
@@ -494,7 +519,10 @@ listed twice in `m.enum` or `m.oneOf` (the library throws on it too), and any na
 not define, also in a constant that nothing reads. The operator `%` and `%=` are refused: write `m.rem(a, b)`, which is
 the remainder, and a fault for a negative `a` or a `b` below 1, because languages disagree on
 the result. The library's `m.rem` throws the same fault in Node, so `explore` and `replay` report
-it as `earnest verify` does. Rust's `%` keeps its meaning, a fault on a negative number. A postfix `!` after a value is
+it as `earnest verify` does. Rust's `%` keeps its meaning, a fault on a negative number. A type assertion hides a `null` from the type checker as `!` does
+and changes nothing in JavaScript, so `as`, `satisfies` and `<Type>value` are refused in a term
+except `as const`: `(s.o as number) < 3` is `null < 3` in the start state, and write
+`m.some(s.o) < 3` instead. A postfix `!` after a value is
 refused: write `m.some(value)`, which is the value of an optional and is a fault where it is
 `null`, in `earnest verify` and in the library's `explore` and `replay` alike, because
 JavaScript would go on with `null` as the number 0. The nesting of a model file is counted on
@@ -594,10 +622,14 @@ impl Turnstile {
 - An action is a method in the `#[model]` block that takes `&self` and its inputs and returns
   `Option<Self>`, or `Self` when nothing can stop it: an action with no `require!` that returns
   `Some(..)` on every path draws `clippy::unnecessary_wraps`, so it may give back the state
-  itself (`Self { changed fields, ..self.clone() }`) and has no `require!` or early return of
-  `None`. Each `require!(condition);` is part of its `when`. The last expression is
-  `Some(Self { changed fields, ..self.clone() })`. Before it, `let` bindings and
-  `if condition { return Some(Self { .. }); }` are allowed.
+  itself (`Self { changed fields, ..self.clone() }`) and has no `require!`, no `?`, no early
+  return of `None` and no `Some(..)`: `require!` returns `None`, which a method that returns
+  `Self` can't, and `rustc` refuses each of them (E0308, E0277), so the file is unreadable.
+  The same holds the other way: an action that returns `Option<Self>` gives back
+  `Some(Self { .. })` on every path, and a bare `Self { .. }`, a `Some(Some(..))` or a value
+  that is not wrapped is refused (E0308). Each `require!(condition);` is part of its `when`.
+  The last expression is `Some(Self { changed fields, ..self.clone() })`. Before it, `let`
+  bindings and `if condition { return Some(Self { .. }); }` are allowed.
 - A rule or an end is a method that returns `bool`. Ids are the method names. An enum value is
   known to the checker by its variant name, so `Gate::Locked` prints as `"Locked"`.
 - A method without `#[action]`, `#[rule]` or `#[end]` is a helper function, called as
@@ -650,10 +682,21 @@ impl Turnstile {
   value followed by `.to_string()` or `.to_owned()`. A value is read as in a rule, so it may be
   a field, a helper call or an `if`; it must be a boolean, a number, an enum variant or a text,
   because `Debug` prints anything else (an `Option`, a record, a collection) differently from
-  the chart. A hole is `{}` or `{:?}`, and a `{:?}` of a `&'static str` field is refused,
-  because `Debug` puts the text in quotes and the chart does not: write `{}` for a text and
-  `{:?}` for an enum variant. A width, a name or a number in a hole is refused, and `{{` and
-  `}}` are the braces. The block holds nothing but labels, and `format!` is read in them only.
+  the chart. A hole is `{}` or `{:?}`, and the form must be one that `rustc` accepts for the
+  type of the value and that prints what the chart draws, judged by the type of the whole
+  value (a field, an `if`, a literal, a sum), not by how it is written:
+
+  | Value | `{}` | `{:?}` | `.to_string()` | `.to_owned()` |
+  |---|---|---|---|---|
+  | boolean | read | read | read | refused: gives a `bool`, not a `String` (E0308) |
+  | number, any integer type | read | read | read | refused: gives the number (E0308) |
+  | enum variant | refused: no `Display` (E0277) | read: prints the variant name | refused: no `Display` (E0599) | refused: gives the enum (E0308) |
+  | text, a `&'static str` | read | refused: `Debug` prints it in quotes and with escapes, the chart without | read | read |
+  | `Option`, record, collection | refused | refused: `Debug` prints `Some(..)` and `Name { .. }` | refused | refused |
+
+  A width, a name, a position or a flag in a hole is refused, `{{` and `}}` are the braces, and
+  a `{` that is never closed, a lone `}`, and more or fewer values than holes are refused, as
+  `rustc` refuses them. The block holds nothing but labels, and `format!` is read in them only.
   The macro implements `earnest::model::View`, so `state.state_label()` and
   `state.group_label()` give the labels the chart shows, and `Cart::title()`,
   `Cart::step_labels()` and `Cart::colors()` the rest. The twins `tasks/conformance/twins/cart.rs`
@@ -675,12 +718,24 @@ impl Turnstile {
   ```
 
   A step is found among `state.steps()`, so an action runs only where its `require!` is true.
-  An input is written as the report prints it (`Bill`, `3`, `true`, `Kim`), and every input the
-  action takes must be given. A step that can't happen gives a `Mismatch` with the step's number
+  An input is written as the report prints it, in the JSON of `earnest verify --json` or in its
+  text output, so a path copied from either replays: `Bill` or `"Bill"` for an enum variant,
+  `3`, `true`, `Kim` or `"Kim"` for a text (with the escapes of the text output inside the
+  quotes), `null` for a `None` (a `Some` is the value inside it) and `{row: 1, lit: true}` for
+  a record, whose fields may come in any order and whose own enums and texts are written bare
+  or quoted. Every input the action takes must be given. The text a step holds (`Step::input`)
+  is the text output's form, made by the trait `earnest::model::Report` that `#[derive(Domain)]`
+  implements for the enum or the struct, and that the library has for `bool`, every integer
+  type, `&str` and `Option`: `Report::report(&value)`. A state is not compared through `Report`:
+  its fields are collections as well as values, and a test compares states with `assert_eq!` or
+  through the rule methods. A step that can't happen gives a `Mismatch` with the step's number
   and the steps that can happen there. `Turnstile::starts()` lists every start state, and a rule
   or an end is called the same way: `state.stays_locked()`. `n.is_multiple_of(d)` on an unsigned
-  number reads as `n % d == 0`, and `n.is_multiple_of(0)` as `n == 0`, as in Rust, so a model
-  can follow `clippy::manual_is_multiple_of`.
+  integer reads as `n % d == 0`, and `n.is_multiple_of(0)` as `n == 0`, as in Rust, so a model
+  can follow `clippy::manual_is_multiple_of`. It is a method of the unsigned integer types
+  only: `rustc` refuses it on an `i8`, an `i32`, an `isize` or any other signed type (E0599), on a
+  number written out (E0689) and on an `Option`, so the file is unreadable, and `n % d == 0` is
+  what to write where `n` can't be negative.
 
 A raw identifier is the same name as its plain spelling everywhere in Rust: `fn r#fn` is the
 rule `fn`, `fn r#loop` the action `loop` and the field `r#type` the field `type`, in the

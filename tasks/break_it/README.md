@@ -638,3 +638,123 @@ sets compared as sets):
 Mermaid itself (no renderer here: the chart was read, not drawn). The memory a huge product of
 inputs takes (it killed the process, so it has no test). `report --base` for a Rust file. A
 `confirm` over models with an `Option` of a record in a map of sets. Models run on Windows.
+
+## Fifth pass (a)
+
+A fifth adversarial pass, made on commit 50ef5ab against the code written since the fourth
+pass: the test-file rule of discovery, the shared thread pool, Rust views, `#[one_of]`,
+actions that return `Self`, `is_multiple_of`, `earnest::model::replay`, and the refusals of
+`!`, `%` and re-exports. Its tests are in `tests/break_it/fifth_a.rs` and its files in
+`models/fifth_a/`. Each Rust file was compiled with `rustc` against `crates/earnest`, and the
+two that compile (`inputs.rs`, `quoted.rs`) are included in the tests as real Rust, which is
+why `earnest` is a dev-dependency of this crate. Each TypeScript file was run with `explore`
+in Node. Every `.ts` file here except `exported_twice.model.ts` passes `tsc` with `strict`.
+Each test fails today.
+
+`models/fifth_a/climb.ts` is the model `Climb` of the first section: `n` from 0, `inc` while
+`n < 3`, 3 is a marked end, and `low` (`s.n <= 1`) breaks after two steps (4 states).
+
+### A broken model left out and the run passed
+
+`passes_on.model.ts` holds the model `Lamp` (off, then on and a marked end: 2 states, passes)
+and the line `export { m };`, which passes the library on to any file that imports it.
+`takes_from_model.ts` is `Climb` written with `import { m } from "./passes_on.model.ts";`; in
+Node `explore` reports `low` broken after two steps. `export { m } from "@earnest/model"` is
+refused ("a model file can't pass on another module"), and the Rust forms (`pub use`,
+`pub(crate) use`, `pub(super) use`, `pub use ::earnest`, `pub extern crate`) are all refused,
+but `export { m }` of the imported name is read. `earnest verify` on the folder prints `pass
+Lamp`, `1 model: 1 pass`, exit 0: `takes_from_model.ts` never mentions `earnest`, so it is not
+found, and nothing says so. Named on the command line it is refused, which is right. Right
+result: `passes_on.model.ts` unreadable, or `Climb` checked with `low` broken. Test:
+`a_model_that_takes_the_library_from_a_model_file_that_exports_m_is_not_left_out`.
+
+### Files the language refuses, read and passed
+
+| File | By hand | Today | Test |
+|---|---|---|---|
+| `fifth_a/self_require.rs` | `fn inc(&self) -> Self { require!(self.n < 1); Self { n: self.n + 1 } }`. `require!` expands to `return None`, so `rustc` refuses the file (E0308), and the contract says an action that returns `Self` has no `require!`. Read with the meaning the contract gives `Self` ("nothing can stop it"), `n` would climb past 1 and break `low`. Right result: `unreadable` | `pass`, 2 states: the `require!` is read as the action's `when` | `an_action_returning_self_with_require_is_unreadable` |
+| `fifth_a/signed_multiple.rs` | `self.n.is_multiple_of(2)` on an `i8`. Rust has the method on unsigned integers only, so `rustc` refuses the file (E0599); the contract speaks of it on an unsigned number only. Right result: `unreadable` | `pass`, 2 states; on a negative `i8` it is the fault of `%` | `is_multiple_of_on_a_signed_number_is_unreadable` |
+| `fifth_a/display_enum.rs` | The view's state label is `format!("the lamp is {}", self.mode)` and its group `self.mode.to_string()`, on an enum that derives `Domain` and has no `Display`. `rustc` refuses both (E0277, E0599); the contract says to write `{:?}` for an enum variant. Right result: `unreadable` | `pass`, and `earnest chart` draws the boxes `the lamp is Off` and `the lamp is On` in groups `Off` and `On` | `a_display_hole_on_an_enum_that_rust_refuses_is_unreadable` |
+| `fifth_a/exported_twice.model.ts` | `Climb` with the rule `s.n <= 3` bound to `const low` and then `export { low };` twice. That is a SyntaxError in JavaScript ("Duplicate export of 'low'", Node does not run the file) and TS2300 in `tsc`. Right result: `unreadable` | `pass`, 4 states | `a_rule_exported_twice_makes_the_file_unreadable` |
+
+### Node, Rust and the checker disagree
+
+| File | By hand | Today | Test |
+|---|---|---|---|
+| `fifth_a/cast.model.ts` | `Opt`: `o` is `null`, then 0, 1 or 2 (4 states). The rule is `(s.o as number) < 3`, which `tsc` accepts. `as` changes nothing in JavaScript, so this is `null < 3` in the start state, as `s.o! < 3` was in the fourth pass; `!` is now refused for that reason and `as` is not. Right result: `unreadable`, or the checker and `explore` give one verdict | The checker: a fault in the start state, `below` `unknown`, `fail`. `explore`: `holds`, `pass`, no finding | `explore_and_the_checker_agree_on_a_null_number_read_through_as` |
+| `fifth_a/inline_type.model.ts` | `const low = Climb.rule(...)` and `export { type low };`. The `type` modifier erases the export from the JavaScript, as `export type { low }` does, which is refused as a rule bound to a constant that is not exported. Right result: `unreadable` | Read, with the rule id `low`; `explore` knows no export of it and names the rule by its sentence | `a_rule_exported_only_as_a_type_is_unreadable` |
+| `fifth_a/inputs.rs` | `Post`: `deliver(letter: Option<Letter>)` once, then `place(spot: Spot)` once, where `Spot` is a record of `row` (0 or 1) and `lit`. States: the start, 3 after `deliver`, 3 times 4 after `place`: 16. `kept` breaks where nothing came and the post is in the lit spot of row 1: `deliver` with `letter = null`, then `place` with `spot = {row: 1, lit: true}`, 2 steps, which is what the checker reports | `replay` with the inputs written as the report prints them refuses step 1: `steps()` lists the inputs as `Debug` prints them (`None`, `Some(Bill)`, `Spot { row: 1, lit: true }`), and `Move` matches only that text or a text in quotes. The contract says an input is written as the report prints it | `replay_takes_an_optional_and_a_record_input_as_the_report_prints_them` |
+| `fifth_a/quoted.rs` | The view's state label is `format!("{:?} by {:?}", self.mode, if self.mode == Mode::On { self.who } else { "Kim" })`, where `who` is a `#[one_of("Kim", "Lee")]` text. When the file runs, `state_label()` is `Off by "Kim"` and then `On by "Lee"`: `Debug` puts a text in quotes. Right result: the chart's boxes read as Rust prints them, or `unreadable` as `{:?}` of a text field is | The chart draws `Off by Kim` and `On by Lee`: the refusal looks only at a `{:?}` whose value is a plain field read | `a_debug_hole_on_a_text_gives_the_chart_the_label_rust_prints` |
+
+### Discovery and the test-file rule
+
+| Case | By hand | Today | Test |
+|---|---|---|---|
+| `tests/climb.ts`, run with `--model Climb` | The only `Climb` is in a test file, which is not read, and the contract says the run says so; a file is never left out without a word | `error: no model is named Climb`, exit 2, with no word of the skipped file | `a_model_skipped_as_a_test_file_is_named_when_model_asks_for_it` |
+| `tests/climb.ts`, run as `earnest verify . ./tests` | `./tests` is named, so below it `climb.ts` is no test file: it is read and `Climb` is checked. `skipped` lists the test files that were not read | `Climb` is checked through `./tests/climb.ts` and `skipped` also lists `tests/climb.ts`, with the line `skipped 1 test file that uses the library` | `a_test_file_read_through_its_own_folder_is_not_listed_as_skipped` |
+| `src/climb.ts`, run as `earnest verify . ./src` | One file, reached through two folders: checked and listed once | `2 models`: `src/climb.ts` and `./src/climb.ts`. `earnest verify src ../here/src` does the same. Only files named on the command line are compared by their real path | `a_model_found_through_two_spellings_of_its_folder_is_checked_once` |
+
+### Suspected, no test
+
+- A test file that can't be opened (a broken link `tests/x.ts`) is listed as `unreadable` and
+  makes the run exit 1 (read in the code, not run), though by its name it is a test file,
+  which the contract says never changes the exit code. The contract says both.
+- `earnest chart`, `tla` and `confirm` stop at `--model` with exit 2 before they print the
+  skipped line, as `verify` does (the test above is for `verify`).
+- `format!("{:?} {", a, b)`: Rust refuses an unclosed `{`; the reader takes the text to its end
+  as a hole, so with as many values as holes it would be read. Not run.
+
+### Settled after the pass
+
+All twelve tests pass. The three suspected cases were run and settled: a test file that can't be
+opened is skipped and listed as skipped, never unreadable, and does not change the exit code
+(unit test `a_test_file_that_cannot_be_opened_is_skipped_and_never_unread` in
+`apps/earnest/src/discovery.rs`); `chart`, `tla`, `confirm` and `report` print the skipped line
+before the exit 2 of `--model` (tests in `apps/earnest/src/commands.rs`); and a `format!` with a
+`{` never closed, or more or fewer values than holes, is refused by the reader (tests in
+`crates/earnest_rs/tests/read/views.rs`). The state comparison of
+`apps/earnest/tests/rust_models/replay.rs` still goes through `Debug`: it builds its own source
+and writes each value with its own `value_text`, which panics on `null` and on a record, and it is
+protected, so it was left as it is; `earnest::model::Report` and the matching of a `Move` by value
+are tested in `crates/earnest/tests/model/replays.rs`.
+
+### Attacked and found correct
+
+- Discovery: `tests`, `test`, `__tests__`, `benches`, `examples` and `build.rs` by language; a
+  `.model.ts` under `tests`; `earnest verify tests`, `./tests/`, an absolute path to `tests`,
+  `verify` run from inside `tests` and `verify ..` from there; the skipped line on `verify`,
+  `chart`, `report` (its `Skipped files` section), `tla` and `confirm` for a run whose only
+  model is in a test file; `--base` with a model moved from `src` into `tests` (`removed`) and
+  from `tests` into `src` (`added`).
+- `--jobs` 1, 2, 3, 4, 7, 8 and 16, with no limit, `--max-states 777` and `--max-states 5000`,
+  on 70 models at once (the conformance models, the benchmark grids of 1 000 and 100 000
+  states, `Ledger`, `Wide`, the fourth pass's files and this pass's Rust files: models that
+  pass, fail, are stuck, fault, go out of range or are unreadable): byte-identical JSON apart
+  from `milliseconds`. The de-duplication of next states inside a worker can't change which
+  parent a state gets or where the state limit falls: the merge goes in frontier order.
+- `#[one_of]`: `1` and `0x1`, `"a"` and `"\x61"` in one list are refused as a value listed
+  twice; `i64` at both ends, `i8` at -128 and 127, `u8` at 0 and 255; `Option<u8>` with
+  `#[one_of(5, 2)]` starts at `None`, 5, 2 as `starts()` does; `#[one_of]` on the fields of a
+  `Domain` record and on an action input beside a record input and a `#[range]` input: the
+  order of `steps()` (first input fastest), 19 states and the paths agree with real Rust;
+  text equality across two fields with different lists and with a literal in neither list.
+  Order on texts and `match` on a text are refused.
+- `replay` of a text with a quote (`a"b`) written with its quotes, as the text report prints it.
+- Rust re-exports: `pub(super) use`, `pub(in crate) use`, `pub(self) use`, `pub use ::earnest`,
+  a glob, a grouped `pub use {..}`, `pub extern crate earnest` and `extern crate earnest as
+  kit` are refused; `use earnest::model::forall as _` is read.
+- TypeScript: `%` in a view's template and in a sentence's template is refused; `m.some(x)!`,
+  `Climb.rule(...)!`, `export default`, `export { low as high }`, `export let`, `export var`,
+  `let x!: T`, `export declare const`, `export type { low }` and `export * from` are refused.
+- `earnest confirm --tlc`: texts with quotes, `Option` and record inputs, `#[one_of]` on an
+  `Option<u8>`, an `i8` sum past its type in a rule, `u32`, `i64` and `u64` with small ranges,
+  a `u8` at 255 in an action that returns `Self`, a single text that is not ASCII: `same`;
+  `i64` at its ends: `cannot`, with the reason.
+- Views: a `Display` impl in the file and a helper that returns `&'static str` are refused.
+- `npm/cli/src/launch.ts` was read: exit codes and signals are passed through.
+
+### Not covered
+
+`--time-limit` across `--jobs` (its cut is timed, so it is not expected to repeat). tla-rs. The
+`@earnest/cli` launcher run from an installed package. Models run on Windows, where the test
+folder rule meets `\` separators.

@@ -464,7 +464,6 @@ impl Reader<'_> {
         }
         self.methods.clear();
         self.view_of(state, found, &mut draft);
-        self.texts.clear();
         draft
     }
 
@@ -503,9 +502,6 @@ impl Reader<'_> {
     fn field(&mut self, field: &Field) -> Option<FieldDraft> {
         let name = name_of(field.ident.as_ref()?);
         self.refuse_conditional(&field.attrs);
-        if is_text_reference(&field.ty) {
-            self.texts.insert(name.clone());
-        }
         let mut shape = self.shape(&field.ty, &field.attrs);
         if let Some(initial) = attribute(&field.attrs, "initial") {
             shape.initial = Some(match initial.parse_args::<Expr>() {
@@ -563,7 +559,7 @@ impl Reader<'_> {
         let inputs = self.inputs(signature);
         let says = self.sentence(role, sentence);
         if role == "action" {
-            self.action_returns(signature);
+            let returns_self = self.action_returns(signature);
             let taken: Vec<String> = inputs.iter().map(|(name, _)| name.clone()).collect();
             let body = |term: Term| ActionBody {
                 state_name: Some(STATE.to_owned()),
@@ -575,7 +571,9 @@ impl Reader<'_> {
             self.bound.extend(taken.iter().cloned());
             let guard = self.guard(&method.block.stmts).map(body);
             let close = method.block.brace_token.span.close();
+            self.returns_self = returns_self;
             let change = body(self.rest(&method.block.stmts, Body::Action, close));
+            self.returns_self = None;
             self.bound.truncate(kept);
             draft.actions.push(ActionDraft {
                 id,
@@ -639,14 +637,17 @@ impl Reader<'_> {
         }
     }
 
-    fn action_returns(&mut self, signature: &Signature) {
+    fn action_returns(&mut self, signature: &Signature) -> Option<bool> {
         let given = match &signature.output {
             ReturnType::Default => String::new(),
             ReturnType::Type(_, ty) => self.text(ty.span()).replace(' ', ""),
         };
-        if given != "Self" {
-            self.returns(signature, "Option<Self>", "an action");
+        if given == "Self" {
+            return Some(true);
         }
+        let before = self.problems.len();
+        self.returns(signature, "Option<Self>", "an action");
+        (self.problems.len() == before).then_some(false)
     }
 
     pub(crate) fn returns(&mut self, signature: &Signature, wanted: &str, what: &str) {
@@ -845,15 +846,6 @@ impl Reader<'_> {
             parameters,
             body,
         }
-    }
-}
-
-fn is_text_reference(ty: &Type) -> bool {
-    match ty {
-        Type::Reference(borrowed) => {
-            matches!(borrowed.elem.as_ref(), Type::Path(named) if named.path.is_ident("str"))
-        }
-        _ => false,
     }
 }
 

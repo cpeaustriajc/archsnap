@@ -432,7 +432,7 @@ impl Lowerer<'_> {
             }
             pieces
         } else {
-            vec![self.shown(&found.term, &mut scope).ok()?]
+            vec![self.shown(&found.term, Shown::Display, &mut scope).ok()?]
         };
         Some(Label {
             pieces,
@@ -440,15 +440,39 @@ impl Lowerer<'_> {
         })
     }
 
-    fn shown(&mut self, term: &Term, scope: &mut Scope) -> Lowering<Piece> {
+    fn shown(&mut self, term: &Term, how: Shown, scope: &mut Scope) -> Lowering<Piece> {
         let typed = self.term(term, scope)?;
-        if self.is_rust() && !matches!(typed.ty, Type::Bool | Type::Int(_) | Type::Text) {
-            return Err(self.stop(
-                term.place,
-                "a value in a label",
-                "a Rust label shows a boolean, a number, an enum variant or a text: `Debug` \
-                 prints anything else differently from the chart",
-            ));
+        if self.is_rust() {
+            let (feature, why) = match (&typed.ty, how) {
+                (Type::Bool | Type::Int(_), Shown::Display | Shown::Debug)
+                | (Type::Text, Shown::Display | Shown::Owned)
+                | (Type::Variant, Shown::Debug) => return Ok(Piece::Shown(typed.expr)),
+                (Type::Bool | Type::Int(_), Shown::Owned) => (
+                    "`.to_owned()`",
+                    "`.to_owned()` of a boolean or a number is that boolean or number, not a \
+                     `String`, and Rust refuses it: write `.to_string()`",
+                ),
+                (Type::Text, Shown::Debug) => (
+                    "`{:?}`",
+                    "`{:?}` prints a text in quotes and the chart prints it without: write `{}`",
+                ),
+                (Type::Variant, Shown::Display) => (
+                    "`{}`",
+                    "an enum has no `Display`, so `{}` and `.to_string()` of an enum variant do \
+                     not compile: write `{:?}`",
+                ),
+                (Type::Variant, Shown::Owned) => (
+                    "`.to_owned()`",
+                    "`.to_owned()` of an enum variant is the variant, not a `String`, and Rust \
+                     refuses it: write `format!(\"{:?}\", value)`",
+                ),
+                _ => (
+                    "a value in a label",
+                    "a Rust label shows a boolean, a number, an enum variant or a text: `Debug` \
+                     prints anything else differently from the chart",
+                ),
+            };
+            return Err(self.stop(term.place, feature, why));
         }
         Ok(Piece::Shown(typed.expr))
     }
@@ -456,7 +480,9 @@ impl Lowerer<'_> {
     fn piece(&mut self, part: &TemplatePiece, place: Place, scope: &mut Scope) -> Lowering<Piece> {
         match part {
             TemplatePiece::Text(text) => Ok(Piece::Text(text.clone())),
-            TemplatePiece::Value(term) => self.shown(term, scope),
+            TemplatePiece::Value(term) => self.shown(term, Shown::Display, scope),
+            TemplatePiece::Debug(term) => self.shown(term, Shown::Debug, scope),
+            TemplatePiece::Owned(term) => self.shown(term, Shown::Owned, scope),
             _ => Err(self.stop(
                 place,
                 "a part of a template string",
@@ -636,6 +662,7 @@ impl Lowerer<'_> {
         for option in options {
             let (value, found) = match &option.kind {
                 TermKind::Text(text) => (Value::Str(self.symbols.intern(text)), Type::Text),
+                TermKind::Variant(text) => (Value::Str(self.symbols.intern(text)), Type::Variant),
                 TermKind::Int(number) => (Value::Int(*number), Type::Int(None)),
                 TermKind::Declared { shape, value } => match (&shape.kind, &value.kind) {
                     (ShapeKind::Int { ty, .. }, TermKind::Int(number)) => {
@@ -681,6 +708,13 @@ impl Lowerer<'_> {
         }
         Ok(plain(Domain::OneOf(values), ty))
     }
+}
+
+#[derive(Clone, Copy)]
+enum Shown {
+    Display,
+    Debug,
+    Owned,
 }
 
 fn plain(domain: Domain, ty: Type) -> Shaped {

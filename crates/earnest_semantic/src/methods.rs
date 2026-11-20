@@ -170,6 +170,7 @@ impl Lowerer<'_> {
             | Type::Bool
             | Type::Int(_)
             | Type::Text
+            | Type::Variant
             | Type::Record(_) => Err(self.unknown(&on.ty, &call)),
         }
     }
@@ -572,6 +573,7 @@ fn with_item(same: &Type, given: Type) -> Type {
         | Type::Bool
         | Type::Int(_)
         | Type::Text
+        | Type::Variant
         | Type::Optional(_)
         | Type::Record(_)
         | Type::Map(_, _)

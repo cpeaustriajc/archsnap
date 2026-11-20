@@ -90,6 +90,12 @@ impl IntType {
         }
     }
 
+    /// Whether the type has a sign, so a value of it can be below zero.
+    #[must_use]
+    pub fn is_signed(self) -> bool {
+        self.lowest() < 0
+    }
+
     /// The largest number of the type that a value can hold.
     #[must_use]
     pub fn highest(self) -> i64 {

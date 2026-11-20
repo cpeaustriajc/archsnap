@@ -146,7 +146,7 @@ fn steps_of(method: &mut ImplItemFn, sentence: &LitStr) -> syn::Result<TokenStre
     let shown = slots.iter().map(|slot| {
         let input = slot.name.unraw().to_string();
         let variable = &slot.variable;
-        quote! { (#input, ::std::format!("{:?}", #variable)) }
+        quote! { (#input, ::earnest::model::Report::report(&#variable)) }
     });
     let step = quote! {
         earnest_steps.push(::earnest::model::Step {

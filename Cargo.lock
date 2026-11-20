@@ -349,6 +349,7 @@ dependencies = [
 name = "earnest_break_it"
 version = "0.1.0"
 dependencies = [
+ "earnest",
  "serde_json",
  "tempfile",
 ]

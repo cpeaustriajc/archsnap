@@ -1,6 +1,7 @@
 use crate::choices::{Slot, domain_choices, every_combination};
 use proc_macro2::TokenStream;
 use quote::quote;
+use syn::ext::IdentExt;
 use syn::spanned::Spanned;
 use syn::{Data, DataEnum, DeriveInput, Fields, FieldsNamed};
 
@@ -12,10 +13,10 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
             "`Domain` can't be derived for a generic type: its values must be known",
         ));
     }
-    let values = match &item.data {
-        Data::Enum(choices) => variants(choices)?,
+    let (values, report) = match &item.data {
+        Data::Enum(choices) => (variants(choices)?, reported_variants(choices)),
         Data::Struct(record) => match &record.fields {
-            Fields::Named(fields) => combinations(fields)?,
+            Fields::Named(fields) => (combinations(fields)?, reported_fields(fields)),
             other @ (Fields::Unnamed(_) | Fields::Unit) => {
                 return Err(syn::Error::new(
                     other.span(),
@@ -38,7 +39,42 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                 #values
             }
         }
+
+        #[automatically_derived]
+        impl ::earnest::model::Report for #name {
+            fn report(&self) -> ::std::string::String {
+                #report
+            }
+        }
     })
+}
+
+fn reported_variants(choices: &DataEnum) -> TokenStream {
+    let names = choices.variants.iter().map(|variant| &variant.ident);
+    let shown = choices
+        .variants
+        .iter()
+        .map(|variant| format!("\"{}\"", variant.ident.unraw()));
+    quote! {
+        match *self {
+            #(Self::#names => ::std::string::String::from(#shown),)*
+        }
+    }
+}
+
+fn reported_fields(fields: &FieldsNamed) -> TokenStream {
+    let names: Vec<&syn::Ident> = fields
+        .named
+        .iter()
+        .filter_map(|field| field.ident.as_ref())
+        .collect();
+    let labels = names.iter().map(|name| name.unraw().to_string());
+    quote! {
+        let earnest_parts: ::std::vec::Vec<::std::string::String> = ::std::vec![
+            #(::std::format!("{}: {}", #labels, ::earnest::model::Report::report(&self.#names))),*
+        ];
+        ::std::format!("{{{}}}", earnest_parts.join(", "))
+    }
 }
 
 fn variants(choices: &DataEnum) -> syn::Result<TokenStream> {
@@ -91,8 +127,40 @@ mod tests {
                     ::std::vec![Self::Locked, Self::Open]
                 }
             }
+
+            #[automatically_derived]
+            impl ::earnest::model::Report for Gate {
+                fn report(&self) -> ::std::string::String {
+                    match *self {
+                        Self::Locked => ::std::string::String::from("\"Locked\""),
+                        Self::Open => ::std::string::String::from("\"Open\""),
+                    }
+                }
+            }
         };
-        assert_eq!(expanded.to_string(), wanted.to_string(), "the impl");
+        assert_eq!(expanded.to_string(), wanted.to_string(), "the impls");
+    }
+
+    #[test]
+    fn a_struct_reports_each_field_by_name_in_the_order_declared() {
+        let expanded = expand(quote! {
+            struct Spot {
+                #[range(0, 1)]
+                row: u8,
+                r#type: bool,
+            }
+        })
+        .expect("a struct")
+        .to_string();
+        let wanted = quote! {
+            ::std::format!("{}: {}", "row", ::earnest::model::Report::report(&self.row))
+        }
+        .to_string();
+        assert!(expanded.contains(&wanted), "{wanted} in {expanded}");
+        assert!(
+            expanded.contains("\"type\""),
+            "a raw name is its plain spelling: {expanded}"
+        );
     }
 
     #[test]

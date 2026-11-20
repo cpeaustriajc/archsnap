@@ -1,12 +1,14 @@
-use super::{Behavior, Step};
+use super::{Behavior, Step, report};
 use std::error::Error;
 use std::fmt;
 
 /// One step of a path from `earnest verify --json`: the action's id and each of its inputs.
 ///
-/// A value is written as the report prints it: `Bill` for an enum variant, `3` for a number,
-/// `true` for a boolean and `Kim` for a text. The step's `changes` and `state` are not part of
-/// it: [`replay`] gives back every state, and the test compares them.
+/// A value is written as the report prints it, in the JSON of `earnest verify --json` or in
+/// its text output: `Bill` or `"Bill"` for an enum variant or a text, `3` for a number, `true`
+/// for a boolean, `null` for a `None` and `{row: 1, lit: true}` for a record, whose fields may
+/// come in any order. The value of a `Some` is the value inside it. The step's `changes` and
+/// `state` are not part of it: [`replay`] gives back every state, and the test compares them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Move {
     action: String,
@@ -23,8 +25,8 @@ impl Move {
         }
     }
 
-    /// The same step with the input `name` given the value `value`. Give every input the
-    /// action takes, in any order.
+    /// The same step with the input `name` given the value `value`, written as the report
+    /// prints it. Give every input the action takes, in any order.
     #[must_use]
     pub fn with(mut self, name: &str, value: &str) -> Self {
         self.input.push((name.to_owned(), value.to_owned()));
@@ -37,17 +39,9 @@ impl Move {
             && step.input.iter().all(|(name, shown)| {
                 self.input
                     .iter()
-                    .any(|(given, value)| given == name && same_value(shown, value))
+                    .any(|(given, value)| given == name && report::matches(shown, value))
             })
     }
-}
-
-fn same_value(shown: &str, written: &str) -> bool {
-    shown == written
-        || shown
-            .strip_prefix('"')
-            .and_then(|quoted| quoted.strip_suffix('"'))
-            .is_some_and(|text| text == written)
 }
 
 impl fmt::Display for Move {

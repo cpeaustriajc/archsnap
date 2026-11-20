@@ -10,6 +10,7 @@ mod lock;
 mod map;
 mod queue;
 mod replay;
+mod report;
 mod request;
 mod retry;
 mod seq;
@@ -23,6 +24,7 @@ pub use lock::{Lock, Unowned};
 pub use map::Map;
 pub use queue::Queue;
 pub use replay::{Mismatch, Move, replay};
+pub use report::Report;
 pub use request::Request;
 pub use retry::Retry;
 pub use seq::Seq;
@@ -115,7 +117,7 @@ pub struct Step<State> {
     pub action: &'static str,
     /// The action's sentence from `#[action("...")]`.
     pub label: &'static str,
-    /// Each input's name and its value as `Debug` prints it, in parameter order.
+    /// Each input's name and its value as [`Report`] prints it, in parameter order.
     pub input: Vec<(&'static str, String)>,
     /// The state after the action.
     pub state: State,

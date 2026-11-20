@@ -69,19 +69,21 @@ fn a_view_block_gives_the_title_the_steps_the_colors_and_both_labels() {
         .iter()
         .map(|piece| match piece {
             TemplatePiece::Text(text) if text == ", focus on " => "the text between",
-            TemplatePiece::Value(_) => "a value",
+            TemplatePiece::Debug(_) => "a debug value",
             _ => "something else",
         })
         .collect();
     assert_eq!(
         kinds,
-        ["a value", "the text between", "a value"],
+        ["a debug value", "the text between", "a debug value"],
         "the pieces"
     );
     let group = view.group.as_ref().expect("a group label");
     assert!(
-        matches!(&group.term.kind, TermKind::Member(_, field) if field == "surface"),
-        "`self.surface.to_owned()` shows the field: {:?}",
+        matches!(&group.term.kind, TermKind::Template(pieces)
+            if matches!(pieces.as_slice(), [TemplatePiece::Owned(shown)]
+                if matches!(&shown.kind, TermKind::Member(_, field) if field == "surface"))),
+        "`self.surface.to_owned()` shows the field as an owned value: {:?}",
         group.term.kind
     );
 }
@@ -114,7 +116,9 @@ fn braces_are_escaped_by_doubling_and_a_label_may_be_a_single_to_string() {
     let draft = only_draft("dial.rs", &dial);
     let state = draft.view.state.expect("a state label");
     assert!(
-        matches!(&state.term.kind, TermKind::Member(_, field) if field == "x"),
+        matches!(&state.term.kind, TermKind::Template(pieces)
+            if matches!(pieces.as_slice(), [TemplatePiece::Value(shown)]
+                if matches!(&shown.kind, TermKind::Member(_, field) if field == "x"))),
         "`.to_string()` shows the value: {:?}",
         state.term.kind
     );
@@ -227,6 +231,15 @@ fn a_hole_is_empty_or_a_debug_hole_filled_from_the_values_after_the_text() {
         ("format!(\"{} {}\", self.cta)", "{}"),
         ("format!(\"}\", self.cta)", "}"),
         ("format!(\"no hole\", self.cta)", "format!"),
+        ("format!(\"{:?} {\", self.cta, self.focus)", "{"),
+        ("format!(\"{\", self.cta)", "{"),
+        ("format!(\"{{{\", self.cta)", "{"),
+        ("format!(\"{:?\", self.cta)", "{:?"),
+        (
+            "format!(\"{:?} {:?}\", self.cta, self.focus, self.cta)",
+            "format!",
+        ),
+        ("format!(\"{:?} {:?} {:?}\", self.cta, self.focus)", "{}"),
     ] {
         let source = with(
             "format!(\"{:?}, focus on {:?}\", self.cta, self.focus)",
@@ -234,10 +247,6 @@ fn a_hole_is_empty_or_a_debug_hole_filled_from_the_values_after_the_text() {
         );
         assert_eq!(features(&source), [feature], "{written}");
     }
-    let text = with("self.surface.to_owned()", "format!(\"{:?}\", self.surface)");
-    let found = refused(&text);
-    assert_eq!(found[0].0, "self.surface", "a text printed with `Debug`");
-    assert!(found[0].1.contains("write `{}`"), "{found:?}");
 }
 
 #[test]
@@ -299,4 +308,119 @@ impl Cart {
     assert_eq!(features, ["a value in a label"], "the group label");
     let counted = search(&only_draft("cart.rs", &with("fn group", "fn group")));
     assert_eq!(counted.states, 6, "the view does not change the search");
+}
+
+const KINDS: &str = r#"
+use earnest::model::{Domain, Model, model, view};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Domain)]
+enum Mode {
+    Off,
+    On,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Domain)]
+struct Spot {
+    #[range(0, 1)]
+    row: u8,
+    lit: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Model)]
+struct Lamp {
+    #[initial(Mode::Off)]
+    mode: Mode,
+    #[initial(false)]
+    on: bool,
+    #[range(0, 3)]
+    #[initial(0)]
+    count: u8,
+    #[range(-2, 2)]
+    #[initial(0)]
+    level: i8,
+    #[one_of("Kim", "Lee")]
+    #[initial("Kim")]
+    who: &'static str,
+    #[initial(None)]
+    got: Option<Mode>,
+    #[initial(Spot { row: 0, lit: false })]
+    spot: Spot,
+}
+
+#[model]
+impl Lamp {
+    #[rule("A lamp is a lamp")]
+    fn lamp(&self) -> bool {
+        true
+    }
+}
+
+#[view]
+impl Lamp {
+    #[state]
+    fn state(&self) -> String {
+        LABEL
+    }
+}
+"#;
+
+fn label_is_read(label: &str) -> bool {
+    let source = KINDS.replace("LABEL", label);
+    let reading = read("src/lamp.rs", &source);
+    assert_eq!(reading.problems, [], "`{label}` is read: {source}");
+    let draft = reading.drafts.into_iter().next().expect("one model");
+    lower(&draft).is_ok()
+}
+
+fn how_each_form_reads(value: &str) -> [bool; 4] {
+    [
+        format!("format!(\"{{}}\", {value})"),
+        format!("format!(\"{{:?}}\", {value})"),
+        format!("({value}).to_string()"),
+        format!("({value}).to_owned()"),
+    ]
+    .map(|label| label_is_read(&label))
+}
+
+#[test]
+fn a_label_form_is_read_only_where_rust_accepts_it_and_prints_what_the_chart_draws() {
+    let none = [false; 4];
+    let debug_only = [false, true, false, false];
+    let not_owned = [true, true, true, false];
+    let text = [true, false, true, true];
+    for (value, accepted) in [
+        ("self.on", not_owned),
+        ("!self.on", not_owned),
+        ("self.count == 3", not_owned),
+        ("self.count", not_owned),
+        ("self.level", not_owned),
+        ("self.count + 1", not_owned),
+        ("self.mode", debug_only),
+        ("Mode::On", debug_only),
+        ("if self.on { Mode::On } else { Mode::Off }", debug_only),
+        ("self.who", text),
+        ("\"Kim\"", text),
+        ("if self.on { self.who } else { \"Kim\" }", text),
+        ("self.got", none),
+        ("self.spot", none),
+        ("self.got.is_some()", not_owned),
+        ("self.spot.row", not_owned),
+    ] {
+        assert_eq!(
+            how_each_form_reads(value),
+            accepted,
+            "`{{}}`, `{{:?}}`, `.to_string()` and `.to_owned()` of `{value}`"
+        );
+    }
+}
+
+#[test]
+fn a_mixed_label_is_read_when_each_hole_is_one_rust_accepts() {
+    assert!(label_is_read(
+        "format!(\"{:?} by {} at {:?}\", self.mode, self.who, self.on)"
+    ));
+    assert!(!label_is_read(
+        "format!(\"{:?} by {:?}\", self.mode, if self.on { self.who } else { \"Kim\" })"
+    ));
+    assert!(!label_is_read("format!(\"{} by {}\", self.mode, self.who)"));
 }

@@ -5,8 +5,8 @@ use crate::terms::bare;
 use earnest_ast::{Draft, HelperDraft, HelperKind, Language, ViewDraft};
 use oxc_ast::ast::{
     Argument, ArrowFunctionExpression, BindingPattern, CallExpression, Declaration,
-    ExportNamedDeclaration, Expression, ImportDeclaration, ImportDeclarationSpecifier, Program,
-    Statement, VariableDeclaration, VariableDeclarationKind,
+    ExportSpecifier, Expression, ImportDeclaration, ImportDeclarationSpecifier, Program, Statement,
+    VariableDeclaration, VariableDeclarationKind,
 };
 use oxc_span::GetSpan;
 
@@ -60,13 +60,41 @@ fn exported_names(program: &Program<'_>) -> Vec<String> {
             }
             Statement::ExportNamedDeclaration(listed) if !listed.export_kind.is_type() => {
                 for specifier in &listed.specifiers {
-                    names.push(specifier.local.name().to_string());
+                    if specifier.export_kind.is_value() {
+                        names.push(specifier.local.name().to_string());
+                    }
                 }
             }
             _ => {}
         }
     }
     names
+}
+
+fn library_bindings(program: &Program<'_>) -> Vec<String> {
+    let mut bindings = Vec::new();
+    for statement in &program.body {
+        let Statement::ImportDeclaration(import) = statement else {
+            continue;
+        };
+        if import.import_kind.is_type() || import.source.value.as_str() != LIBRARY_MODULE {
+            continue;
+        }
+        for specifier in import.specifiers.iter().flatten() {
+            let local = match specifier {
+                ImportDeclarationSpecifier::ImportSpecifier(listed) => {
+                    if listed.import_kind.is_type() {
+                        continue;
+                    }
+                    &listed.local
+                }
+                ImportDeclarationSpecifier::ImportDefaultSpecifier(default) => &default.local,
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(all) => &all.local,
+            };
+            bindings.push(local.name.to_string());
+        }
+    }
+    bindings
 }
 
 fn callee_parts<'p>(call: &'p CallExpression<'_>) -> Option<(&'p str, &'p str)> {
@@ -88,6 +116,7 @@ impl Reader<'_> {
         for statement in &program.body {
             self.statement(statement, &mut top);
         }
+        self.exports(program);
         let mut constants = Vec::new();
         let mut helpers = Vec::new();
         let mut steps: Vec<(usize, String, u32)> = Vec::new();
@@ -155,8 +184,8 @@ impl Reader<'_> {
             }
             Statement::TSTypeAliasDeclaration(_)
             | Statement::TSInterfaceDeclaration(_)
-            | Statement::EmptyStatement(_) => {}
-            Statement::ExportNamedDeclaration(listed) => self.export_list(listed),
+            | Statement::EmptyStatement(_)
+            | Statement::ExportNamedDeclaration(_) => {}
             Statement::ExportFromDeclaration(from) if from.export_kind.is_type() => {}
             Statement::ExportAllDeclaration(all) if all.export_kind.is_type() => {}
             Statement::ExportFromDeclaration(_) | Statement::ExportAllDeclaration(_) => {
@@ -401,21 +430,80 @@ impl Reader<'_> {
         }
     }
 
-    fn export_list(&mut self, listed: &ExportNamedDeclaration<'_>) {
-        if listed.export_kind.is_type() {
+    fn exports(&mut self, program: &Program<'_>) {
+        let from_library = library_bindings(program);
+        let mut seen: Vec<String> = Vec::new();
+        for statement in &program.body {
+            match statement {
+                Statement::ExportDeclaration(export) => {
+                    if let Declaration::VariableDeclaration(variables) = &export.declaration {
+                        for declarator in &variables.declarations {
+                            if let BindingPattern::BindingIdentifier(name) = &declarator.id {
+                                self.export_once(&mut seen, name.name.as_str(), name.span.start);
+                            }
+                        }
+                    }
+                }
+                Statement::ExportNamedDeclaration(listed) if !listed.export_kind.is_type() => {
+                    for specifier in &listed.specifiers {
+                        self.export_specifier(&from_library, &mut seen, specifier);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn export_specifier(
+        &mut self,
+        from_library: &[String],
+        seen: &mut Vec<String>,
+        specifier: &ExportSpecifier<'_>,
+    ) {
+        let at = specifier.span.start;
+        if specifier.export_kind.is_type() {
+            self.refuse(
+                at,
+                &self.quoted(specifier.span),
+                "a `type` modifier erases this export from the JavaScript, so the name is not \
+                 exported where the model file runs: write `export type { name }` for a type \
+                 and leave the modifier off a value",
+            );
             return;
         }
-        for specifier in &listed.specifiers {
-            if specifier.export_kind.is_value()
-                && specifier.local.name() != specifier.exported.name()
-            {
-                self.refuse(
-                    specifier.span.start,
-                    &self.quoted(specifier.span),
-                    "an id is the name of the constant, so a constant is exported under its \
-                     own name",
-                );
-            }
+        if from_library
+            .iter()
+            .any(|known| known == specifier.local.name().as_str())
+        {
+            self.refuse(
+                at,
+                &self.quoted(specifier.span),
+                "a model file can't pass on the library: a file that imports it from here \
+                 would build its models where the checker does not look for them",
+            );
+            return;
+        }
+        if specifier.local.name() != specifier.exported.name() {
+            self.refuse(
+                at,
+                &self.quoted(specifier.span),
+                "an id is the name of the constant, so a constant is exported under its own \
+                 name",
+            );
+        }
+        self.export_once(seen, specifier.exported.name().as_str(), at);
+    }
+
+    fn export_once(&mut self, seen: &mut Vec<String>, name: &str, at: u32) {
+        if seen.iter().any(|known| known == name) {
+            self.refuse(
+                at,
+                name,
+                "this name is exported twice, and JavaScript refuses a second export of one \
+                 name with a SyntaxError, so the file never runs and has no value to read",
+            );
+        } else {
+            seen.push(name.to_owned());
         }
     }
 
@@ -754,7 +842,7 @@ mod tests {
              const LOW = -MAX + 1;\n\
              const NAME = `n`;\n\
              const ON = !false && MAX > 2;\n\
-             const PICK = (ON ? MAX : LOW) as number;\n\
+             const PICK = (ON ? MAX : LOW);\n\
              export const A = m.model(\"A\", { n: m.int(LOW, MAX) });\n",
         );
         assert_eq!(reading.problems, [], "every one is a plain value");
@@ -819,7 +907,7 @@ mod tests {
             "the id would be `low` here and `high` for whoever imports the file"
         );
         assert_eq!(
-            climb_features("const low = Climb.rule(LOW);\nexport { low, Climb as Climb };\n"),
+            climb_features("const low = Climb.rule(LOW);\nexport { low as low };\n"),
             [],
             "the same name on both sides"
         );

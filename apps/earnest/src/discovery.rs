@@ -1,4 +1,5 @@
 use earnest_diagnostics::{Place, Problem};
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs;
@@ -60,8 +61,9 @@ enum Searched {
 
 #[derive(Debug, Default)]
 struct Walked {
-    found: BTreeMap<PathBuf, Found>,
-    skipped: BTreeSet<PathBuf>,
+    rank: usize,
+    found: BTreeMap<PathBuf, (usize, Found)>,
+    skipped: BTreeMap<PathBuf, usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -251,18 +253,19 @@ fn model_file(path: &Path, origin: Origin, below: &Path) -> Option<Searched> {
     let Some(language) = language_of(path) else {
         return (origin == Origin::Named).then(|| Searched::Found(not_a_known_language(path)));
     };
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            return Some(Searched::Found(Found::unread(
-                path,
-                cant_be_opened(path, "file", &error),
-            )));
-        }
-    };
     let shown = path.to_string_lossy();
     let is_test =
         origin == Origin::Searched && !is_model_name(&shown) && is_test_file(language, below);
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return Some(if is_test {
+                Searched::Skipped
+            } else {
+                Searched::Found(Found::unread(path, cant_be_opened(path, "file", &error)))
+            });
+        }
+    };
     let found = match String::from_utf8(bytes) {
         Ok(source) => {
             if origin == Origin::Named || is_model_file(language, &shown, &source) {
@@ -287,10 +290,10 @@ fn model_file(path: &Path, origin: Origin, below: &Path) -> Option<Searched> {
 fn keep(walked: &mut Walked, shown: PathBuf, searched: Option<Searched>) {
     match searched {
         Some(Searched::Found(found)) => {
-            walked.found.insert(shown, found);
+            walked.found.insert(shown, (walked.rank, found));
         }
         Some(Searched::Skipped) => {
-            walked.skipped.insert(shown);
+            walked.skipped.insert(shown, walked.rank);
         }
         None => {}
     }
@@ -307,9 +310,10 @@ fn walk(folder: &Path, shown: &Path, below: &Path, walked: &mut Walked) {
                 shown
             };
             let problem = cant_be_opened(named, "folder", &error);
-            walked
-                .found
-                .insert(named.to_path_buf(), Found::unread(named, problem));
+            walked.found.insert(
+                named.to_path_buf(),
+                (walked.rank, Found::unread(named, problem)),
+            );
             return;
         }
     };
@@ -333,12 +337,16 @@ fn walk(folder: &Path, shown: &Path, below: &Path, walked: &mut Walked) {
     }
 }
 
+fn real_path(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
 pub(crate) fn discover(roots: &[PathBuf]) -> Result<Discovered, String> {
     let here = [PathBuf::from(HERE)];
     let roots = if roots.is_empty() { &here } else { roots };
     let mut walked = Walked::default();
-    let mut named = BTreeSet::new();
-    for root in roots {
+    for (rank, root) in roots.iter().enumerate() {
+        walked.rank = rank;
         if root.is_dir() {
             let shown = if root == Path::new(HERE) {
                 Path::new("")
@@ -347,11 +355,8 @@ pub(crate) fn discover(roots: &[PathBuf]) -> Result<Discovered, String> {
             };
             walk(root, shown, Path::new(""), &mut walked);
         } else if root.is_file() {
-            let canonical = fs::canonicalize(root).unwrap_or_else(|_| root.clone());
-            if named.insert(canonical) {
-                let searched = model_file(root, Origin::Named, Path::new(""));
-                keep(&mut walked, root.clone(), searched);
-            }
+            let searched = model_file(root, Origin::Named, Path::new(""));
+            keep(&mut walked, root.clone(), searched);
         } else {
             return Err(format!(
                 "`{}` is not a file or a folder",
@@ -359,18 +364,47 @@ pub(crate) fn discover(roots: &[PathBuf]) -> Result<Discovered, String> {
             ));
         }
     }
-    let skipped = walked
-        .skipped
-        .iter()
-        .filter(|path| {
-            let canonical = fs::canonicalize(path).unwrap_or_else(|_| (*path).clone());
-            !walked.found.contains_key(*path) && !named.contains(&canonical)
-        })
-        .map(|path| path.to_string_lossy().into_owned())
+    let mut once: BTreeMap<PathBuf, (usize, PathBuf, Found)> = BTreeMap::new();
+    for (shown, (rank, found)) in walked.found {
+        match once.entry(real_path(&shown)) {
+            Entry::Vacant(slot) => {
+                slot.insert((rank, shown, found));
+            }
+            Entry::Occupied(mut slot) => {
+                if rank < slot.get().0 {
+                    slot.insert((rank, shown, found));
+                }
+            }
+        }
+    }
+    let mut skipped_once: BTreeMap<PathBuf, (usize, PathBuf)> = BTreeMap::new();
+    for (shown, rank) in walked.skipped {
+        let real = real_path(&shown);
+        if once.contains_key(&real) {
+            continue;
+        }
+        match skipped_once.entry(real) {
+            Entry::Vacant(slot) => {
+                slot.insert((rank, shown));
+            }
+            Entry::Occupied(mut slot) => {
+                if rank < slot.get().0 {
+                    slot.insert((rank, shown));
+                }
+            }
+        }
+    }
+    let found: BTreeMap<PathBuf, Found> = once
+        .into_values()
+        .map(|(_, shown, found)| (shown, found))
         .collect();
+    let skipped: BTreeSet<PathBuf> = skipped_once.into_values().map(|(_, shown)| shown).collect();
     Ok(Discovered {
-        found: walked.found.into_values().collect(),
-        skipped,
+        found: found.into_values().collect(),
+        skipped: skipped
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect(),
     })
 }
 
@@ -747,8 +781,8 @@ mod tests {
         symlink(root.join("nowhere.md"), root.join("notes.md")).expect("a link can be made");
         assert_eq!(
             names_under(root, &[root.to_path_buf()]),
-            ["gone.model.ts", "real/a.ts", "same.ts"],
-            "the link to a file is read, the link to a folder is not followed"
+            ["gone.model.ts", "real/a.ts"],
+            "a link to a file found by its own path is that file, not another, and a link to a folder is not followed"
         );
         let unread = unread_under(root, &[root.to_path_buf()]);
         assert_eq!(
@@ -793,7 +827,7 @@ mod tests {
             Path::new("locked"),
             &mut walked,
         );
-        let all: Vec<&Found> = walked.found.values().collect();
+        let all: Vec<&Found> = walked.found.values().map(|(_, found)| found).collect();
         assert_eq!(all.len(), 1, "the folder itself: {all:?}");
         assert_eq!(all[0].path, "src/locked", "the path it was reached by");
         let Text::Unread(problem) = &all[0].text else {
@@ -881,6 +915,132 @@ mod tests {
         fs::create_dir_all(root.join("sub")).expect("a folder");
         let found = discover(&[direct, roundabout]).expect("both exist").found;
         assert_eq!(found.len(), 1, "one file: {found:?}");
+    }
+
+    #[test]
+    fn a_file_reached_through_two_roots_or_two_spellings_of_a_folder_is_found_once() {
+        let folder = folder_with(&[("src/a.ts", TYPESCRIPT), ("src/deep/b.ts", TYPESCRIPT)]);
+        let root = folder.path();
+        let spellings = [
+            vec![root.to_path_buf(), root.join("src")],
+            vec![root.join("src"), root.to_path_buf()],
+            vec![root.join("src"), root.join("src/../src")],
+            vec![
+                root.join("src"),
+                root.join("src/deep"),
+                root.join("src/a.ts"),
+            ],
+            vec![
+                root.join("src/a.ts"),
+                root.join("src/deep/../a.ts"),
+                root.join("src"),
+            ],
+        ];
+        for roots in spellings {
+            let found = discover(&roots).expect("every root exists").found;
+            let paths: Vec<&str> = found.iter().map(|found| found.path.as_str()).collect();
+            assert_eq!(
+                paths.len(),
+                2,
+                "`a.ts` and `deep/b.ts`, each once: {paths:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_found_by_the_root_that_comes_first_keeps_that_roots_spelling() {
+        let folder = folder_with(&[("src/a.ts", TYPESCRIPT)]);
+        let root = folder.path();
+        let found = discover(&[root.to_path_buf(), root.join("src/../src")])
+            .expect("every root exists")
+            .found;
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(
+            found[0].path,
+            root.join("src/a.ts").to_string_lossy(),
+            "the first root's spelling"
+        );
+    }
+
+    #[test]
+    fn a_test_file_read_through_a_root_that_names_its_folder_is_not_skipped() {
+        let folder = folder_with(&[
+            ("tests/x.ts", TYPESCRIPT),
+            ("tests/deep/y.ts", TYPESCRIPT),
+            ("src/z.ts", TYPESCRIPT),
+        ]);
+        let root = folder.path();
+        for roots in [
+            vec![root.to_path_buf(), root.join("tests")],
+            vec![root.join("tests"), root.to_path_buf()],
+            vec![root.to_path_buf(), root.join("tests/../tests")],
+            vec![root.to_path_buf(), root.join("tests/x.ts")],
+        ] {
+            let found = names_under(root, &roots);
+            assert!(
+                found.iter().any(|path| path.ends_with("tests/x.ts")),
+                "`tests/x.ts` is read: {found:?}"
+            );
+            let skipped = skipped_under(root, &roots);
+            assert!(
+                !skipped.iter().any(|path| path.ends_with("tests/x.ts")),
+                "a file that is read is not also skipped: {skipped:?} for {roots:?}"
+            );
+        }
+        assert_eq!(
+            skipped_under(root, &[root.to_path_buf(), root.join("tests")]),
+            Vec::<String>::new(),
+            "`tests/deep/y.ts` is read through `tests` too"
+        );
+        assert_eq!(
+            skipped_under(root, &[root.to_path_buf()]),
+            ["tests/deep/y.ts", "tests/x.ts"],
+            "without the root that names the folder, both are skipped"
+        );
+    }
+
+    #[test]
+    fn a_test_file_reached_twice_is_listed_as_skipped_once() {
+        let folder = folder_with(&[("tests/x.ts", TYPESCRIPT)]);
+        let root = folder.path();
+        assert_eq!(
+            skipped_under(root, &[root.to_path_buf(), root.join("tests/../")]),
+            ["tests/x.ts"],
+            "the same file under two spellings of its root"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_test_file_that_cannot_be_opened_is_skipped_and_never_unread() {
+        use std::os::unix::fs::symlink;
+        let folder = folder_with(&[("tests/real.ts", TYPESCRIPT), ("src/real.ts", TYPESCRIPT)]);
+        let root = folder.path();
+        symlink(root.join("nowhere.ts"), root.join("tests/gone.ts")).expect("a link");
+        symlink(root.join("nowhere.rs"), root.join("tests/gone.rs")).expect("a link");
+        symlink(root.join("nowhere.ts"), root.join("src/gone.test.ts")).expect("a link");
+        symlink(root.join("nowhere.ts"), root.join("src/gone.ts")).expect("a link");
+        symlink(root.join("nowhere.ts"), root.join("tests/gone.model.ts")).expect("a link");
+        let roots = [root.to_path_buf()];
+        assert_eq!(
+            skipped_under(root, &roots),
+            [
+                "src/gone.test.ts",
+                "tests/gone.rs",
+                "tests/gone.ts",
+                "tests/real.ts"
+            ],
+            "a test file that can't be opened is skipped, the same as one that is read"
+        );
+        let unread: Vec<String> = unread_under(root, &roots)
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+        assert_eq!(
+            unread,
+            ["src/gone.ts", "tests/gone.model.ts"],
+            "a file that is no test file, and a model name, are unread"
+        );
     }
 
     #[test]

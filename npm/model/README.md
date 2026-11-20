@@ -93,8 +93,8 @@ a missing entry. `earnest verify` refuses the same.
 
 `m.rem(a, b)` is the remainder of whole numbers: `%` is not allowed in a model file, and `m.rem` of a
 negative `a` or a `b` below 1 is a fault that `explore` and `replay` report as `earnest verify`
-does. `m.some(value)` is the value inside an optional: `%`'s sibling for `!`, which a model
-file may not write. `m.some(null)` is a fault that `explore` and `replay` report as `earnest
+does. `m.some(value)` is the value inside an optional: `%`'s sibling for `!`, and for `as`, `satisfies` and `<Type>value`, which a model
+file may not write (only `as const` is read). `m.some(null)` is a fault that `explore` and `replay` report as `earnest
 verify` does ("reads a value that is null"), where JavaScript would go on with `null` as 0, so
 a number read from an optional goes through it. `m.setOf(a, b)`, `m.seqOf(a, b)` and `m.mapOf([k, v])` write collection values; a queue's
 `.initial` takes `m.seqOf(...)`. `m.forall(T, f)` and `m.exists(T, f)` range over a declaration

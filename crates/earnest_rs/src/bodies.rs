@@ -26,6 +26,33 @@ fn early_return(statement: &Stmt) -> Option<&ExprIf> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Gives {
+    Plain,
+    Some,
+    SomeOfSome,
+}
+
+fn gives(term: &Term) -> Vec<Gives> {
+    match &term.kind {
+        TermKind::Wrap(inner) => {
+            let inside = gives(inner);
+            vec![if inside.iter().any(|found| *found != Gives::Plain) {
+                Gives::SomeOfSome
+            } else {
+                Gives::Some
+            }]
+        }
+        TermKind::Choose(_, yes, no) => {
+            let mut found = gives(yes);
+            found.extend(gives(no));
+            found
+        }
+        TermKind::Bind { body, .. } => gives(body),
+        _ => vec![Gives::Plain],
+    }
+}
+
 fn always() -> TermKind {
     TermKind::Bool(true)
 }
@@ -74,6 +101,13 @@ impl Reader<'_> {
                         "require!",
                         "only an action has a guard: here, give back `false` or use an `if`",
                     );
+                } else if self.returns_self == Some(true) {
+                    self.refuse(
+                        called.mac.path.span(),
+                        "require!",
+                        "`require!` returns `None`, which an action that returns `Self` can't \
+                         (E0308): return `Option<Self>` to have a guard",
+                    );
                 }
                 self.rest(later, body, close)
             }
@@ -118,13 +152,41 @@ impl Reader<'_> {
         };
         let gives_none = matches!(value, Expr::Path(name) if path_text(&name.path) == "None");
         if body == Body::Action && gives_none {
-            return self.nothing(
-                value.span(),
-                "None",
-                "say when an action can't happen with `require!(condition);`",
-            );
+            let why = if self.returns_self == Some(true) {
+                "an action that returns `Self` always happens and can't give back `None`"
+            } else {
+                "say when an action can't happen with `require!(condition);`"
+            };
+            return self.nothing(value.span(), "None", why);
         }
-        self.term(value)
+        let term = self.term(value);
+        if body == Body::Action {
+            self.refuse_wrapping(value, &term);
+        }
+        term
+    }
+
+    fn refuse_wrapping(&mut self, value: &Expr, term: &Term) {
+        let Some(returns_self) = self.returns_self else {
+            return;
+        };
+        let wanted = if returns_self {
+            Gives::Plain
+        } else {
+            Gives::Some
+        };
+        if gives(term).iter().all(|found| *found == wanted) {
+            return;
+        }
+        let feature = self.short_text(value.span());
+        let why = if returns_self {
+            "an action that returns `Self` gives back the state itself, `Self { .. }`, and \
+             `Some(..)` is an `Option<Self>` (E0308)"
+        } else {
+            "an action that returns `Option<Self>` gives back `Some(Self { .. })`, and a bare \
+             `Self { .. }` or a `Some(Some(..))` is not that type (E0308)"
+        };
+        self.refuse(value.span(), &feature, why);
     }
 
     fn returning(&mut self, branch: &ExprIf, body: Body) -> Term {

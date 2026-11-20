@@ -81,8 +81,14 @@ pub struct Term {
 pub enum TemplatePiece {
     /// Literal text, copied to the label as it is.
     Text(String),
-    /// A `${...}` hole. Its value is printed without quotes.
+    /// A `${...}` hole, or in Rust a `{}` hole or a value followed by `.to_string()`. Its
+    /// value is printed without quotes.
     Value(Term),
+    /// A Rust `{:?}` hole: the value as `Debug` prints it.
+    Debug(Term),
+    /// A Rust value followed by `.to_owned()`: the value itself, which is a `String` only for
+    /// a text.
+    Owned(Term),
 }
 
 /// What a [`Term`] is.
@@ -95,8 +101,11 @@ pub enum TermKind {
     Bool(bool),
     /// A whole number.
     Int(i64),
-    /// Text in quotes, or an enum variant by its name: `Gate::Locked` is `Text("Locked")`.
+    /// Text in quotes. In Rust a `&'static str` literal; in TypeScript also an enum choice.
     Text(String),
+    /// A Rust enum variant by its name: `Gate::Locked` is `Variant("Locked")`. It has the
+    /// value of the text `"Locked"`, and `Debug` prints it, which `Display` can't.
+    Variant(String),
     /// A name: a parameter, a `const` or `let` binding, an input, or a top-level constant.
     Name(String),
     /// A read of a field or a property without arguments, by the name as the file writes it:
@@ -258,7 +267,7 @@ pub enum ShapeKind {
     },
     /// `m.enum([...])`, `m.oneOf([...])`, a Rust enum, or in Rust a number or a `&'static str`
     /// listed with `#[one_of(...)]`. Each choice is a [`TermKind::Text`], a
-    /// [`TermKind::Int`] or a [`TermKind::Bool`], all of one kind.
+    /// [`TermKind::Variant`], a [`TermKind::Int`] or a [`TermKind::Bool`], all of one kind.
     OneOf(Vec<Term>),
     /// `.optional()` or `Option<T>`.
     Optional(Box<Shape>),

@@ -21,9 +21,9 @@ pub(crate) struct Reader<'a> {
     pub(crate) models: BTreeSet<String>,
     pub(crate) functions: BTreeSet<String>,
     pub(crate) methods: BTreeSet<String>,
-    pub(crate) texts: BTreeSet<String>,
     pub(crate) open_records: Vec<String>,
     pub(crate) bound: Vec<String>,
+    pub(crate) returns_self: Option<bool>,
     pub(crate) depth: usize,
 }
 
@@ -124,9 +124,9 @@ impl<'a> Reader<'a> {
             models: BTreeSet::new(),
             functions: BTreeSet::new(),
             methods: BTreeSet::new(),
-            texts: BTreeSet::new(),
             open_records: Vec::new(),
             bound: Vec::new(),
+            returns_self: None,
             depth: 0,
         }
     }

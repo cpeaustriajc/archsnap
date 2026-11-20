@@ -27,6 +27,9 @@ as JavaScript does not give it the constant of the same name outside. A file tha
 1000 levels deep is refused before the parser runs.
 
 A rule, an action and an end must be bound to an exported constant, because the id is the name it
-is exported under; the reader refuses one bound to a constant that is not exported. A name is
+is exported under; the reader refuses one bound to a constant that is not exported. It also refuses what
+JavaScript refuses or what erases an export: a name exported twice in any spelling, and a
+`type` modifier on an exported part; and an export of the library or of any name imported from
+it. A type assertion (`as`, `satisfies`, `<Type>value`) in a term is refused except `as const`. A name is
 declared once in its scope, as JavaScript requires, and `m.some(value)` is read as the value
 inside an optional while a postfix `!` is refused.

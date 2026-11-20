@@ -8,6 +8,7 @@ pub(crate) enum Type {
     Bool,
     Int(Option<IntType>),
     Text,
+    Variant,
     Optional(Box<Type>),
     Record(Vec<(String, Type)>),
     Set(Box<Type>),
@@ -28,6 +29,7 @@ impl Type {
             Self::Bool => "a boolean",
             Self::Int(_) => "a number",
             Self::Text => "a text value",
+            Self::Variant => "an enum variant",
             Self::Optional(_) => "an optional value",
             Self::Record(_) => "a record",
             Self::Set(_) => "a set",
@@ -50,6 +52,7 @@ impl Type {
             | (Self::Bool, Self::Bool)
             | (Self::Int(_), Self::Int(_))
             | (Self::Text, Self::Text)
+            | (Self::Variant, Self::Variant)
             | (Self::Timer, Self::Timer)
             | (Self::Request, Self::Request)
             | (Self::Retry(_), Self::Retry(_))
@@ -151,6 +154,7 @@ impl Type {
             | Self::Null
             | Self::Bool
             | Self::Text
+            | Self::Variant
             | Self::Lock(None)
             | Self::Timer
             | Self::Request
@@ -314,6 +318,14 @@ mod tests {
         assert!(!Type::Int(None).fits(&Type::Bool));
         assert!(!Type::Text.fits(&Type::Int(None)));
         assert!(!Type::Timer.fits(&Type::Request));
+    }
+
+    #[test]
+    fn an_enum_variant_is_not_a_text() {
+        assert!(Type::Variant.fits(&Type::Variant));
+        assert!(!Type::Variant.fits(&Type::Text));
+        assert!(!Type::Text.fits(&Type::Variant));
+        assert!(!Type::Variant.fits(&Type::Int(None)));
     }
 
     #[test]

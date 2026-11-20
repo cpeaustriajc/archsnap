@@ -53,6 +53,7 @@ impl Lowerer<'_> {
                 Type::Int(None),
             )),
             TermKind::Text(text) => Ok(self.text(text)),
+            TermKind::Variant(text) => Ok(self.variant(text)),
             TermKind::Name(name) => self.name(name, place, scope),
             TermKind::Member(target, name) => self.member(target, name, place, scope),
             TermKind::Call {
@@ -61,6 +62,9 @@ impl Lowerer<'_> {
                 arguments,
             } => {
                 let on = self.term(target, scope)?;
+                if self.is_rust() && method == "is_multiple_of" && arguments.len() == 1 {
+                    return self.multiple_of(target, &on.ty, &arguments[0], place, scope);
+                }
                 self.method(on, method, arguments, place, scope)
             }
             TermKind::Helper {
@@ -148,6 +152,13 @@ impl Lowerer<'_> {
         Typed::new(
             Expr::Const(Value::Str(self.symbols.intern(text))),
             Type::Text,
+        )
+    }
+
+    pub(super) fn variant(&mut self, text: &str) -> Typed {
+        Typed::new(
+            Expr::Const(Value::Str(self.symbols.intern(text))),
+            Type::Variant,
         )
     }
 
@@ -424,6 +435,49 @@ impl Lowerer<'_> {
                 body: Box::new(body_expr),
             });
         Ok(Typed::new(expr, lowered.ty))
+    }
+
+    fn multiple_of(
+        &mut self,
+        number: &Term,
+        ty: &Type,
+        divisor: &Term,
+        place: Place,
+        scope: &mut Scope,
+    ) -> Lowering<Typed> {
+        if !matches!(ty, Type::Int(Some(each)) if !each.is_signed()) {
+            let feature = if let Type::Int(Some(each)) = ty {
+                format!("`is_multiple_of` on `{}`", each.name())
+            } else {
+                format!("`is_multiple_of` on {}", ty.kind())
+            };
+            return Err(self.stop(
+                place,
+                &feature,
+                "`is_multiple_of` is a method of the unsigned integer types only, and Rust \
+                 refuses it on any other (E0599): write `n % d == 0` where `n` can't be negative",
+            ));
+        }
+        let made = |kind: TermKind| Term::new(place, kind);
+        let equals = |left: Term, right: Term| {
+            made(TermKind::Binary(
+                Binary::Equal,
+                Box::new(left),
+                Box::new(right),
+            ))
+        };
+        let zero = || made(TermKind::Int(0));
+        let remainder = made(TermKind::Binary(
+            Binary::Remainder,
+            Box::new(number.clone()),
+            Box::new(divisor.clone()),
+        ));
+        let desugared = made(TermKind::Choose(
+            Box::new(equals(divisor.clone(), zero())),
+            Box::new(equals(number.clone(), zero())),
+            Box::new(equals(remainder, zero())),
+        ));
+        self.term(&desugared, scope)
     }
 
     fn unary(&mut self, unary: Unary, inner: &Term, scope: &mut Scope) -> Lowering<Typed> {

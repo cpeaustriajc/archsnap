@@ -41,9 +41,9 @@ fn a_field_is_declared_by_its_type_and_its_attributes() {
     assert_eq!(
         variants,
         [
-            &TermKind::Text("Ann".to_owned()),
-            &TermKind::Text("Bob".to_owned()),
-            &TermKind::Text("Cy".to_owned()),
+            &TermKind::Variant("Ann".to_owned()),
+            &TermKind::Variant("Bob".to_owned()),
+            &TermKind::Variant("Cy".to_owned()),
         ],
         "an enum is known by its variant names"
     );

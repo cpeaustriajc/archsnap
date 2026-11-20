@@ -567,3 +567,117 @@ fn a_view_step_may_come_before_the_action_it_labels() {
         "the id is known by the end of the file"
     );
 }
+
+const LOW: &str = "const low = M.rule({ says: \"low\", holds: (s) => s.n <= 1 });";
+const TOP: &str = "const top = M.end({ says: \"top\", when: (s) => s.n === 3 });";
+
+#[test]
+fn a_name_exported_twice_is_refused_in_every_spelling() {
+    for exports in [
+        "export { low };\nexport { low };",
+        "export { low, low };",
+        "export { low };\nexport { low, };",
+        "export { low as low };\nexport { low };",
+        "export { low };\nexport { low as low };",
+    ] {
+        let found = problems(&model_with(&format!("{LOW}\n{exports}")));
+        assert_eq!(found.len(), 1, "`{exports}` exports `low` twice: {found:?}");
+        assert!(
+            found[0].message.contains("exported twice"),
+            "the sentence says why: {}",
+            found[0].message
+        );
+    }
+    let found = problems(&model_with(
+        "export const low = M.rule({ says: \"low\", holds: (s) => s.n <= 1 });\nexport { low };",
+    ));
+    assert_eq!(found.len(), 1, "inline and in a list: {found:?}");
+    let found = problems(&model_with(
+        "export const a = 1, a2 = 2;\nconst b = 3;\nexport { b };\nexport { b };",
+    ));
+    assert_eq!(found.len(), 1, "a plain constant listed twice: {found:?}");
+}
+
+#[test]
+fn names_exported_once_each_are_read() {
+    assert_eq!(
+        problems(&model_with(&format!(
+            "{LOW}\n{TOP}\nexport {{ low }};\nexport {{ top }};\nexport type {{ low }};"
+        ))),
+        [],
+        "two names, and a type of one of them, are not a repeat"
+    );
+}
+
+#[test]
+fn a_type_modifier_on_an_exported_name_is_refused() {
+    for exports in ["export { type low };", "export { low, type top };"] {
+        let found = problems(&model_with(&format!("{LOW}\n{TOP}\n{exports}")));
+        assert!(
+            found
+                .iter()
+                .any(|problem| problem.message.contains("`type` modifier")),
+            "`{exports}` is refused for its modifier: {found:?}"
+        );
+    }
+}
+
+#[test]
+fn an_export_of_the_library_is_refused_in_every_spelling() {
+    for exports in [
+        "export { m };",
+        "export { m as kit };",
+        "export { m as default };",
+        "export { m, m as q };",
+        "export { type m };",
+    ] {
+        let found = problems(&model_with(exports));
+        assert!(!found.is_empty(), "`{exports}` passes the library on");
+    }
+    for (import, exports) in [
+        (
+            "import { m as lib } from \"@earnest/model\";",
+            "export { lib };",
+        ),
+        ("import { rem } from \"@earnest/model\";", "export { rem };"),
+        (
+            "import * as all from \"@earnest/model\";",
+            "export { all };",
+        ),
+        ("import lib from \"@earnest/model\";", "export { lib };"),
+    ] {
+        let source = format!("{import}\nimport {{ m }} from \"@earnest/model\";\n{exports}\n");
+        let found = problems(&source);
+        assert!(
+            found
+                .iter()
+                .any(|problem| problem.message.contains("pass on the library")),
+            "`{exports}` after `{import}` passes the library on: {found:?}"
+        );
+    }
+    for source in [
+        "export const kit = m;",
+        "export default m;",
+        "const kit = { m };\nexport { kit };",
+        "export const { model } = m;",
+        "const { model } = m;\nexport { model };",
+        "export const [first] = [m];",
+        "export const kit = (m);",
+        "export const kit = m.model;",
+        "export * as lib from \"@earnest/model\";",
+    ] {
+        assert!(
+            !problems(&model_with(source)).is_empty(),
+            "`{source}` passes the library on"
+        );
+    }
+}
+
+#[test]
+fn an_import_after_its_export_is_still_the_library() {
+    let source = "export { m };\nimport { m } from \"@earnest/model\";\n";
+    assert!(
+        !problems(source).is_empty(),
+        "imports are hoisted, so the export passes the library on"
+    );
+}

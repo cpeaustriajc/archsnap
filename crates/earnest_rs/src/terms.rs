@@ -228,7 +228,7 @@ impl Reader<'_> {
                     .get(*owner)
                     .is_some_and(|variants| variants.iter().any(|known| known == variant));
                 if known {
-                    at(span, TermKind::Text((*variant).to_owned()))
+                    at(span, TermKind::Variant((*variant).to_owned()))
                 } else {
                     self.nothing(span, &text, "the enum has no variant with this name")
                 }
@@ -270,11 +270,11 @@ impl Reader<'_> {
             .iter()
             .map(|argument| self.term(argument))
             .collect();
-        if name == "is_multiple_of" && call.turbofish.is_none() && arguments.len() == 1 {
-            return Self::multiple_of(span, target, arguments);
-        }
+        let is_multiple_of = name == "is_multiple_of" && arguments.len() == 1;
         if call.turbofish.is_some()
-            || !(PRIMITIVES.contains(&name.as_str()) || OPTION_TESTS.contains(&name.as_str()))
+            || !(is_multiple_of
+                || PRIMITIVES.contains(&name.as_str())
+                || OPTION_TESTS.contains(&name.as_str()))
         {
             let feature = format!(".{name}()");
             return self.nothing(
@@ -291,33 +291,6 @@ impl Reader<'_> {
                 method: name,
                 arguments,
             },
-        )
-    }
-
-    fn multiple_of(span: Span, number: Term, mut divisors: Vec<Term>) -> Term {
-        let divisor = divisors.remove(0);
-        let zero = || at(span, TermKind::Int(0));
-        let equals = |left: Term, right: Term| {
-            at(
-                span,
-                TermKind::Binary(Binary::Equal, Box::new(left), Box::new(right)),
-            )
-        };
-        let remainder = at(
-            span,
-            TermKind::Binary(
-                Binary::Remainder,
-                Box::new(number.clone()),
-                Box::new(divisor.clone()),
-            ),
-        );
-        at(
-            span,
-            TermKind::Choose(
-                Box::new(equals(divisor, zero())),
-                Box::new(equals(number, zero())),
-                Box::new(equals(remainder, zero())),
-            ),
         )
     }
 
