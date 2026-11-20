@@ -7,7 +7,7 @@ result goes into the PR as a statechart and a report.
 Status: version 1 is built and passes its own checks, and is not yet proven. Five adversarial
 passes each found models with a broken rule that were reported as passing; those are fixed
 except what "Where Node and the checker differ" in `npm/model/README.md` says, and a sixth pass
-has not been run. TLC has not confirmed the TLA+ export in CI. The spec is the
+has not been run. TLC 1.8.0 confirms the TLA+ export of every conformance model in CI. The spec is the
 Claude Doc "A formal verification suite for agents".
 
 ## Why the app's own language
