@@ -106,9 +106,16 @@ pub enum TermKind {
     Int(i64),
     /// Text in quotes. In Rust a `&'static str` literal; in TypeScript also an enum choice.
     Text(String),
-    /// A Rust enum variant by its name: `Gate::Locked` is `Variant("Locked")`. It has the
-    /// value of the text `"Locked"`, and `Debug` prints it, which `Display` can't.
-    Variant(String),
+    /// A Rust enum variant: `Gate::Locked` is `Variant` of the enum `Gate` and the name
+    /// `Locked`. It has the value of the text `"Locked"`, and `Debug` prints it, which `Display`
+    /// can't. Two enums are two types even when their variants are named alike, so a variant
+    /// of one never fits a value of the other.
+    Variant {
+        /// The enum the variant belongs to.
+        owner: String,
+        /// The variant's own name.
+        name: String,
+    },
     /// A name: a parameter, a `const` or `let` binding, an input, or a top-level constant.
     Name(String),
     /// A read of a field or a property without arguments, by the name as the file writes it:

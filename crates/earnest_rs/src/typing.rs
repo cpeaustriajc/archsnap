@@ -1,5 +1,4 @@
 use crate::reader::{Reader, name_of, unwrapped};
-use earnest_value::IntType;
 use syn::punctuated::Punctuated;
 use syn::{Expr, ExprCall, ExprField, ExprMethodCall, Member, Type, TypeReference};
 
@@ -7,8 +6,6 @@ pub(crate) struct Local {
     pub(crate) name: String,
     pub(crate) ty: Option<Type>,
 }
-
-const COPY_PARTS: [&str; 3] = ["Timer", "Request", "Retry"];
 
 pub(crate) fn plain(name: String, ty: Option<Type>) -> Local {
     Local { name, ty }
@@ -72,27 +69,6 @@ fn infer() -> Type {
 }
 
 impl Reader<'_> {
-    pub(crate) fn is_copy(&self, ty: &Type) -> bool {
-        match ty {
-            Type::Reference(borrowed) => borrowed.mutability.is_none(),
-            Type::Paren(inner) => self.is_copy(&inner.elem),
-            Type::Group(inner) => self.is_copy(&inner.elem),
-            Type::Tuple(items) => items.elems.iter().all(|item| self.is_copy(item)),
-            Type::Path(_) => {
-                if let Some(inner) = inside_option(ty) {
-                    return self.is_copy(inner);
-                }
-                path_name(ty).is_some_and(|name| {
-                    name == "bool"
-                        || IntType::named(&name).is_some()
-                        || COPY_PARTS.contains(&name.as_str())
-                        || self.copies.contains(&name)
-                })
-            }
-            _ => false,
-        }
-    }
-
     pub(crate) fn local_type(&self, name: &str) -> Option<&Type> {
         self.bound
             .iter()

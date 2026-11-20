@@ -22,6 +22,13 @@ fn verdict(outcome: &earnest_check::Outcome, id: &str) -> Verdict {
         .expect("the rule is checked")
 }
 
+fn variant(owner: &str, name: &str) -> TermKind {
+    TermKind::Variant {
+        owner: owner.to_owned(),
+        name: name.to_owned(),
+    }
+}
+
 #[test]
 fn a_field_is_declared_by_its_type_and_its_attributes() {
     let draft = only_draft("party.rs", PARTY);
@@ -41,9 +48,9 @@ fn a_field_is_declared_by_its_type_and_its_attributes() {
     assert_eq!(
         variants,
         [
-            &TermKind::Variant("Ann".to_owned()),
-            &TermKind::Variant("Bob".to_owned()),
-            &TermKind::Variant("Cy".to_owned()),
+            &variant("Guest", "Ann"),
+            &variant("Guest", "Bob"),
+            &variant("Guest", "Cy"),
         ],
         "an enum is known by its variant names"
     );

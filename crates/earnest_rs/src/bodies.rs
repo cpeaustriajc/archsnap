@@ -267,14 +267,24 @@ impl Reader<'_> {
                         },
                     ));
                 };
-                let present = at(
-                    span,
-                    TermKind::Call {
-                        target: Box::new(test),
-                        method: "is_some".to_owned(),
-                        arguments: Vec::new(),
-                    },
-                );
+                let present = match bound.equals {
+                    Some(constant) => at(
+                        span,
+                        TermKind::Binary(
+                            Binary::Equal,
+                            Box::new(test),
+                            Box::new(at(span, TermKind::Wrap(Box::new(constant)))),
+                        ),
+                    ),
+                    None => at(
+                        span,
+                        TermKind::Call {
+                            target: Box::new(test),
+                            method: "is_some".to_owned(),
+                            arguments: Vec::new(),
+                        },
+                    ),
+                };
                 let Some(inner) = inner else {
                     return Some(present);
                 };
@@ -347,14 +357,23 @@ impl Reader<'_> {
         }
     }
 
-    pub(crate) fn binding(&mut self, local: &Local) -> Bound {
-        self.refuse_conditional(&local.attrs);
-        let (pattern, stated) = match &local.pat {
-            Pat::Type(typed) => (typed.pat.as_ref(), Some(typed.ty.as_ref())),
-            other => (other, None),
+    fn constant_pattern(&self, pattern: &Pat) -> Option<Term> {
+        let Pat::Ident(named) = pattern else {
+            return None;
         };
-        let (pattern, refutable) = self.some_pattern(pattern, local);
-        let name = match pattern {
+        self.is_constant_name(&name_of(&named.ident))
+            .then(|| at(named.ident.span(), TermKind::Name(name_of(&named.ident))))
+    }
+
+    fn refuse_named_constant(&mut self, pattern: &Pat) {
+        if let Pat::Ident(named) = pattern {
+            self.refuse_constant_name(&named.ident);
+        }
+    }
+
+    fn bound_name(&mut self, pattern: &Pat, local: &Local, equals: Option<&Term>) -> String {
+        match pattern {
+            Pat::Ident(_) if equals.is_some() => "_".to_owned(),
             Pat::Ident(named) if named.subpat.is_none() && named.by_ref.is_none() => {
                 if named.mutability.is_some() {
                     self.refuse(
@@ -374,7 +393,25 @@ impl Reader<'_> {
                 );
                 "_".to_owned()
             }
+        }
+    }
+
+    pub(crate) fn binding(&mut self, local: &Local) -> Bound {
+        self.refuse_conditional(&local.attrs);
+        let (pattern, stated) = match &local.pat {
+            Pat::Type(typed) => (typed.pat.as_ref(), Some(typed.ty.as_ref())),
+            other => (other, None),
         };
+        let (pattern, refutable) = self.some_pattern(pattern, local);
+        let equals = if refutable {
+            self.constant_pattern(pattern)
+        } else {
+            None
+        };
+        if equals.is_none() {
+            self.refuse_named_constant(pattern);
+        }
+        let name = self.bound_name(pattern, local, equals.as_ref());
         let Some(init) = &local.init else {
             let value = self.nothing(
                 local.let_token.span,
@@ -386,6 +423,7 @@ impl Reader<'_> {
                 value,
                 ty: stated.cloned(),
                 test: None,
+                equals: None,
             };
         };
         let mut optional = None;
@@ -420,6 +458,7 @@ impl Reader<'_> {
                 value,
                 ty,
                 test: None,
+                equals: None,
             };
         };
         self.refuse_borrowed_option(optional);
@@ -438,6 +477,7 @@ impl Reader<'_> {
             value,
             ty,
             test: Some(test),
+            equals,
         }
     }
 
@@ -498,8 +538,6 @@ impl Reader<'_> {
 
     pub(crate) fn refuse_borrowed_option(&mut self, value: &Expr) {
         let span = value.span();
-        let moved = "Rust moves the value out of its place when it is read this way, so the \
-                     type must be `Copy`: write `value.clone()`, or bind it by value";
         match unwrapped(value) {
             Expr::Reference(_) => {
                 let feature = self.short_text(span);
@@ -535,11 +573,7 @@ impl Reader<'_> {
                              reference: pass the `Option` by value, or write `value.clone()`",
                         );
                     }
-                    Some(found) if self.is_copy(&found) => {}
-                    Some(_) => {
-                        let feature = self.short_text(span);
-                        self.refuse(span, &feature, moved);
-                    }
+                    Some(_) => {}
                     None => {
                         let feature = self.short_text(span);
                         self.refuse(
@@ -562,6 +596,7 @@ pub(crate) struct Bound {
     pub(crate) value: Term,
     pub(crate) ty: Option<Type>,
     pub(crate) test: Option<Term>,
+    pub(crate) equals: Option<Term>,
 }
 
 fn is_self_state(value: &Expr) -> bool {

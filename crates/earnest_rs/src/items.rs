@@ -1,5 +1,6 @@
 use crate::bodies::Body;
 use crate::reader::{Reader, attribute, name_of, path_text, place_of, why_outside};
+use crate::ty::Ty;
 use crate::typing::plain;
 use earnest_ast::{
     ActionBody, ActionDraft, Draft, EndDraft, FieldDraft, HelperDraft, HelperKind, Language,
@@ -180,6 +181,7 @@ impl Reader<'_> {
             .constants
             .iter()
             .map(|(name, ty, value)| {
+                self.walk_constant(ty, value, "the value of this constant");
                 let read = self.term(value);
                 (name.clone(), self.of_type(ty, read))
             })
@@ -262,6 +264,10 @@ impl Reader<'_> {
                     let name = name_of(&constant.ident);
                     values.push((name.clone(), constant.ident.span()));
                     self.refuse_library_name(&constant.ident, "const");
+                    self.const_types
+                        .insert(name.clone(), constant.ty.as_ref().clone());
+                    self.const_values
+                        .insert(name.clone(), constant.expr.as_ref().clone());
                     if let Some(number) = self.whole_number(&constant.expr) {
                         self.numbers.insert(name.clone(), number);
                     }
@@ -276,6 +282,8 @@ impl Reader<'_> {
                     if let ReturnType::Type(_, ty) = &function.sig.output {
                         self.fn_types.insert(name.clone(), ty.as_ref().clone());
                     }
+                    self.fn_params
+                        .insert(name.clone(), typed_parameter_types(&function.sig));
                     self.functions.insert(name);
                     found.functions.push(function);
                 }
@@ -474,6 +482,15 @@ impl Reader<'_> {
             .map(|method| name_of(&method.sig.ident))
             .collect();
         self.model_name = Some(name.clone());
+        self.method_params = own
+            .iter()
+            .map(|method| {
+                (
+                    name_of(&method.sig.ident),
+                    typed_parameter_types(&method.sig),
+                )
+            })
+            .collect();
         self.method_types = own
             .iter()
             .filter_map(|method| match &method.sig.output {
@@ -500,6 +517,7 @@ impl Reader<'_> {
         self.view_of(state, found, &mut draft);
         self.methods.clear();
         self.method_types.clear();
+        self.method_params.clear();
         self.model_name = None;
         draft
     }
@@ -541,6 +559,13 @@ impl Reader<'_> {
         self.refuse_conditional(&field.attrs);
         let mut shape = self.shape(&field.ty, &field.attrs);
         if let Some(initial) = attribute(&field.attrs, "initial") {
+            if let Ok(listed) =
+                initial.parse_args_with(Punctuated::<Expr, Token![,]>::parse_terminated)
+            {
+                for value in &listed {
+                    self.walk_constant(&field.ty, value, "the starting value of this field");
+                }
+            }
             shape.initial = Some(
                 match initial.parse_args_with(Punctuated::<Expr, Token![,]>::parse_terminated) {
                     Ok(listed) if listed.len() == 1 => match listed.iter().next() {
@@ -601,6 +626,12 @@ impl Reader<'_> {
         };
         let inputs = self.inputs(signature);
         let says = self.sentence(role, sentence);
+        let returns = if role == "action" {
+            self.returns_of(signature)
+        } else {
+            Ty::Bool
+        };
+        self.walk_body(signature, &method.block, returns);
         if role == "action" {
             let returns_self = self.action_returns(signature);
             let taken: Vec<String> = inputs.iter().map(|(name, _)| name.clone()).collect();
@@ -775,6 +806,7 @@ impl Reader<'_> {
                         "an input can't change: drop the `mut`, and write `let next = value + 1;` under a new name",
                     );
                 }
+                self.refuse_constant_name(&named.ident);
                 name_of(&named.ident)
             }
             other => {
@@ -883,6 +915,7 @@ impl Reader<'_> {
             match typed.pat.as_ref() {
                 Pat::Ident(named) if named.subpat.is_none() && named.by_ref.is_none() => {
                     let name = name_of(&named.ident);
+                    self.refuse_constant_name(&named.ident);
                     if !self.is_the_state(&typed.ty) {
                         typed_parameters.push((name.clone(), named.ident.span(), &typed.ty));
                     }
@@ -919,6 +952,8 @@ impl Reader<'_> {
                 }
             }
         }
+        let returns = self.returns_of(signature);
+        self.walk_body(signature, block, returns);
         let mut body = self.value_of(block);
         self.bound.truncate(kept);
         if let ReturnType::Type(_, ty) = &signature.output {
@@ -956,6 +991,17 @@ impl Reader<'_> {
             body,
         }
     }
+}
+
+fn typed_parameter_types(signature: &Signature) -> Vec<Type> {
+    signature
+        .inputs
+        .iter()
+        .filter_map(|input| match input {
+            FnArg::Typed(typed) => Some(typed.ty.as_ref().clone()),
+            FnArg::Receiver(_) => None,
+        })
+        .collect()
 }
 
 fn role_of(attributes: &[Attribute]) -> Option<(&'static str, &Attribute)> {

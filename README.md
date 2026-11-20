@@ -126,7 +126,19 @@ of the JSON. The file is judged by its tokens, so nothing hides a model from the
 `#[end]`, `#[state]`, `#[group]`, `#[initial]`, `#[range]` or `#[one_of]`, a call of `require!`
 and an `impl` of one of the library's traits count wherever they stand, inside a `mod`, a
 function or a macro, behind `cfg` or `cfg_attr`, with a path or a raw identifier, and a file that
-can't be parsed or is nested too deep to be is read and refused, never left out. A file named on
+can't be parsed or is nested too deep to be is read and refused, never left out.
+
+The rule is that a file is left out as declaring no model only when every use of the library in
+it is one that the token test understands completely: names written as the library has them,
+plainly or by a path that starts with `earnest`. A file that uses the library and has any
+other construct through which a model could be declared without those names showing is a model
+file, and is read or refused: a `use` or an `extern crate` that renames, with `as`, the crate
+or a name of the library (`use earnest::model::{Model as Starts, model as checked}`, `use
+earnest::model as lib`, `use earnest as kit`, but not `as _`, and a rename of a name that a module of
+the file re-exports from it), an `include!`, and any `macro_rules!`. Such a file is refused
+whatever it declares, because the reader refuses a renamed library name, an `include!` and a
+macro of a model file; an included file that does not name the crate is not a model file of its
+own, and the file that includes it is the one refused. A file named on
 the command line is read or refused whatever it declares. TypeScript has no such rule: a file
 that imports `@earnest/model` is a model file even when it only calls `explore`, because telling
 that no model is made through an alias, a namespace import or a destructured `m` takes the
@@ -171,7 +183,9 @@ library, and says it left it out. A file that is no test file and can't be opene
 holds, the error says so and names the file (`no model is named `Climb`; the model `Climb` is
 in `tests/climb.ts`, a test file that uses the library and was skipped: name the file, or
 search its folder, to read it`), and `verify`, `chart`, `report`, `tla` and `confirm` all print
-the skipped line before they exit 2. A Rust `#[cfg(test)]` module inside a model file is not part of the
+the skipped line before they exit 2. They print the line for the Rust files that declare no
+model too, and the error names each of them (`...; the file `helper.rs` uses the library and
+declares no model, and was not read`), whatever `--model` or `--rule` names. A Rust `#[cfg(test)]` module inside a model file is not part of the
 model, as before. `--base` applies the same convention to the files of the base commit.
 
 A model file may reach the library only by `import { m } from "@earnest/model"`. Reaching it
@@ -440,6 +454,18 @@ its first broken invariant, so a rule's invariants are each a run of their own, 
 differences read `tla-rs found`, `tla-rs says`. The 32-bit and text limits below are TLC's: a
 model that tla-rs can't confirm is `differs`, never `cannot`. `--jobs` is the number of workers
 given to each program.
+
+A quantifier stops at the first item that decides it, in the checker and in Node (`every` and
+`some`) and in Rust (`forall` and `exists` are iterators that stop), so a fault in a later item
+never happens. The items come in the order of the declaration for `m.forall(T, f)`,
+`m.exists(T, f)`, `forall::<T>(f)` and `exists::<T>(f)` (`m.oneOf([3, 1, 2])` tries 3, then 1,
+then 2, in all three), in the order of the items for a sequence or a queue, and in the order of the
+set for a set: numbers ascending, `false` before `true`. The module judges a quantifier in the
+same order: an item is judged when no item before it decides, so a fault in an item that comes
+after the one that decides makes no difference, and TLC's verdict is the checker's. A quantifier
+over a set of other items than numbers and booleans whose test can fault is still judged for every
+item: the order of such a set is not written in the module, and TLC can say `unknown` where the
+checker has a verdict.
 
 A rule `id` is the invariant `Rule_id`, and the configuration names one invariant for each rule.
 A rule that can't be evaluated in a state is true there in `Rule_id`, as an action that can't be
@@ -897,8 +923,61 @@ fn add(&self) -> Option<Self> {
   `else`, and `?` in a rule, an end, a helper or an action that returns `Self`, is refused.
 - `value == Some(x)` and `value != Some(x)` compare as before.
 
+A name in a pattern is resolved first, as Rust resolves it, against what is in scope: the
+file's constants, and `None`, `Some`, `Ok` and `Err`. A constant in a pattern is a value to
+compare with, never a new name. Where the pattern can fail it is the test with Rust's meaning:
+`if let Some(TOP) = value { a } else { b }` is `a` only when `value` is `Some(TOP)`, and
+otherwise `b`; `let Some(TOP) = value else { return None; };` in an action happens only for
+`Some(TOP)`; an arm of a `match` or of `matches!` may be a constant that is one variant of the
+enum matched (`const WARM: Stage = Stage::Warm;`, also through another constant), which counts
+for the missing variants as it does in Rust. A constant where the pattern must always match is
+refused (E0005): `let TOP = value?;`, `let TOP: u8 = ..`, a parameter of an action, a helper or
+a function named `TOP`, and a parameter of a function passed to `map_or`, `every`, `some`,
+`forall` and the like. A value named `Some`, `Ok` or `Err`, or a `None` pattern, is refused too
+(E0530, E0005). A name that is not one of these is a new value, and shadows what the file has
+under that name where Rust lets it: a value named like a field (`self.n` is still the field),
+like a helper (a call of that name is refused, as Rust refuses it, E0618), like an enum or a
+struct (`Phase::Idle` and `Line { .. }` are still the type), and an earlier value.
+
+Rust's rules for moving a value are applied the same way everywhere a value is read, not only
+for an `Option`. A value whose type is not `Copy` is moved when it is a place (a local, a
+parameter, a field of one) in a `let`, an argument of a helper, a function or a primitive
+(`Set::add`, `Seq::push`, `has`, `Some(..)`, `Set::of([..])`), the value a body gives back, an
+item of a record, a `?`, the value `unwrap_or`, `map_or` and `is_some_and` read, the scrutinee of
+an `if let` or `let else` whose pattern binds a part that is not `Copy`, a function that
+`map_or` takes and uses a captured value in, and the fields a `..base` of a struct literal does
+not give. Moving it out of `&self`, out of a field of a reference or out of a function that is
+called once for each item is refused (E0507), and so is using it after it was moved, on any
+path that may have moved it, including a closure that captured it and a value read twice by `?`
+or `let else` (E0382). The types that are `Copy` are the integers, `bool`, `&'static str`, a
+reference, `Timer`, `Request`, `Retry`, a `Lock` of a `Copy` owner, an enum or a record that
+derives `Copy`, and an `Option` or a tuple of those. `Set`, `Seq`, `Queue`, `Map`, and an enum
+or a record without `Copy` are not. Every refusal names the fix: derive `Copy` on the type, write
+`.clone()` where it is read, or compare by reference. Reading a place without moving it (a
+method that takes `&self`, `==`, `<`, a `match` on an enum with no binding, `&x`, `x.clone()`) is
+not a move.
+
+Every enum and every record is a type of its own: two enums with the same variant names are two
+types, so a variant of one never compares with, is assigned to, is matched against or is passed
+for a value of the other, and a `match` on `self.beta` takes the variants of `Beta` only. The
+reader knows the type of each enum and each record it can type a value as, and the lowering
+keeps the type of each enum on every variant and every enum field, so an enum is checked where
+the reader can't tell the type of a value as well; the lowering reads two records of the same
+fields as one type, so two records are told apart by the reader alone. The same check is made on the type a value has where Rust
+fixes it, by what the reader can tell of each expression: the two sides of `==`, `!=`, `<`,
+`<=`, `>`, `>=` and of arithmetic, the value of a field in `Self { .. }` or a record, a
+`#[initial(..)]` and a constant, a `let` with a type, an argument of a helper, a function or a
+primitive (`add`, `has`, `push`, `unwrap_or`..), the value a body gives back, the branches of an
+`if`, the items of `Set::of`, and the type written for a function's parameter against the item
+it is passed (`map_or(0, |weight: u16| ..)` on an `Option<u8>` is E0631, also a reference where the
+item is a value). Two integer types are two types, whatever number they hold. A type written
+that the checker can't compare with the type it is passed is refused, never ignored. The
+refusals say `E0308`, `E0631` or `E0277`, as `rustc` does. `apps/earnest/tests/rust_agreement`
+compares the construct the first versions added with `rustc`, and `crates/earnest_rs/tests/rustc`
+compares these rules with it, case by case.
+
 The value is moved out of its place when it is read this way, so the checker reads it only
-where Rust does: a field of the state or of a record that is `Copy` (an integer, a `bool`, an
+where Rust does (the rules for a move above): a field of the state or of a record that is `Copy` (an integer, a `bool`, an
 enum that derives `Copy`, an `Option` of those), a parameter taken by value, or an owned result
 such as `self.items.first()` or `self.line.clone()`. A reference (`&self.last`, a `&Option<u8>`
 parameter), `.as_ref()`, and a field that is not `Copy` (Rust says E0507) are refused with the

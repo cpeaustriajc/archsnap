@@ -40,6 +40,16 @@ any other `#[cfg]` or
 problem in the file is reported, and a file with a problem gives no drafts. Names and kinds are not checked here:
 `earnest_semantic` does that when it lowers a draft.
 
+Rust's own rules are checked in `flow.rs` for every body, so the reader refuses what `rustc`
+refuses and reads what it accepts: a value of a type that is not `Copy` moved out of `&self`, out
+of a field of a reference or out of a function called once for each item (E0507) or used after a
+move on any path (E0382); a type that is not the one Rust expects in a comparison, an assignment,
+an argument, a result, a `let` with a type or a closure's parameter (E0308, E0631); and a name in a
+pattern, which is a constant of the file or `None`, `Some`, `Ok` or `Err` before it is a new name,
+so a constant in a refutable pattern is a comparison and in an irrefutable one is refused (E0005,
+E0530). `ty.rs` holds the types it reasons with: each enum and each record is a type of its own.
+`tests/rustc` compiles each case as real Rust and compares.
+
 Every draft has the language `Rust`, which tells the lowering to compute each number in its
 integer type. `tests/read/models` holds model files that are also compiled as part of the tests,
 so what the reader accepts is what `rustc` accepts: `shelf.rs` has a method and a function of one

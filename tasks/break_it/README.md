@@ -758,3 +758,152 @@ are tested in `crates/earnest/tests/model/replays.rs`.
 `--time-limit` across `--jobs` (its cut is timed, so it is not expected to repeat). tla-rs. The
 `@earnest/cli` launcher run from an installed package. Models run on Windows, where the test
 folder rule meets `\` separators.
+
+## Sixth pass
+
+A sixth adversarial pass, made on commit b66d759 against the code written since the fifth pass:
+the `Option` forms, `match`, division, helpers that return `Self`, `From`, `#[initial(a, b)]`,
+views that call helpers, the files that declare no model, the `unknown` verdict and `confirm`'s
+excuse for it, threads joining a running level, and the cache. Its tests are in
+`tests/break_it/sixth.rs` and its files in `models/sixth/`. Each Rust file was compiled with
+`rustc` against `crates/earnest` in a scratch crate and walked breadth first over `starts()`,
+`steps()`, `rules()` and `ends()`, with a panic taken as a fault; "in Rust" below is what that
+walk or `rustc` reported. The TypeScript file was run with `explore` in Node and passes `tsc`
+with `strict`. Every number below is derived by hand. Each test fails today.
+`tlc_judges_a_quantifier_that_an_early_value_decides_as_the_checker_does` needs `java` and
+the jar at `target/tools/tla2tools.jar` (or `EARNEST_TLC_JAR`), and says so when it is missing.
+
+### A broken rule reported as `pass`
+
+`sixth/constant_pattern.rs`, model `Pick`: `chosen` is an `Option<u8>` of 0 to 3 that starts at
+`None`, and `choose` sets it once to any of 0 to 3 (5 states, each `Some` a marked end). The
+file has `const TOP: u8 = 3;`, and the rule `only_top` is `if let Some(TOP) = self.chosen { true
+} else { self.chosen.is_none() }`. In Rust a name in a pattern that is a constant in scope is a
+constant pattern, not a new binding: `Some(TOP)` matches `Some(3)` only. After `choose` with
+`number = 0` the `else` branch runs and `is_none()` is false, so `only_top` is broken after one
+step; the walk in Rust reports exactly that. The checker reads `TOP` as a fresh name bound to
+whatever is inside, so every `Some` takes the `true` branch: `pass`, 5 states, `only_top`
+holds. Right result: `only_top` broken after 1 step, or `unreadable`. The same reading turns
+`let Some(TOP) = self.chosen else { return None; };` in an action into an action that happens
+for every `Some` where Rust lets it happen for `Some(3)` only (380 states against the 260 of
+the walk in Rust, in a model of four fields), and a constant of an enum type (`const WARM:
+Stage = Stage::Warm;` with `if let Some(WARM) = ..`) does the same. Test:
+`a_constant_in_an_if_let_pattern_is_compared_not_bound`.
+
+### Files that `rustc` refuses, read
+
+| File | By hand | Today | Test |
+|---|---|---|---|
+| `sixth/constant_binding.rs` | `let TOP = self.chosen?;` with `const TOP: u8 = 3;` in scope: `TOP` is a refutable constant pattern in a `let`, and `rustc` refuses the file (E0005, "`TOP` is interpreted as a constant pattern, not a new variable"). So do `let TOP: u8 = ..`, `map_or(.., \|TOP\| ..)`, `forall::<T>(\|TOP\| ..)` and a helper parameter named `TOP` (E0005), all read by the checker. Right result: `unreadable` | `fail`, 8 states, the action read with `TOP` as the value inside | `a_binding_named_after_a_constant_is_unreadable` |
+| `sixth/moved_twice.rs` | `let held = self.tag.clone(); let first = held?; let second = held?;` where `held` is an `Option<Tag>` and `Tag` is a `Domain` struct that is not `Copy`: the first `?` moves `held`, and `rustc` refuses the second (E0382). A helper that takes an `Option<Tag>` by value and reads it with `if let` and then `map_or` is refused by `rustc` and read by the checker the same way. The README says the value inside is read only where Rust reads it. Right result: `unreadable` | `pass`, 3 states | `an_option_moved_by_question_mark_and_used_again_is_unreadable` |
+| `sixth/moved_out.rs` | `let stage = self.stage;` where `Stage` derives `Domain` but not `Copy`: a move out of `&self`, which `rustc` refuses (E0507). Passing `self.stage` to a function that takes a `Stage` is refused the same way. The checker refuses the `Option` forms on such a field (`if let Some(x) = self.tag`) for this reason, but not a `let` or an argument. Right result: `unreadable` | `pass`, 2 states | `a_field_that_is_not_copy_moved_out_of_the_state_is_unreadable` |
+| `sixth/twin_enums.rs`, `sixth/twin_compare.rs` | Two enums `Alpha` and `Beta`, each with the variants `On` and `Off`. `match self.beta { Alpha::On => .., Alpha::Off => .. }` and `self.beta == Alpha::On` set a `Beta` against an `Alpha`, which `rustc` refuses (E0308); so is `beta: Alpha::Off` in an action's result, which the checker also reads. The README names "an arm of another enum (E0308)" among the refusals. Right result: `unreadable` | `pass`, 2 states, for both: an arm is matched to its enum by the list of variant names, so two enums with one list are one enum to it, and a variant compares by its name only. The other way round, `match self.beta { Beta::On => .., Beta::Off => .. }`, which Rust accepts, is refused with "this is not a variant of the enum being matched, and Rust refuses the arm" | `a_variant_of_another_enum_with_the_same_names_is_unreadable` |
+| `sixth/closure_type.rs` | `self.chosen.map_or(0, \|weight: u16\| weight * 100)` on an `Option<u8>`: the closure takes a `u16` where `map_or` passes a `u8`, and `rustc` refuses the file (E0631). Right result: `unreadable` | read, the annotation ignored and `weight` typed `u8` | `a_closure_whose_parameter_type_differs_from_the_option_is_unreadable` |
+
+### A model left out, and the run passed
+
+`sixth/aliased.rs` implements the library's traits for `Climb` by hand, imported as `use
+earnest::model::{Behavior as Walks, Claim, Model as Starts, Step};`: `n` from 0, the step `inc`
+while `n < 3`, the end `top` at 3 and the rule `low` (`n <= 1`). It compiles, and walked as
+real Rust `low` breaks after two steps (4 states). Named on the command line it is
+`unreadable` ("an item of the library can't be imported under another name"). Found by walking
+its folder it is listed in `noModel` and the run exits 0, because the test for a declared model
+looks for the names `Model`, `Behavior`, `Domain`, `Start` and `View` before `for`, and for
+`Model` and `Domain` in a `derive`. The README says "nothing hides a model from the test". The
+same holds for `use earnest::model::{Model as Modelled, model as behaves};` with
+`#[derive(.., Modelled)]` and `#[behaves] impl Lamp {}`, a model whose two start states are
+both stuck, and for a model file `include!`d by a file that names the crate (the includer is
+listed in `noModel`, the included file is not mentioned at all). With `--model Climb` the run
+says only "no model is named `Climb`" and exits 2. Right result: `unreadable`, exit 1, or `low`
+broken after two steps. Test:
+`a_rust_model_whose_library_names_are_imported_under_aliases_is_not_left_out`.
+
+### A file left out without a word when `--model` names nothing
+
+A folder with `tests/climb.ts` (a test file that uses the library) and `sixth/helper.rs` (a Rust
+file that names the crate and declares no model), run with `--model Nope`: the run prints
+`skipped  1 test file that uses the library` and `error: no model is named Nope`, exit 2, and
+nothing about `helper.rs`. The README says that for a file that declares no model "the run says
+so" with the line `skipped  1 file that uses the library and declares no model`, and the test
+file's line is printed before the exit 2; the error path passes only the test files to the
+sentence. Test: `a_run_stopped_by_an_unknown_model_name_says_which_files_declare_no_model`.
+
+### TLC says `unknown` where the checker and Node decide
+
+`sixth/sweep.model.ts`, model `Sweep`: `n` goes 0, 1 (2 states). `Digit` is `m.int(1, 3)`. The
+rule `wide` is `m.forall(Digit, (x) => m.div(6, 3 - x) > 3 + s.n)`: at `x = 1` it is `3 > 3 +
+n`, false, so the `forall` is false there and `wide` is broken in the start state; `m.div(6,
+0)` at `x = 3` is never reached. The rule `some` is `m.exists(Digit, (x) => m.div(6, 3 - x) >=
+3 - s.n)`: true at `x = 1`, so it holds. The checker and `explore` say exactly that (the
+checker stops a quantifier at the first value that decides it, as JavaScript's `every` and
+`some` and Rust's `forall` and `exists` do). The TLA+ module defines the soundness of a
+quantifier as "the body has a value for every item", so the value `x = 3`, which divides by
+zero, makes `Rule_wide` and `Rule_some` true and breaks `Judged_wide` and `Judged_some`: TLC
+says `unknown` for both, and `earnest confirm --tlc` prints `differs` and exits 1. The README
+says TLC finds the same verdict for each rule. Right result: `same`. Test:
+`tlc_judges_a_quantifier_that_an_early_value_decides_as_the_checker_does`.
+
+The other direction, a model where TLC and the checker truly differ and `confirm` says `same`
+because a fault finding now excuses an `unknown` against TLC's `holds`, was not found: the
+soundness the module writes is as strict as the checker's for every fault but the 64-bit and
+2^53 ones (`Op::Safe`, and the `i32` and wider bounds of `Op::Fit`), which can't be reached
+without a number TLC can't hold, and for a quantifier, where it is stricter.
+
+### Attacked and found correct
+
+- About 140 Rust rules and actions over the new forms, each compared with a scratch build of
+  the same file: `if let` with and without `else`, `else if let`, nested, shadowing a field
+  and an input, on a record with field access, inside and around `match`; `map_or` and
+  `unwrap_or` with a default that faults (a fault in every state, as Rust's eager argument),
+  with a body that faults, with literals that type the result (`250` meeting a `u8`: no case
+  where the checker typed a literal differently from `rustc`), on a non-`Option` (refused), on
+  a reference (refused); `?` and `let .. else` in an action before and after `require!`, after
+  an early return, inside an early `if` block, typed and mistyped, twice, on a record, in an
+  action that returns `Self` (refused), in a helper (refused); `== Some(..)` of a record.
+  Faults in a `let` that is never read, in a scrutinee, in an argument a helper drops: each a
+  fault, as Rust panics there.
+- `match`: `_` first and an unreachable arm (read; Rust warns), a variant repeated in an
+  or-pattern, pairs with overlapping arms where order decides, pairs that leave a combination
+  out (refused with a missing case `rustc` also names), an enum of one variant, an enum
+  declared after its use, arms of different types (refused), blocks with `let`, nested
+  `match`, `matches!` with an or-pattern and with a guard (refused), a leading `|`. `_` alone on
+  a pair and a parenthesised or-pattern are refused though Rust reads them; no wrong reading.
+- Division: precedence and associativity of `/`, `*` and `%` (`a - b / c`, `a / b * c / d`,
+  `a * b / c % d`), zero divisors, `MIN / -1`, a negative literal divisor, `u16::from(..) /`,
+  `/=` (refused): each is the value Rust gives, or a fault where the contract makes a negative
+  side one. `m.div` in a rule, an action, nested in `m.rem` and near 2^53 agrees with Node; `/`
+  in a view's template is refused.
+- Helpers returning `Self`: the action's own field wins over the helper's, a helper that
+  faults in a field the action overwrites is a fault (Rust evaluates the whole base), a helper
+  calling a helper, recursion (refused), `require!` and `?` in such a helper (refused), use in a
+  rule (refused). `From` for the pairs the README lists, and the pairs Rust lacks
+  (`u8::from(u16)`, `i8::from(u8)`, `isize::from(u16)`, `u32::from(usize)`: refused), `into()`
+  (refused).
+- `#[initial(a, b)]`: repeated values and values outside `#[range]`, `#[one_of]` or a record's
+  ranges are refused; on an `Option`, a record, a negative `i8` and a constant, and three
+  multi-start fields together, the start states and their order equal `Model::starts()`, and
+  the path to a rule broken in several start states starts from the first of them.
+- A view that calls helpers built with `match` and `if let` and uses `map_or` in a hole: the
+  chart's labels equal `state_label()` and `group_label()` in Rust.
+- `unknown`: a fault in an end, a fault in one input of an action, a state out of range from one
+  of ten inputs, a rule that faults beside one that does not, `--rule`, `--max-states` at and
+  one under the count: the checker and `explore` agree on every verdict and finding. `confirm
+  --tlc` on about 130 Rust models of this pass: all `same`.
+- `--jobs` 1, 2, 3, 5, 8 and 16 on 203 models at once (the conformance models and twins, the
+  benchmark grids of 1 000 and 100 000 states, `Ledger`, the mixed benchmark models and this
+  pass's files, with failures, stuck states, faults and unreadable files), with no limit and
+  with `--max-states 777` and `5000`, and 8 repeated runs: byte-identical JSON apart from
+  `milliseconds`. A state reached by two actions in one level keeps the path through the
+  first, for every `--jobs`.
+- The cache: `--no-cache --model X` then a plain run, `--rule` then a full run, an edit, a
+  touch and an edit back, `--max-states` with and without a time limit: never a stale answer.
+- `--model` and `--rule` with an unreadable file: a name it declares (exit 1, its problems
+  listed), a name only in its comment and its text (exit 2, "may declare it").
+- `--max-arrows 1` (the note counts 6 of 8 states and 9 of 10 arrows), 0 and a number past 64
+  bits (refused by the flag parser).
+- `--base` from `map_or` to `if let` with a narrower bound: `tightened`.
+
+### Not covered
+
+`--time-limit` across `--jobs` (timed). tla-rs. Windows. A `confirm` that is excused for a
+true difference, as above.

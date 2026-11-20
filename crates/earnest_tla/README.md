@@ -83,6 +83,12 @@ INVARIANT Rule_bounded
   and counts every state. `Judged_id` is `InRange => HasAValue`: a state where the rule has no
   value breaks it. Only a rule that can fault has one. The configuration names `Rule_id` alone,
   one invariant per rule; `Files::config_judging` gives the configuration that checks both.
+- **Quantifiers.** The search stops a `forall` or an `exists` at the first item that decides it,
+  so a fault in a later item never happens. The module asks the same: an item must have a value
+  unless an item before it in the search's order decides, and a quantifier over a sequence, a set
+  of numbers or a set of booleans is written that way, with `Ok` and `Hit` defined by `LET`. The
+  items of a declaration come in the order of the declaration (a sequence), the items of a set
+  ascending. A set of anything else whose test can fault still asks for every item.
 - **Names.** A name keeps its spelling when TLA+ can spell it and nothing else has it. A letter
   TLA+ lacks becomes `_`, a name that does not start with a letter gets a `v` in front, and a
   taken name gets `_2`, `_3` and so on. Text values are TLA+ strings and are never renamed.

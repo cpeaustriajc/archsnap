@@ -157,7 +157,7 @@ pub(crate) fn verify(arguments: &Verify) -> Result<Exit, String> {
     let model = arguments.selection.models.model.as_deref();
     let rule = arguments.selection.rule.as_deref();
     let selected = select_with_removed(&files, model, rule, arguments.base.as_deref())
-        .map_err(|error| refusing(&skipped, model, rule, error))?;
+        .map_err(|error| refusing(&skipped, &no_model, model, rule, error))?;
     let targets = selected.targets;
     say_what_is_unread(&files, model, rule, &targets);
     let checked = match check_all(&targets, arguments, bounds) {
@@ -186,7 +186,7 @@ pub(crate) fn verify(arguments: &Verify) -> Result<Exit, String> {
             .as_ref()
             .is_none_or(|(_, compared)| compared.changes.is_empty())
     {
-        return Err(refusing(&skipped, model, rule, error));
+        return Err(refusing(&skipped, &no_model, model, rule, error));
     }
     let verified = Verified {
         files: &files,

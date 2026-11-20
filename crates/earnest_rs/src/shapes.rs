@@ -185,7 +185,15 @@ impl Reader<'_> {
         if let Some(variants) = self.enums.get(name) {
             let choices = variants
                 .iter()
-                .map(|variant| at(span, TermKind::Variant(variant.clone())))
+                .map(|variant| {
+                    at(
+                        span,
+                        TermKind::Variant {
+                            owner: name.to_owned(),
+                            name: variant.clone(),
+                        },
+                    )
+                })
                 .collect();
             return Some(ShapeKind::OneOf(choices));
         }

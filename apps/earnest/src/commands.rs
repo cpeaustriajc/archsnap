@@ -83,13 +83,46 @@ pub(crate) fn say_what_is_unread(
     }
 }
 
+fn naming_the_files_that_declare_no_model(error: String, no_model: &[String]) -> String {
+    if no_model.is_empty() {
+        return error;
+    }
+    let listed: Vec<String> = no_model.iter().map(|path| format!("`{path}`")).collect();
+    let (files, verb) = if let [only] = listed.as_slice() {
+        (
+            format!("the file {only} uses the library and declares"),
+            "was",
+        )
+    } else {
+        (
+            format!(
+                "the files {} use the library and declare",
+                listed.join(", ")
+            ),
+            "were",
+        )
+    };
+    format!("{error}; {files} no model, and {verb} not read")
+}
+
 pub(crate) fn refusing(
+    skipped: &[String],
+    no_model: &[String],
+    model: Option<&str>,
+    rule: Option<&str>,
+    error: String,
+) -> String {
+    say_what_was_skipped(skipped, no_model);
+    let error = naming_the_test_files_that_were_skipped(skipped, model, rule, error);
+    naming_the_files_that_declare_no_model(error, no_model)
+}
+
+fn naming_the_test_files_that_were_skipped(
     skipped: &[String],
     model: Option<&str>,
     rule: Option<&str>,
     error: String,
 ) -> String {
-    say_what_was_skipped(skipped, &[]);
     if model.is_none() && rule.is_none() {
         return error;
     }
@@ -159,8 +192,8 @@ pub(crate) fn chart_command(arguments: &Chart) -> Result<Exit, String> {
     } = gather(&arguments.selection.models)?;
     let rule = arguments.selection.rule.as_deref();
     let model = arguments.selection.models.model.as_deref();
-    let targets =
-        select(&files, model, rule).map_err(|error| refusing(&skipped, model, rule, error))?;
+    let targets = select(&files, model, rule)
+        .map_err(|error| refusing(&skipped, &no_model, model, rule, error))?;
     say_what_is_unread(&files, model, rule, &targets);
     let ran = explore_each(
         &searched(&targets, rule),
@@ -208,7 +241,7 @@ pub(crate) fn report_command(arguments: &Report) -> Result<Exit, String> {
     let rule = arguments.selection.rule.as_deref();
     let model = arguments.selection.models.model.as_deref();
     let selected = select_with_removed(&files, model, rule, arguments.base.as_deref())
-        .map_err(|error| refusing(&skipped, model, rule, error))?;
+        .map_err(|error| refusing(&skipped, &no_model, model, rule, error))?;
     let targets = selected.targets;
     say_what_is_unread(&files, model, rule, &targets);
     let ran = explore_each(&searched(&targets, rule), bounds, Graphs::Kept);
@@ -314,8 +347,8 @@ pub(crate) fn tla_command(arguments: &Tla) -> Result<Exit, String> {
         no_model,
     } = gather(&arguments.models)?;
     let model = arguments.models.model.as_deref();
-    let targets =
-        select(&files, model, None).map_err(|error| refusing(&skipped, model, None, error))?;
+    let targets = select(&files, model, None)
+        .map_err(|error| refusing(&skipped, &no_model, model, None, error))?;
     say_what_is_unread(&files, model, None, &targets);
     let all = exported(&targets)?;
     let out = &arguments.out;
@@ -378,8 +411,8 @@ pub(crate) fn confirm_command(arguments: &Confirm) -> Result<Exit, String> {
         no_model,
     } = gather(&arguments.models)?;
     let model = arguments.models.model.as_deref();
-    let targets =
-        select(&files, model, None).map_err(|error| refusing(&skipped, model, None, error))?;
+    let targets = select(&files, model, None)
+        .map_err(|error| refusing(&skipped, &no_model, model, None, error))?;
     say_what_is_unread(&files, model, None, &targets);
     let all = exported(&targets)?;
     let ran = explore_each(&searched(&targets, None), bounds, Graphs::Dropped);
@@ -454,7 +487,7 @@ mod tests {
     #[test]
     fn a_model_that_is_only_in_a_skipped_test_file_is_named_with_the_file() {
         let (_folder, skipped) = skipped_files(&[("one.ts", CLIMB)]);
-        let said = refusing(&skipped, Some("Climb"), None, NO_MODEL.to_owned());
+        let said = refusing(&skipped, &[], Some("Climb"), None, NO_MODEL.to_owned());
         assert!(
             said.starts_with(NO_MODEL) && said.contains(&skipped[0]) && said.contains("skipped"),
             "{said}"
@@ -465,7 +498,7 @@ mod tests {
     #[test]
     fn two_skipped_files_with_the_model_are_both_named() {
         let (_folder, skipped) = skipped_files(&[("one.ts", CLIMB), ("two.ts", CLIMB)]);
-        let said = refusing(&skipped, Some("Climb"), None, NO_MODEL.to_owned());
+        let said = refusing(&skipped, &[], Some("Climb"), None, NO_MODEL.to_owned());
         assert!(
             said.contains(&skipped[0])
                 && said.contains(&skipped[1])
@@ -479,6 +512,7 @@ mod tests {
         let (_folder, skipped) = skipped_files(&[("one.ts", CLIMB)]);
         let said = refusing(
             &skipped,
+            &[],
             None,
             Some("low"),
             "no model has a rule `low`".to_owned(),
@@ -489,6 +523,7 @@ mod tests {
         );
         let both = refusing(
             &skipped,
+            &[],
             Some("Climb"),
             Some("low"),
             "the model `Climb` has no rule `low`".to_owned(),
@@ -497,24 +532,53 @@ mod tests {
     }
 
     #[test]
+    fn files_that_declare_no_model_are_named_in_the_error() {
+        let one = refusing(
+            &[],
+            &["helper.rs".to_owned()],
+            Some("Climb"),
+            None,
+            NO_MODEL.to_owned(),
+        );
+        assert_eq!(
+            one,
+            format!(
+                "{NO_MODEL}; the file `helper.rs` uses the library and declares no model, and was not read"
+            )
+        );
+        let two = refusing(
+            &[],
+            &["a.rs".to_owned(), "b.rs".to_owned()],
+            None,
+            None,
+            "an error".to_owned(),
+        );
+        assert_eq!(
+            two,
+            "an error; the files `a.rs`, `b.rs` use the library and declare no model, and were not read"
+        );
+    }
+
+    #[test]
     fn a_name_no_skipped_file_has_leaves_the_error_as_it_was() {
         let (_folder, skipped) =
             skipped_files(&[("one.ts", CLIMB), ("two.ts", "export const a = 1;\n")]);
         for (model, rule) in [(Some("Other"), None), (None, Some("high")), (None, None)] {
             assert_eq!(
-                refusing(&skipped, model, rule, "an error".to_owned()),
+                refusing(&skipped, &[], model, rule, "an error".to_owned()),
                 "an error",
                 "{model:?} {rule:?}"
             );
         }
         assert_eq!(
-            refusing(&[], Some("Climb"), None, NO_MODEL.to_owned()),
+            refusing(&[], &[], Some("Climb"), None, NO_MODEL.to_owned()),
             NO_MODEL,
             "no skipped file"
         );
         assert_eq!(
             refusing(
                 &["/nowhere/at/all.ts".to_owned()],
+                &[],
                 Some("Climb"),
                 None,
                 NO_MODEL.to_owned()

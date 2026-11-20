@@ -465,10 +465,38 @@ impl<'a> Scribe<'a> {
         } else {
             over.text.clone()
         };
-        let each = tested
-            .sound
-            .as_ref()
-            .map(|needed| format!("(\\A {item} \\in {items} : {needed})"));
+        let order = if from_a_seq {
+            Some(Visit::Index)
+        } else {
+            Visit::of_set(&over.kind)
+        };
+        let stops = matches!(reach, Sweep::Every | Sweep::Some);
+        let each = match (&tested.sound, stops, order) {
+            (Some(needed), true, Some(order)) => {
+                let earlier = scope.bind(slot, "item", over.kind.item());
+                let again = self.expr(body, scope);
+                scope.release();
+                let stopping_value = match reach {
+                    Sweep::Every => format!("(~{})", again.text),
+                    _ => again.text.clone(),
+                };
+                let stops_here = format!(
+                    "({} /\\ {stopping_value})",
+                    again.sound.as_deref().unwrap_or("TRUE")
+                );
+                let names = [scope.claim("Ok"), scope.claim("Hit")];
+                let places = [scope.claim("at"), scope.claim("before")];
+                Some(short_circuit(
+                    &order,
+                    (&item, &earlier),
+                    &over.text,
+                    (needed, &stops_here),
+                    (&names, &places),
+                ))
+            }
+            (Some(needed), _, _) => Some(format!("(\\A {item} \\in {items} : {needed})")),
+            (None, _, _) => None,
+        };
         let done = match (reach, gives) {
             (Sweep::Every, _) => Written::truth(format!("(\\A {item} \\in {items} : {test})")),
             (Sweep::Some, _) => Written::truth(format!("(\\E {item} \\in {items} : {test})")),
@@ -498,6 +526,52 @@ impl<'a> Scribe<'a> {
         needed.push(has_a_value(op, &given));
         applied(op, &given).needing(needed)
     }
+}
+
+enum Visit {
+    Index,
+    Number,
+    Truth,
+}
+
+impl Visit {
+    fn of_set(items: &Kind) -> Option<Self> {
+        match items.item() {
+            Kind::Int => Some(Self::Number),
+            Kind::Bool => Some(Self::Truth),
+            _ => None,
+        }
+    }
+}
+
+fn short_circuit(
+    order: &Visit,
+    (item, earlier): (&str, &str),
+    source: &str,
+    (needed, decided): (&str, &str),
+    (names, places): (&[String; 2], &[String; 2]),
+) -> String {
+    let [ok, hit] = names;
+    let [at, before] = places;
+    let definitions =
+        format!("LET {ok}({item}) == {needed} IN LET {hit}({earlier}) == {decided} IN");
+    let body = match order {
+        Visit::Index => format!(
+            "\\A {at} \\in 1..Len({source}) : {ok}({source}[{at}]) \\/ \\E {before} \\in \
+             1..({at} - 1) : {hit}({source}[{before}])"
+        ),
+        Visit::Number | Visit::Truth => {
+            let first = match order {
+                Visit::Number => format!("({before} < {at})"),
+                _ => format!("((~{before}) /\\ {at})"),
+            };
+            format!(
+                "\\A {at} \\in {source} : {ok}({at}) \\/ \\E {before} \\in {source} : \
+                 {first} /\\ {hit}({before})"
+            )
+        }
+    };
+    format!("({definitions} {body})")
 }
 
 fn applied(op: Op, given: &[Written]) -> Written {

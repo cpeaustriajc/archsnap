@@ -514,7 +514,7 @@ impl Lowerer<'_> {
             let (feature, why) = match (&typed.ty, how) {
                 (Type::Bool | Type::Int(_), Shown::Display | Shown::Debug)
                 | (Type::Text, Shown::Display | Shown::Owned)
-                | (Type::Variant, Shown::Debug) => return Ok(Piece::Shown(typed.expr)),
+                | (Type::Variant(_), Shown::Debug) => return Ok(Piece::Shown(typed.expr)),
                 (Type::Bool | Type::Int(_), Shown::Owned) => (
                     "`.to_owned()`",
                     "`.to_owned()` of a boolean or a number is that boolean or number, not a \
@@ -524,12 +524,12 @@ impl Lowerer<'_> {
                     "`{:?}`",
                     "`{:?}` prints a text in quotes and the chart prints it without: write `{}`",
                 ),
-                (Type::Variant, Shown::Display) => (
+                (Type::Variant(_), Shown::Display) => (
                     "`{}`",
                     "an enum has no `Display`, so `{}` and `.to_string()` of an enum variant do \
                      not compile: write `{:?}`",
                 ),
-                (Type::Variant, Shown::Owned) => (
+                (Type::Variant(_), Shown::Owned) => (
                     "`.to_owned()`",
                     "`.to_owned()` of an enum variant is the variant, not a `String`, and Rust \
                      refuses it: write `format!(\"{:?}\", value)`",
@@ -731,7 +731,10 @@ impl Lowerer<'_> {
         for option in options {
             let (value, found) = match &option.kind {
                 TermKind::Text(text) => (Value::Str(self.symbols.intern(text)), Type::Text),
-                TermKind::Variant(text) => (Value::Str(self.symbols.intern(text)), Type::Variant),
+                TermKind::Variant { owner, name } => (
+                    Value::Str(self.symbols.intern(name)),
+                    Type::Variant(owner.clone()),
+                ),
                 TermKind::Int(number) => (Value::Int(*number), Type::Int(None)),
                 TermKind::Declared { shape, value } => match (&shape.kind, &value.kind) {
                     (ShapeKind::Int { ty, .. }, TermKind::Int(number)) => {

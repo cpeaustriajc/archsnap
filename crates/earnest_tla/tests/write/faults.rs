@@ -2,7 +2,7 @@ use crate::build::{bind, body_of, both, choose, either, int, null, one, two, yes
 use crate::ops::{Stage, stage};
 use earnest_ir::{Expr, Math, Op, Order, Shelf, Sweep};
 use earnest_tla::Invariants;
-use earnest_value::IntType;
+use earnest_value::{IntType, Value};
 
 fn asked_first(mut stage: Stage, guard: Expr) -> String {
     stage.sketch.action("act", guard, &[]);
@@ -149,7 +149,7 @@ fn a_body_that_can_fault_is_asked_about_with_the_value_bound() {
 }
 
 #[test]
-fn a_test_over_a_collection_is_asked_about_for_every_item() {
+fn a_test_over_a_set_of_numbers_is_asked_about_until_an_item_decides() {
     let stage = stage();
     let divides = two(
         Op::Equal,
@@ -165,8 +165,35 @@ fn a_test_over_a_collection_is_asked_about_for_every_item() {
     };
     assert_eq!(
         asked_first(stage, guard),
-        "IF InRange /\\ (\\A item \\in seen : ((item >= 0) /\\ (n >= 1))) /\\ \
+        "IF InRange /\\ (LET Ok(item) == ((item >= 0) /\\ (n >= 1)) IN LET Hit(item_2) == \
+         (((item_2 >= 0) /\\ (n >= 1)) /\\ (Remainder(item_2, n) = 0)) IN \\A at \\in seen : \
+         Ok(at) \\/ \\E before \\in seen : (before < at) /\\ Hit(before)) /\\ \
          (\\E item \\in seen : (Remainder(item, n) = 0))"
+    );
+}
+
+#[test]
+fn a_test_over_a_sequence_is_asked_about_in_the_order_of_its_items() {
+    let stage = stage();
+    let divides = two(
+        Op::Equal,
+        &two(Op::Math(Math::Remainder), &Expr::Local(0), stage.n.clone()),
+        int(0),
+    );
+    let guard = Expr::Sweep {
+        sweep: Sweep::Every,
+        shelf: Shelf::Seq,
+        slot: 0,
+        source: Box::new(Expr::Const(Value::seq(vec![Value::Int(3), Value::Int(1)]))),
+        body: Box::new(divides),
+    };
+    assert_eq!(
+        asked_first(stage, guard),
+        "IF InRange /\\ (LET Ok(item) == ((item >= 0) /\\ (n >= 1)) IN LET Hit(item_2) == \
+         (((item_2 >= 0) /\\ (n >= 1)) /\\ (~(Remainder(item_2, n) = 0))) IN \\A at \\in \
+         1..Len(<<3, 1>>) : Ok(<<3, 1>>[at]) \\/ \\E before \\in 1..(at - 1) : \
+         Hit(<<3, 1>>[before])) /\\ (\\A item \\in SeqItems(<<3, 1>>) : \
+         (Remainder(item, n) = 0))"
     );
 }
 

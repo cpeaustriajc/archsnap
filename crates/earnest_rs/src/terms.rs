@@ -261,7 +261,13 @@ impl Reader<'_> {
             [owner, variant] if self.enums.contains_key(*owner) => {
                 let variants = self.enums.get(*owner).cloned().unwrap_or_default();
                 if variants.iter().any(|known| known == variant) {
-                    at(span, TermKind::Variant((*variant).to_owned()))
+                    at(
+                        span,
+                        TermKind::Variant {
+                            owner: (*owner).to_owned(),
+                            name: (*variant).to_owned(),
+                        },
+                    )
                 } else {
                     let message = format!(
                         "`{owner}` has no variant with this name: its variants are {}",
@@ -522,6 +528,7 @@ impl Reader<'_> {
         };
         match plain {
             Pat::Ident(named) if named.subpat.is_none() && named.by_ref.is_none() => {
+                self.refuse_constant_name(&named.ident);
                 (name_of(&named.ident), ty)
             }
             Pat::Wild(_) => ("_".to_owned(), ty),

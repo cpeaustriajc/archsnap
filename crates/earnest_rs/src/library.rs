@@ -8,6 +8,11 @@ const MODEL_ATTRIBUTES: [&str; 10] = [
 ];
 const MODEL_DERIVES: [&str; 2] = ["Model", "Domain"];
 const LIBRARY_TRAITS: [&str; 5] = ["Model", "Behavior", "Domain", "Start", "View"];
+const LIBRARY_NAMES: [&str; 20] = [
+    "Model", "Behavior", "Domain", "Start", "View", "Claim", "Step", "require", "model", "view",
+    "action", "rule", "end", "state", "group", "initial", "range", "one_of", "self", "earnest",
+];
+const MACROS_THAT_HIDE_A_MODEL: [&str; 2] = ["include", "macro_rules"];
 
 fn plain(name: &Ident) -> String {
     let written = name.to_string();
@@ -96,6 +101,40 @@ fn implements_a_library_trait(trees: &[TokenTree], index: usize) -> bool {
     false
 }
 
+fn flatten_idents(stream: TokenStream, into: &mut Vec<String>) {
+    for tree in stream {
+        match tree {
+            TokenTree::Ident(name) => into.push(plain(&name)),
+            TokenTree::Group(group) => flatten_idents(group.stream(), into),
+            TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+        }
+    }
+}
+
+fn renames_a_library_name(trees: &[TokenTree], index: usize) -> bool {
+    let mut words = Vec::new();
+    for tree in trees.iter().skip(index) {
+        match tree {
+            TokenTree::Punct(mark) if mark.as_char() == ';' => break,
+            TokenTree::Ident(name) => words.push(plain(name)),
+            TokenTree::Group(group) => flatten_idents(group.stream(), &mut words),
+            TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+        }
+    }
+    let mentions_the_crate = words.iter().any(|word| word == CRATE);
+    words.iter().enumerate().any(|(at, word)| {
+        word == "as"
+            && words
+                .get(at.saturating_add(1))
+                .is_none_or(|name| name != "_")
+            && (mentions_the_crate
+                || at
+                    .checked_sub(1)
+                    .and_then(|before| words.get(before))
+                    .is_some_and(|source| LIBRARY_NAMES.contains(&source.as_str())))
+    })
+}
+
 fn declares_in(tokens: TokenStream) -> bool {
     let mut pending = vec![tokens];
     while let Some(stream) = pending.pop() {
@@ -117,7 +156,14 @@ fn declares_in(tokens: TokenStream) -> bool {
                     let calls_require = word == "require"
                         && matches!(trees.get(index.saturating_add(1)),
                             Some(TokenTree::Punct(mark)) if mark.as_char() == '!');
+                    let hides_a_model = MACROS_THAT_HIDE_A_MODEL.contains(&word.as_str())
+                        && matches!(trees.get(index.saturating_add(1)),
+                            Some(TokenTree::Punct(mark)) if mark.as_char() == '!');
+                    let renames = (word == "use" || word == "extern")
+                        && renames_a_library_name(&trees, index);
                     if calls_require
+                        || hides_a_model
+                        || renames
                         || (word == "impl" && implements_a_library_trait(&trees, index))
                     {
                         return true;
@@ -130,14 +176,18 @@ fn declares_in(tokens: TokenStream) -> bool {
     false
 }
 
-/// Whether the Rust file `source` declares a model, or anything only a model file has, so it
+/// Whether the Rust file `source` declares a model, or anything only a model file has, or has a
+/// construct through which a model could be declared without its plain names showing, so it
 /// must be read, and a file that uses the library without one is left out and said to be.
 ///
 /// It is true when the file holds, anywhere, also inside a `mod`, a function or a macro, behind
 /// `cfg` or `cfg_attr`, and written with raw identifiers or a path: a `derive` of `Model` or
 /// `Domain`, an attribute `#[model]`, `#[view]`, `#[action]`, `#[rule]`, `#[end]`, `#[state]`,
 /// `#[group]`, `#[initial]`, `#[range]` or `#[one_of]`, a call of `require!`, or an `impl` of
-/// one of the library's traits. The file is read as tokens, so a word in a comment or a text
+/// one of the library's traits. It is also true for an `include!` or a `macro_rules!`, and for a
+/// `use` or `extern crate` that renames, with `as`, the crate or a name of the library, since
+/// a model could be declared through any of them: the reader then reads the file or refuses it.
+/// The file is read as tokens, so a word in a comment or a text
 /// counts for nothing. A file that can't be read as Rust tokens, or is nested too deep to be,
 /// is true: it can't be shown to declare nothing, so the reader refuses what it can't read.
 #[must_use]
@@ -194,6 +244,16 @@ mod tests {
             "fn f() { require!(true); }",
             "macro_rules! m { () => { #[derive(Model)] struct A; } }",
             "struct A { #[range(0, 3)] n: u8 }",
+            "use earnest::model::{Behavior as Walks, Model as Starts};",
+            "use earnest::model::{Model as Modelled, model as behaves};",
+            "use earnest::model as lib;",
+            "use earnest as kit;",
+            "extern crate earnest as kit;",
+            "use earnest::model::{self as m};",
+            "mod inner { pub use earnest::model::Model; }\nuse inner::Model as Starts;",
+            "use earnest::model::Model;\ninclude!(\"model.rs\");",
+            "use earnest::model::Model;\nmacro_rules! m { () => {}; }",
+            "fn f() { use earnest::model::Model as M; }",
         ] {
             assert!(declares_a_model(source), "{source:?} declares a model");
         }
@@ -211,6 +271,9 @@ mod tests {
             "impl<M: Model> Walk for M {}",
             "use earnest::model::Model;\nfn count() -> usize { Model::starts().len() }",
             "pub fn one() -> u8 { 1 }",
+            "use earnest::model::{Behavior, Model};\nuse std::collections::HashMap as Map;",
+            "use earnest::model::*;\nfn f() {}",
+            "use earnest::model::Model as _;\nfn f() {}",
         ] {
             assert!(!declares_a_model(source), "{source:?} declares none");
         }

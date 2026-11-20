@@ -53,7 +53,7 @@ impl Lowerer<'_> {
                 Type::Int(None),
             )),
             TermKind::Text(text) => Ok(self.text(text)),
-            TermKind::Variant(text) => Ok(self.variant(text)),
+            TermKind::Variant { owner, name } => Ok(self.variant(owner, name)),
             TermKind::Name(name) => self.name(name, place, scope),
             TermKind::Member(target, name) => self.member(target, name, place, scope),
             TermKind::Call {
@@ -347,10 +347,10 @@ impl Lowerer<'_> {
         )
     }
 
-    pub(super) fn variant(&mut self, text: &str) -> Typed {
+    pub(super) fn variant(&mut self, owner: &str, name: &str) -> Typed {
         Typed::new(
-            Expr::Const(Value::Str(self.symbols.intern(text))),
-            Type::Variant,
+            Expr::Const(Value::Str(self.symbols.intern(name))),
+            Type::Variant(owner.to_owned()),
         )
     }
 
@@ -938,7 +938,7 @@ impl Lowerer<'_> {
                 sweep,
                 shelf: Shelf::Set,
                 slot,
-                source: Box::new(Expr::Const(Value::set(values.into_iter().collect()))),
+                source: Box::new(Expr::Const(Value::seq(values))),
                 body: Box::new(inner?),
             },
             Type::Bool,

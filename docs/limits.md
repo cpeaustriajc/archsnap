@@ -9,9 +9,9 @@ the [README](../README.md); the open items are in
 
 | Check | Result | What it does not show |
 |---|---|---|
-| `just check` in CI | Passes: 1,273 Rust tests, 145 vitest tests, Verus, and `earnest verify` on earnest's own three models | That the tests cover every model a user can write |
+| `just check` in CI | Passes: 1,287 Rust tests, 146 vitest tests, Verus, and `earnest verify` on earnest's own three models | That the tests cover every model a user can write |
 | TLC 1.8.0 in CI (`just tlc`) | `same` state counts and verdicts for every conformance, twin and agreement model, and for earnest's own models | Agreement on models outside that set |
-| Six adversarial passes | 61 faults found, each now a test in `tasks/break_it`; the sixth pass's nine are being fixed | That a seventh pass would find nothing |
+| Six adversarial passes | 61 faults found and fixed, each now a test in `tasks/break_it` | That a seventh pass would find nothing |
 | A spec audit, requirement by requirement | R1 to R21 are built; the gaps it found are closed or listed below | The speed target, which needs models this repository does not hold |
 | Earnest checked with earnest (`tasks/models`) | Six shortfalls found in the thread pool, the cache and the run outcomes; all six fixed | That the code matches the models: nothing ties a model to the code it describes |
 | A first-time user test | A small coding agent, given only the README, wrote a TypeScript model, a fixed copy and a Rust twin, each right on the first run | How a first-time user fares on a large model |
@@ -60,6 +60,11 @@ as right as that reading.
   state general rules for patterns, moves and types. If those still leak, the choices are to
   narrow what a Rust model may contain, or to compile the file with the project's own toolchain
   before reading it. The second bends the requirement that earnest needs no setup.
+- **Two records with the same fields are one type after reading.** The Rust reader tells them
+  apart; the step after it does not. A mix-up the reader cannot type is not caught.
+- **A set of texts is walked in three orders.** The checker, Node and Rust each take the items of
+  a set of texts in a different order. A `forall` or `exists` over such a set, whose test can
+  fault on a later item, can be `unknown` in the checker and `holds` in Node.
 - **The TypeScript reader accepts less, and has been quiet for two passes.** A model is calls to
   the library, and anything else is refused. The price is that ordinary TypeScript is refused:
   `%`, `/`, postfix `!`, `as`, and a rule that is not an exported `const`.

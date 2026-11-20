@@ -27,6 +27,10 @@ pub(crate) struct Reader<'a> {
     pub(crate) copies: BTreeSet<String>,
     pub(crate) fn_types: BTreeMap<String, Type>,
     pub(crate) method_types: BTreeMap<String, Type>,
+    pub(crate) fn_params: BTreeMap<String, Vec<Type>>,
+    pub(crate) method_params: BTreeMap<String, Vec<Type>>,
+    pub(crate) const_types: BTreeMap<String, Type>,
+    pub(crate) const_values: BTreeMap<String, Expr>,
     pub(crate) model_name: Option<String>,
     pub(crate) returns_self: Option<bool>,
     pub(crate) depth: usize,
@@ -135,6 +139,10 @@ impl<'a> Reader<'a> {
             copies: BTreeSet::new(),
             fn_types: BTreeMap::new(),
             method_types: BTreeMap::new(),
+            fn_params: BTreeMap::new(),
+            method_params: BTreeMap::new(),
+            const_types: BTreeMap::new(),
+            const_values: BTreeMap::new(),
             model_name: None,
             returns_self: None,
             depth: 0,
@@ -177,6 +185,42 @@ impl<'a> Reader<'a> {
                 self.refuse(attribute.pound_token.span, &feature, ONE_BUILD);
             }
         }
+    }
+
+    pub(crate) fn refuse_constant_name(&mut self, ident: &Ident) -> bool {
+        let name = name_of(ident);
+        let why = if self.const_types.contains_key(&name) {
+            format!(
+                "`{name}` is a constant, so as a pattern it is the constant's value to compare \
+                 with and not a new name, and Rust refuses a pattern that can fail where it \
+                 must always match, in a `let`, a parameter and a closure's parameter (E0005): \
+                 give the value another name"
+            )
+        } else if ["Some", "None", "Ok", "Err"].contains(&name.as_str()) {
+            format!(
+                "`{name}` is a variant that Rust has in scope, so as a pattern it is that \
+                 variant and not a new name (E0530 or E0005): give the value another name"
+            )
+        } else {
+            return false;
+        };
+        self.refuse(ident.span(), &name, &why);
+        true
+    }
+
+    pub(crate) fn refuse_constant_name_of(&mut self, name: &str, span: Span) -> bool {
+        if ["Some", "None", "Ok", "Err"].contains(&name) {
+            self.refuse(
+                span,
+                name,
+                &format!(
+                    "`{name}` is a variant that Rust has in scope, so as a pattern it is that \
+                     variant and not a new name: give the value another name"
+                ),
+            );
+            return true;
+        }
+        false
     }
 
     pub(crate) fn too_deep(&mut self, at: impl FnOnce() -> Span) -> Option<Term> {

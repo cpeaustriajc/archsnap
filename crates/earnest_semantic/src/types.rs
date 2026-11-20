@@ -8,7 +8,7 @@ pub(crate) enum Type {
     Bool,
     Int(Option<IntType>),
     Text,
-    Variant,
+    Variant(String),
     Optional(Box<Type>),
     Record(Vec<(String, Type)>),
     Set(Box<Type>),
@@ -29,7 +29,7 @@ impl Type {
             Self::Bool => "a boolean",
             Self::Int(_) => "a number",
             Self::Text => "a text value",
-            Self::Variant => "an enum variant",
+            Self::Variant(_) => "an enum variant",
             Self::Optional(_) => "an optional value",
             Self::Record(_) => "a record",
             Self::Set(_) => "a set",
@@ -52,11 +52,11 @@ impl Type {
             | (Self::Bool, Self::Bool)
             | (Self::Int(_), Self::Int(_))
             | (Self::Text, Self::Text)
-            | (Self::Variant, Self::Variant)
             | (Self::Timer, Self::Timer)
             | (Self::Request, Self::Request)
             | (Self::Retry(_), Self::Retry(_))
             | (Self::Lock(None), Self::Lock(None)) => true,
+            (Self::Variant(left), Self::Variant(right)) => left == right,
             (Self::Optional(left), Self::Optional(right))
             | (Self::Set(left), Self::Set(right))
             | (Self::Lock(Some(left)), Self::Lock(Some(right)))
@@ -154,7 +154,7 @@ impl Type {
             | Self::Null
             | Self::Bool
             | Self::Text
-            | Self::Variant
+            | Self::Variant(_)
             | Self::Lock(None)
             | Self::Timer
             | Self::Request
@@ -322,10 +322,12 @@ mod tests {
 
     #[test]
     fn an_enum_variant_is_not_a_text() {
-        assert!(Type::Variant.fits(&Type::Variant));
-        assert!(!Type::Variant.fits(&Type::Text));
-        assert!(!Type::Text.fits(&Type::Variant));
-        assert!(!Type::Variant.fits(&Type::Int(None)));
+        let gate = Type::Variant("Gate".to_owned());
+        assert!(gate.fits(&gate));
+        assert!(!gate.fits(&Type::Text));
+        assert!(!Type::Text.fits(&gate));
+        assert!(!gate.fits(&Type::Int(None)));
+        assert!(!gate.fits(&Type::Variant("Door".to_owned())));
     }
 
     #[test]

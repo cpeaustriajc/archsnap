@@ -3,11 +3,15 @@
 //! `just tlc` puts at `target/tools/tla2tools.jar`, or the path in `EARNEST_TLC_JAR`.
 
 use std::env;
+use std::fmt;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use serde_json::Value;
 use tempfile::TempDir;
 
 const TLC_DEADLINE: Duration = Duration::from_mins(10);
@@ -138,5 +142,230 @@ fn confirm_says_tlc_cannot_tell_two_texts_above_ascii_apart() {
         LIMIT_OF_TEXTS,
         "with two states, the letters `Z` (U+005A) and `\u{15a}` (U+015A), which TLC takes for \
          one when it counts states",
+    );
+}
+
+const HOOKS: &str = r#"import { registerHooks } from "node:module";
+import { pathToFileURL } from "node:url";
+
+const library = pathToFileURL(process.env.EARNEST_MODEL_LIBRARY).href;
+
+registerHooks({
+	resolve(specifier, context, nextResolve) {
+		if (specifier === "@earnest/model") return { url: library, shortCircuit: true };
+		return nextResolve(specifier, context);
+	},
+});
+"#;
+
+const EXPLORE: &str = r#"import { explore } from "@earnest/model";
+
+const [modelFile, modelName] = process.argv.slice(2);
+const models = await import(modelFile);
+console.log(JSON.stringify(explore(models[modelName], { exports: models })));
+"#;
+
+fn repository() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("the repository root is two folders above this crate")
+}
+
+fn profile_folder() -> PathBuf {
+    let test = env::current_exe().expect("a test knows where its own binary is");
+    test.parent()
+        .and_then(Path::parent)
+        .expect("a test binary sits in `deps` under the folder of its build profile")
+        .to_path_buf()
+}
+
+fn earnest() -> &'static Path {
+    static BINARY: OnceLock<PathBuf> = OnceLock::new();
+    BINARY.get_or_init(|| {
+        let folder = profile_folder();
+        let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let mut build = Command::new(cargo);
+        build
+            .args(["build", "--locked", "--package", "earnest-cli"])
+            .args(["--bin", "earnest"])
+            .current_dir(repository());
+        if folder.file_name().is_some_and(|name| name == "release") {
+            build.arg("--release");
+        }
+        let compiled = build.output().expect("cargo starts");
+        assert!(
+            compiled.status.success(),
+            "the earnest binary does not build:\n{}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        let binary = folder.join(format!("earnest{}", env::consts::EXE_SUFFIX));
+        assert!(
+            binary.is_file(),
+            "the earnest binary is missing at {}",
+            binary.display()
+        );
+        binary
+    })
+}
+
+pub(crate) struct Sandbox {
+    folder: TempDir,
+}
+
+impl Sandbox {
+    pub(crate) fn with(files: &[(&str, &str)]) -> Self {
+        let folder = tempfile::Builder::new()
+            .prefix("earnest-break-it-")
+            .tempdir()
+            .expect("a temporary folder can be made");
+        let sandbox = Self { folder };
+        for (name, text) in files {
+            sandbox.write(name, text);
+        }
+        sandbox
+    }
+
+    fn path(&self) -> &Path {
+        self.folder.path()
+    }
+
+    pub(crate) fn write(&self, name: &str, text: &str) {
+        fs::write(self.path().join(name), text).expect("a file in the sandbox can be written");
+    }
+
+    fn finished(&self, command: &mut Command, what: &str) -> Report {
+        let output = command
+            .current_dir(self.path())
+            .output()
+            .unwrap_or_else(|error| panic!("{what} does not start: {error}"));
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let json = serde_json::from_str(&stdout).unwrap_or_else(|error| {
+            panic!("{what} did not print JSON ({error}):\n{stdout}\n{stderr}")
+        });
+        Report { json, stderr }
+    }
+
+    pub(crate) fn verify(&self, arguments: &[&str]) -> Report {
+        let mut command = Command::new(earnest());
+        command
+            .args(["verify", "--json", "--no-cache"])
+            .args(arguments);
+        self.finished(&mut command, "earnest verify")
+    }
+
+    pub(crate) fn explore(&self, file: &str, model: &str) -> Report {
+        let library = repository().join("npm/model/src/index.ts");
+        assert!(
+            library.is_file(),
+            "the TypeScript model library is missing at {}",
+            library.display()
+        );
+        self.write("hooks.mjs", HOOKS);
+        self.write("explore.mjs", EXPLORE);
+        let mut command = Command::new("node");
+        command
+            .args(["--import", "./hooks.mjs", "explore.mjs"])
+            .args([&format!("./{file}"), model])
+            .env("EARNEST_MODEL_LIBRARY", &library);
+        self.finished(&mut command, "node")
+    }
+}
+
+pub(crate) struct Report {
+    pub(crate) json: Value,
+    stderr: String,
+}
+
+impl fmt::Display for Report {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{:#}\n{}", self.json, self.stderr)
+    }
+}
+
+impl Report {
+    pub(crate) fn model(&self, name: &str) -> &Value {
+        self.json["models"]
+            .as_array()
+            .and_then(|models| models.iter().find(|model| model["name"] == name))
+            .unwrap_or(&Value::Null)
+    }
+}
+
+pub(crate) fn rule<'a>(model: &'a Value, id: &str) -> &'a Value {
+    model["rules"]
+        .as_array()
+        .and_then(|rules| rules.iter().find(|rule| rule["id"] == id))
+        .unwrap_or(&Value::Null)
+}
+
+struct Ran {
+    stdout: String,
+    stderr: String,
+    code: Option<i32>,
+}
+
+impl Ran {
+    fn said(&self) -> String {
+        format!("{}{}", self.stdout, self.stderr)
+    }
+}
+
+fn run_in_folder(files: &[(&str, &str)], arguments: &[&str]) -> Ran {
+    let binary = binary();
+    let folder = TempDir::new().expect("a temporary folder can be made");
+    for (name, text) in files {
+        let path = folder.path().join(name);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("a folder in the sandbox can be made");
+        }
+        fs::write(path, text).expect("a file in the sandbox can be written");
+    }
+    let output = Command::new(binary)
+        .args(arguments)
+        .current_dir(folder.path())
+        .output()
+        .expect("earnest starts");
+    Ran {
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        code: output.status.code(),
+    }
+}
+
+#[test]
+fn tlc_judges_a_quantifier_that_an_early_value_decides_as_the_checker_does() {
+    let jar = tlc_jar();
+    assert!(
+        jar.is_file(),
+        "TLC is missing at {}: `just tlc` downloads it to target/tools, and {TLC_JAR_VARIABLE} \
+         names another copy",
+        jar.display()
+    );
+    let jar = jar.to_string_lossy().into_owned();
+    let file = "sweep.model.ts";
+    let source = include_str!("../../models/sixth/sweep.model.ts");
+    let sandbox = Sandbox::with(&[(file, source)]);
+    let checked = sandbox.verify(&[]);
+    let explored = sandbox.explore(file, "Sweep");
+    for (id, verdict) in [("wide", "broken"), ("some", "holds")] {
+        assert_eq!(
+            rule(checked.model("Sweep"), id)["verdict"],
+            verdict,
+            "{checked}"
+        );
+        assert_eq!(rule(&explored.json, id)["verdict"], verdict, "{explored}");
+    }
+    let confirmed = run_in_folder(&[(file, source)], &["confirm", "--tlc", &jar, file]);
+    assert!(
+        confirmed.code == Some(0) && confirmed.stdout.starts_with("same"),
+        "`m.forall(Digit, (x) => m.div(6, 3 - x) > 3 + s.n)` is false at `x = 1`, so the \
+         checker and Node stop there and `wide` is broken in the start state; `m.exists` with \
+         `>= 3 - s.n` is true at `x = 1`, so `some` holds. `m.div(6, 0)` at `x = 3` is never \
+         evaluated. The README says TLC finds the same verdict for each rule, but the module asks \
+         that the body has a value for every `x`, so TLC says `unknown` for both and `confirm` \
+         exits 1\n{}",
+        confirmed.said()
     );
 }

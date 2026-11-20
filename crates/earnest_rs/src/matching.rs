@@ -13,11 +13,16 @@ enum Pick {
 
 type Alternative = Vec<Pick>;
 
+type Scrutinee = (String, Term, Vec<String>, String);
+
+const DEPTH_OF_CONSTANTS: usize = 16;
+
 struct Matched {
-    scrutinees: Vec<(String, Term, Vec<String>)>,
+    scrutinees: Vec<Scrutinee>,
     arms: Vec<(Vec<Alternative>, Term)>,
 }
 
+const COMPARED: &str = "$compared";
 const NAMES: [&str; 2] = ["$match0", "$match1"];
 
 const NEEDS_ENUM: &str = "`match` is read on a value of an enum that derives `Domain`, or on a \
@@ -118,7 +123,7 @@ impl Reader<'_> {
         }
     }
 
-    fn scrutinees(&mut self, value: &Expr) -> Option<Vec<(String, Term, Vec<String>)>> {
+    fn scrutinees(&mut self, value: &Expr) -> Option<Vec<Scrutinee>> {
         let parts: Vec<&Expr> = match unwrapped(value) {
             Expr::Tuple(pair) if pair.elems.len() == 2 => pair.elems.iter().collect(),
             Expr::Tuple(pair) => {
@@ -135,12 +140,14 @@ impl Reader<'_> {
         let mut found = Vec::with_capacity(parts.len());
         for (index, part) in parts.into_iter().enumerate() {
             let typed = self.static_type(part);
-            let variants = typed
+            let owner = typed
                 .as_ref()
                 .filter(|ty| inside_option(ty).is_none())
-                .and_then(path_name)
-                .and_then(|name| self.enums.get(&name).cloned());
-            let Some(variants) = variants else {
+                .and_then(path_name);
+            let variants = owner
+                .as_ref()
+                .and_then(|name| self.enums.get(name).cloned());
+            let (Some(variants), Some(owner)) = (variants, owner) else {
                 let feature = self.short_text(part.span());
                 let message = if typed.is_some() {
                     NEEDS_ENUM
@@ -154,7 +161,7 @@ impl Reader<'_> {
                 return None;
             };
             let term = self.term(part);
-            found.push((NAMES[index].to_owned(), term, variants));
+            found.push((NAMES[index].to_owned(), term, variants, owner));
         }
         Some(found)
     }
@@ -162,7 +169,7 @@ impl Reader<'_> {
     fn alternatives(
         &mut self,
         pattern: &Pat,
-        scrutinees: &[(String, Term, Vec<String>)],
+        scrutinees: &[Scrutinee],
     ) -> Option<Vec<Alternative>> {
         let cases: Vec<&Pat> = match pattern {
             Pat::Or(cases) => cases.cases.iter().collect(),
@@ -175,11 +182,7 @@ impl Reader<'_> {
         Some(listed)
     }
 
-    fn alternative(
-        &mut self,
-        pattern: &Pat,
-        scrutinees: &[(String, Term, Vec<String>)],
-    ) -> Option<Vec<Alternative>> {
+    fn alternative(&mut self, pattern: &Pat, scrutinees: &[Scrutinee]) -> Option<Vec<Alternative>> {
         match (pattern, scrutinees) {
             (Pat::Paren(inner), _) => self.alternative(&inner.pat, scrutinees),
             (Pat::Tuple(pair), [_, _]) if pair.elems.len() == 2 => {
@@ -215,11 +218,7 @@ impl Reader<'_> {
         }
     }
 
-    fn either_of(
-        &mut self,
-        pattern: &Pat,
-        scrutinee: &(String, Term, Vec<String>),
-    ) -> Option<Vec<Pick>> {
+    fn either_of(&mut self, pattern: &Pat, scrutinee: &Scrutinee) -> Option<Vec<Pick>> {
         match pattern {
             Pat::Or(cases) => {
                 let mut options = Vec::with_capacity(cases.cases.len());
@@ -243,11 +242,7 @@ impl Reader<'_> {
         }
     }
 
-    fn variant_of(
-        &mut self,
-        pattern: &Pat,
-        scrutinee: &(String, Term, Vec<String>),
-    ) -> Option<Pick> {
+    fn variant_of(&mut self, pattern: &Pat, scrutinee: &Scrutinee) -> Option<Pick> {
         let span = pattern.span();
         let feature = self.short_text(span);
         match pattern {
@@ -260,9 +255,7 @@ impl Reader<'_> {
                     self.refuse(span, &feature, "name a variant as `Enum::Variant`");
                     return None;
                 };
-                if scrutinee.2.iter().any(|known| known == variant)
-                    && self.owner_of(&scrutinee.2) == Some((*owner).to_owned())
-                {
+                if scrutinee.2.iter().any(|known| known == variant) && scrutinee.3 == *owner {
                     return Some(Pick::Variant((*variant).to_owned()));
                 }
                 self.refuse(
@@ -270,6 +263,25 @@ impl Reader<'_> {
                     &feature,
                     "this is not a variant of the enum being matched, and Rust refuses the \
                      arm (E0308 or E0599)",
+                );
+                None
+            }
+            Pat::Ident(named)
+                if named.subpat.is_none()
+                    && named.by_ref.is_none()
+                    && named.mutability.is_none()
+                    && self.is_constant_name(&name_of(&named.ident)) =>
+            {
+                let constant = name_of(&named.ident);
+                if let Some(variant) = self.constant_variant(&constant, &scrutinee.3, 0) {
+                    return Some(Pick::Variant(variant));
+                }
+                self.refuse(
+                    span,
+                    &feature,
+                    "this constant is a pattern that compares with its value, and the checker \
+                     reads it only where the constant is written as one variant of the enum \
+                     being matched, `const NAME: Enum = Enum::Variant;`",
                 );
                 None
             }
@@ -305,11 +317,32 @@ impl Reader<'_> {
         }
     }
 
-    fn owner_of(&self, variants: &[String]) -> Option<String> {
-        self.enums
-            .iter()
-            .find(|(_, known)| known.as_slice() == variants)
-            .map(|(name, _)| name.clone())
+    fn constant_variant(&self, name: &str, owner: &str, depth: usize) -> Option<String> {
+        if depth > DEPTH_OF_CONSTANTS {
+            return None;
+        }
+        let declared = self.const_types.get(name)?;
+        if path_name(declared).as_deref() != Some(owner) {
+            return None;
+        }
+        let Expr::Path(value) = unwrapped(self.const_values.get(name)?) else {
+            return None;
+        };
+        let text = path_text(&value.path);
+        let parts: Vec<&str> = text.split("::").collect();
+        match parts.as_slice() {
+            [other] => self.constant_variant(other, owner, depth.saturating_add(1)),
+            [enum_name, variant]
+                if *enum_name == owner
+                    && self
+                        .enums
+                        .get(owner)
+                        .is_some_and(|known| known.iter().any(|each| each == variant)) =>
+            {
+                Some((*variant).to_owned())
+            }
+            _ => None,
+        }
     }
 
     fn build(&mut self, matched: Matched, span: Span) -> Term {
@@ -350,7 +383,7 @@ impl Reader<'_> {
             });
         }
         let mut result = chain.unwrap_or_else(|| at(span, TermKind::Null));
-        for (name, value, _) in scrutinees.into_iter().rev() {
+        for (name, value, _, _) in scrutinees.into_iter().rev() {
             result = at(
                 span,
                 TermKind::Bind {
@@ -372,9 +405,10 @@ impl Reader<'_> {
                 "`if let` is read as `if let Some(x) = value { .. } else { .. }` on an `Option`",
             );
         };
+        let single = some.elems.len() == 1;
         let plain_name = match some.elems.first() {
             Some(Pat::Ident(named))
-                if some.elems.len() == 1
+                if single
                     && named.subpat.is_none()
                     && named.by_ref.is_none()
                     && named.mutability.is_none() =>
@@ -383,7 +417,7 @@ impl Reader<'_> {
             }
             _ => None,
         };
-        let (true, Some(name)) = (some.path.is_ident("Some"), plain_name) else {
+        let (true, Some(written)) = (some.path.is_ident("Some"), plain_name) else {
             return self.nothing(
                 some.span(),
                 "if let",
@@ -391,13 +425,22 @@ impl Reader<'_> {
                  `None` write `is_none()`, and name the value to use it",
             );
         };
+        let constant = self.is_constant_name(&written).then(|| written.clone());
+        let name = if constant.is_some() {
+            COMPARED.to_owned()
+        } else {
+            if self.refuse_constant_name_of(&written, some.span()) {
+                return at(span, TermKind::Null);
+            }
+            written
+        };
         self.refuse_borrowed_option(&binding.expr);
         let value = self.term(&binding.expr);
         let ty = self
             .static_type(&binding.expr)
             .and_then(|found| inside_option(&found).cloned());
         self.bound.push(plain(name.clone(), ty));
-        let present = self.value_of(&branch.then_branch);
+        let mut present = self.value_of(&branch.then_branch);
         self.bound.pop();
         let absent = match &branch.else_branch {
             Some((_, otherwise)) => self.term(otherwise),
@@ -407,6 +450,20 @@ impl Reader<'_> {
                 "an `if let` used as a value needs an `else`: write `if let Some(x) = value { a } else { b }`",
             ),
         };
+        if let Some(constant) = constant {
+            let equal = at(
+                span,
+                TermKind::Binary(
+                    Binary::Equal,
+                    Box::new(at(span, TermKind::Name(name.clone()))),
+                    Box::new(at(span, TermKind::Name(constant))),
+                ),
+            );
+            present = at(
+                span,
+                TermKind::Choose(Box::new(equal), Box::new(present), Box::new(absent.clone())),
+            );
+        }
         at(
             span,
             TermKind::Unpack {
@@ -420,15 +477,11 @@ impl Reader<'_> {
     }
 }
 
-fn anyone(
-    alternatives: &[Alternative],
-    scrutinees: &[(String, Term, Vec<String>)],
-    span: Span,
-) -> Term {
+fn anyone(alternatives: &[Alternative], scrutinees: &[Scrutinee], span: Span) -> Term {
     let mut tests: Vec<Term> = Vec::new();
     for alternative in alternatives {
         let mut parts: Vec<Term> = Vec::new();
-        for (variant, (name, _, _)) in alternative.iter().zip(scrutinees) {
+        for (variant, (name, _, _, owner)) in alternative.iter().zip(scrutinees) {
             let Pick::Variant(variant) = variant else {
                 continue;
             };
@@ -437,7 +490,13 @@ fn anyone(
                 TermKind::Binary(
                     Binary::Equal,
                     Box::new(at(span, TermKind::Name(name.clone()))),
-                    Box::new(at(span, TermKind::Variant(variant.clone()))),
+                    Box::new(at(
+                        span,
+                        TermKind::Variant {
+                            owner: owner.clone(),
+                            name: variant.clone(),
+                        },
+                    )),
                 ),
             ));
         }
@@ -464,7 +523,11 @@ fn anyone(
 }
 
 fn missing_case(matched: &Matched) -> Option<String> {
-    let lists: Vec<&Vec<String>> = matched.scrutinees.iter().map(|(_, _, list)| list).collect();
+    let lists: Vec<&Vec<String>> = matched
+        .scrutinees
+        .iter()
+        .map(|(_, _, list, _)| list)
+        .collect();
     let mut combinations: Vec<Vec<&String>> = vec![Vec::new()];
     for list in lists {
         combinations = combinations
