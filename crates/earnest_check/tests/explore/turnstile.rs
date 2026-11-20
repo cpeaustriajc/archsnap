@@ -46,6 +46,7 @@ fn action(id: &str, label: &str, changed: &str, value: Term) -> ActionDraft {
         inputs: Vec::new(),
         guard: Some(body(binary(Binary::And, locked, not(field("paid"))))),
         change: body(term(TermKind::Record {
+            owner: None,
             base: None,
             fields: vec![(changed.to_owned(), value)],
         })),

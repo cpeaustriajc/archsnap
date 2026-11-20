@@ -26,6 +26,15 @@ impl Start for Request {
 }
 
 impl Request {
+    pub(super) fn stage_name(self) -> &'static str {
+        match self.stage {
+            Stage::Idle => "idle",
+            Stage::Pending => "pending",
+            Stage::Succeeded => "succeeded",
+            Stage::Failed => "failed",
+        }
+    }
+
     /// Whether the request was never sent, or was reset.
     pub fn is_idle(&self) -> bool {
         self.stage == Stage::Idle

@@ -458,13 +458,14 @@ A quantifier stops at the first item that decides it, in the checker and in Node
 `some`) and in Rust (`forall` and `exists` are iterators that stop), so a fault in a later item
 never happens. The items come in the order of the declaration for `m.forall(T, f)`,
 `m.exists(T, f)`, `forall::<T>(f)` and `exists::<T>(f)` (`m.oneOf([3, 1, 2])` tries 3, then 1,
-then 2, in all three), in the order of the items for a sequence or a queue, and in the order of the
-set for a set: numbers ascending, `false` before `true`. The module judges a quantifier in the
-same order: an item is judged when no item before it decides, so a fault in an item that comes
-after the one that decides makes no difference, and TLC's verdict is the checker's. A quantifier
-over a set of other items than numbers and booleans whose test can fault is still judged for every
-item: the order of such a set is not written in the module, and TLC can say `unknown` where the
-checker has a verdict.
+then 2, in all three), in the order of the items for a sequence or a queue, and in the order of a
+set for a set (see "The order of a set and a map"). The module judges a quantifier in that
+order for every kind of item: an item is judged when no item before it decides, so a fault in an
+item that comes after the one that decides makes no difference, and TLC's verdict is the
+checker's. For numbers and booleans the order is TLC's own. For texts the module defines
+`TextRank`, the place of a text among every text of the model by code point, and for the other
+kinds a test that one value comes before another, written out item by item. A value of the
+quantifier is judged only where its test has a value, whatever order TLC takes the items in.
 
 A rule `id` is the invariant `Rule_id`, and the configuration names one invariant for each rule.
 A rule that can't be evaluated in a state is true there in `Rule_id`, as an action that can't be
@@ -961,8 +962,10 @@ types, so a variant of one never compares with, is assigned to, is matched again
 for a value of the other, and a `match` on `self.beta` takes the variants of `Beta` only. The
 reader knows the type of each enum and each record it can type a value as, and the lowering
 keeps the type of each enum on every variant and every enum field, so an enum is checked where
-the reader can't tell the type of a value as well; the lowering reads two records of the same
-fields as one type, so two records are told apart by the reader alone. The same check is made on the type a value has where Rust
+the reader can't tell the type of a value as well. The lowering keeps the name of each struct on
+every record too, a literal, a field and an input, so a record of another struct with the same
+fields is refused where the reader can't type a value as well (E0308); a TypeScript record has no
+name, and two records with the same fields are one type there. The same check is made on the type a value has where Rust
 fixes it, by what the reader can tell of each expression: the two sides of `==`, `!=`, `<`,
 `<=`, `>`, `>=` and of arithmetic, the value of a field in `Self { .. }` or a record, a
 `#[initial(..)]` and a constant, a `let` with a type, an argument of a helper, a function or a
@@ -1175,6 +1178,42 @@ or a `when`. JavaScript's operators can't be intercepted from a library, so `exp
 value JavaScript computes there, where `earnest verify` reports the fault. Only a next state
 that holds such a number is seen. `earnest verify` is the authority on these; see
 `npm/model/README.md`.
+
+### The order of a set and a map
+
+The checker, Node and Rust walk the items of a set and the keys of a map in one order, which does
+not depend on the order the items were written or added in, on the order the checker first met a
+text in, on a hash or on `--jobs`. A quantifier (`m.exists(s.items, f)`, `Set::some`), a
+`filter`, the printed form of a set in a path, in `--json`, in a chart and in a report, and the
+TLA+ export all follow it. Each kind of item has its own rule:
+
+| Item | Order |
+|---|---|
+| Number | Ascending |
+| Boolean | `false` before `true` |
+| Text, and an enum value | By code point of the text, the order of its UTF-8 bytes: `"B"` before `"a"`, and a character past U+FFFF after one from U+E000 to U+FFFF. An enum's values go by the names of its variants, not the order they are declared in: `enum Fruit { Pear, Apple }` walks `Apple` first |
+| Optional | `null` (`None`) before every present value, which go in their own order |
+| Record | Field by field, in the order of the field names by code point, each in its own order. A struct's fields are not walked in the order declared |
+| Set, sequence, queue | Item by item in the item's order, and one that is the start of another comes first |
+| Map | Entry by entry, the key first and then the value |
+| Timer, request | By the text of the stage: `"fired"`, `"idle"`, `"running"` |
+| Retry | By attempts; a lock without an owner by `false` (free) before `true`, and a lock with an owner by its holder |
+
+A record prints its fields in the order of their names too: `{lit: true, row: 1}`. A declared
+type is not a set: `m.forall(T, f)` and `forall::<T>(f)` try the values of `T` in the order it
+lists them, which is the order of the declaration for an enum, `m.oneOf` and `#[one_of]`, the
+fields in the order declared with the first one changing slowest for a record, and every subset
+built up one item at a time for a set. A sequence and a queue are walked first item first.
+
+In Rust the library's `Set` and `Map` hold their items in this order, by the trait
+`earnest::model::Walk`, which `#[derive(Domain)]` implements for an enum and a struct; a hand-written
+`Ord` does not change it. `Report::report` prints a set, a map, a sequence and a queue as the
+checker does, so a test can compare the text of a state with what `earnest verify` prints for it.
+The fixtures `tasks/conformance/agreement/walk_text.*` and `walk_shapes.*`, a TypeScript model and
+its Rust twin each, put every kind in a set in an order that is neither the declared one nor the
+order of the checker's first meeting, and ask for each one a rule that faults on every item but
+one, so a rule holds only where the walk reaches that item first. The checker, Node, the Rust
+model built with `rustc` and TLC give the same verdict for each rule and the same start state.
 
 ## Layout
 

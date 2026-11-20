@@ -148,6 +148,11 @@ pub enum TermKind {
     Choose(Box<Term>, Box<Term>, Box<Term>),
     /// A record literal. As the result of an action it lists the fields that change.
     Record {
+        /// The struct the literal builds, in Rust. Two structs are two types even when their
+        /// fields are named alike, so a record of one never fits a value of the other.
+        /// `None` in TypeScript, where a record is its fields and nothing else, and for the
+        /// state of the model itself.
+        owner: Option<String>,
         /// The record that is spread in: `...r` in TypeScript, `..r.clone()` in Rust.
         base: Option<Box<Term>>,
         /// The fields written out, in source order.
@@ -316,7 +321,13 @@ pub enum ShapeKind {
     /// `.optional()` or `Option<T>`.
     Optional(Box<Shape>),
     /// `m.record({...})` or a Rust struct, as its fields in source order.
-    Record(Vec<(String, Shape)>),
+    Record {
+        /// The struct's name in Rust, which makes it a type of its own. `None` in TypeScript,
+        /// where two records with the same fields are one type.
+        owner: Option<String>,
+        /// The fields and their shapes.
+        fields: Vec<(String, Shape)>,
+    },
     /// `m.set(T)` or `Set<T>`.
     Set(Box<Shape>),
     /// `m.map(K, V)` or `Map<K, V>`, as the key's shape then the value's.

@@ -115,7 +115,7 @@ fn an_action_takes_its_inputs_from_parameters_and_its_guard_from_every_require()
     let TermKind::Wrap(result) = &arrive.change.term.kind else {
         panic!("`Some(..)` wraps the result: {:?}", arrive.change);
     };
-    let TermKind::Record { base, fields } = &result.kind else {
+    let TermKind::Record { base, fields, .. } = &result.kind else {
         panic!("`Self {{ .. }}` is a record: {result:?}");
     };
     assert_eq!(
@@ -234,9 +234,18 @@ fn the_party_model_gives_the_result_worked_out_by_hand() {
 #[test]
 fn records_options_and_choices_over_a_type_give_the_result_worked_out_by_hand() {
     let draft = only_draft("ticket.rs", TICKET);
-    let ShapeKind::Record(seat) = &draft.fields[0].shape.kind else {
+    let ShapeKind::Record {
+        owner,
+        fields: seat,
+    } = &draft.fields[0].shape.kind
+    else {
         panic!("a struct that derives `Domain` is a record");
     };
+    assert_eq!(
+        owner.as_deref(),
+        Some("Seat"),
+        "a struct is a type of its own, with the name it is declared with"
+    );
     assert_eq!(seat[0].0, "row", "the record's first field");
     assert_eq!(
         seat[0].1.kind,

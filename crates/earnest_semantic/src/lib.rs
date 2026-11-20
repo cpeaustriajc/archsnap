@@ -57,7 +57,12 @@ struct Shaped {
 /// draft's file. With any problem there is no model: a partly understood model would be
 /// checked against the wrong rules.
 pub fn lower(draft: &Draft) -> Result<Model, Vec<Problem>> {
-    let mut lowerer = Lowerer::reading(draft);
+    let met = lowered(draft, Symbols::default())?;
+    lowered(draft, met.symbols.alphabetical())
+}
+
+fn lowered(draft: &Draft, symbols: Symbols) -> Result<Model, Vec<Problem>> {
+    let mut lowerer = Lowerer::reading(draft, symbols);
     let parts = lowerer.parts();
     lowerer.finish(parts)
 }
@@ -79,7 +84,16 @@ pub fn lower_with_earlier(
     draft: &Draft,
     earlier: &Draft,
 ) -> Result<(Model, Vec<Option<Rule>>), Vec<Problem>> {
-    let mut lowerer = Lowerer::reading(draft);
+    let (met, _) = lowered_with_earlier(draft, earlier, Symbols::default())?;
+    lowered_with_earlier(draft, earlier, met.symbols.alphabetical())
+}
+
+fn lowered_with_earlier(
+    draft: &Draft,
+    earlier: &Draft,
+    symbols: Symbols,
+) -> Result<(Model, Vec<Option<Rule>>), Vec<Problem>> {
+    let mut lowerer = Lowerer::reading(draft, symbols);
     let parts = lowerer.parts();
     if !lowerer.problems.is_empty() {
         return Err(lowerer.problems);
@@ -104,10 +118,10 @@ struct Parts {
 }
 
 impl<'a> Lowerer<'a> {
-    fn reading(draft: &'a Draft) -> Self {
+    fn reading(draft: &'a Draft, symbols: Symbols) -> Self {
         Self {
             draft,
-            symbols: Symbols::default(),
+            symbols,
             problems: Vec::new(),
             fields: Vec::new(),
             in_flight: Vec::new(),
@@ -333,7 +347,7 @@ impl Lowerer<'_> {
     }
 
     fn changes_of(&mut self, term: &Term, scope: &mut Scope) -> Lowering<Vec<Option<Expr>>> {
-        if let TermKind::Record { base, fields } = &term.kind {
+        if let TermKind::Record { base, fields, .. } = &term.kind {
             return self.changed_fields(base.as_deref(), fields, scope);
         }
         if let TermKind::Wrap(inner) | TermKind::Updates(inner) = &term.kind {
@@ -588,7 +602,7 @@ impl Lowerer<'_> {
                     Type::optional(shaped.ty),
                 ))
             }
-            ShapeKind::Record(fields) => self.record_shape(fields),
+            ShapeKind::Record { owner, fields } => self.record_shape(owner.as_deref(), fields),
             ShapeKind::Set(item) => {
                 let shaped = self.shape(item)?;
                 Ok(Shaped {
@@ -713,7 +727,11 @@ impl Lowerer<'_> {
         })
     }
 
-    fn record_shape(&mut self, fields: &[(String, Shape)]) -> Lowering<Shaped> {
+    fn record_shape(
+        &mut self,
+        owner: Option<&str>,
+        fields: &[(String, Shape)],
+    ) -> Lowering<Shaped> {
         let mut domains = Vec::with_capacity(fields.len());
         let mut types = Vec::with_capacity(fields.len());
         for (name, inner) in fields {
@@ -721,8 +739,10 @@ impl Lowerer<'_> {
             domains.push((self.symbols.intern(name), shaped.domain));
             types.push((name.clone(), shaped.ty));
         }
-        domains.sort_by_key(|(sym, _)| *sym);
-        Ok(plain(Domain::Record(domains), Type::record(types)))
+        Ok(plain(
+            Domain::Record(domains),
+            Type::named(owner.map(str::to_owned), types),
+        ))
     }
 
     fn one_of(&mut self, options: &[Term], place: Place) -> Lowering<Shaped> {

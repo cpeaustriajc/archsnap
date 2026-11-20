@@ -1,3 +1,4 @@
+use super::walk::{Walk, Walked};
 use super::{Set, Start};
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
@@ -6,19 +7,24 @@ use std::fmt;
 /// A map from keys to values, with at most one value for a key. As a model field it starts
 /// empty.
 ///
-/// `Debug` prints the entries in the keys' `Ord` order: `{Pen: 1, Ink: 2}`.
+/// The entries are walked, and `Debug` prints them, in the order of [`Walk`] of the keys:
+/// `{Ink: 2, Pen: 1}`. That is the order of the names of an enum's variants, not the order they
+/// are declared in.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Map<K, V> {
-    entries: BTreeMap<K, V>,
+pub struct Map<K: Walk, V> {
+    entries: BTreeMap<Walked<K>, V>,
 }
 
-impl<K: fmt::Debug, V: fmt::Debug> fmt::Debug for Map<K, V> {
+impl<K: Walk + fmt::Debug, V: fmt::Debug> fmt::Debug for Map<K, V> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_map().entries(&self.entries).finish()
+        formatter
+            .debug_map()
+            .entries(self.entries.iter().map(|(key, value)| (&key.0, value)))
+            .finish()
     }
 }
 
-impl<K, V> Default for Map<K, V> {
+impl<K: Walk, V> Default for Map<K, V> {
     fn default() -> Self {
         Self {
             entries: BTreeMap::new(),
@@ -26,36 +32,39 @@ impl<K, V> Default for Map<K, V> {
     }
 }
 
-impl<K, V> Start for Map<K, V> {
+impl<K: Walk, V> Start for Map<K, V> {
     fn starts() -> Vec<Self> {
         vec![Self::default()]
     }
 }
 
-impl<K: Clone + Ord, V: Clone> Map<K, V> {
+impl<K: Clone + Walk, V: Clone> Map<K, V> {
     /// The map of the listed pairs: `Map::of([(Item::Pen, 1)])`. When a key is listed twice
     /// its last value is kept, and `Map::of([])` is the empty map.
     pub fn of(entries: impl IntoIterator<Item = (K, V)>) -> Self {
         Self {
-            entries: entries.into_iter().collect(),
+            entries: entries
+                .into_iter()
+                .map(|(key, value)| (Walked(key), value))
+                .collect(),
         }
     }
 
     /// Whether the map has a value for `key`.
     pub fn has(&self, key: impl Borrow<K>) -> bool {
-        self.entries.contains_key(key.borrow())
+        self.entries.contains_key(&Walked(key.borrow().clone()))
     }
 
     /// The value for `key`, or `None` when the map has none.
     pub fn get(&self, key: impl Borrow<K>) -> Option<V> {
-        self.entries.get(key.borrow()).cloned()
+        self.entries.get(&Walked(key.borrow().clone())).cloned()
     }
 
     /// This map with `value` for `key`, in place of any value `key` had.
     #[must_use]
     pub fn set(&self, key: K, value: V) -> Self {
         let mut entries = self.entries.clone();
-        entries.insert(key, value);
+        entries.insert(Walked(key), value);
         Self { entries }
     }
 
@@ -63,7 +72,7 @@ impl<K: Clone + Ord, V: Clone> Map<K, V> {
     #[must_use]
     pub fn delete(&self, key: impl Borrow<K>) -> Self {
         let mut entries = self.entries.clone();
-        entries.remove(key.borrow());
+        entries.remove(&Walked(key.borrow().clone()));
         Self { entries }
     }
 
@@ -80,5 +89,9 @@ impl<K: Clone + Ord, V: Clone> Map<K, V> {
     /// The keys that have a value.
     pub fn keys(&self) -> Set<K> {
         Set::from_sorted(self.entries.keys().cloned().collect())
+    }
+
+    pub(super) fn entries_walked(&self) -> impl Iterator<Item = (&K, &V)> {
+        self.entries.iter().map(|(key, value)| (&key.0, value))
     }
 }

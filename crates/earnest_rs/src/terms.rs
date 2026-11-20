@@ -712,7 +712,15 @@ impl Reader<'_> {
             }
         }
         let base = literal.rest.as_ref().map(|rest| Box::new(self.term(rest)));
-        at(span, TermKind::Record { base, fields })
+        let owner = self.records.contains_key(&name).then_some(name);
+        at(
+            span,
+            TermKind::Record {
+                owner,
+                base,
+                fields,
+            },
+        )
     }
 
     pub(crate) fn refuse_macro(&mut self, called: &Macro) -> Term {

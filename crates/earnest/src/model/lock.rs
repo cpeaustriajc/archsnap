@@ -1,5 +1,6 @@
-use super::{Domain, Start};
+use super::{Domain, Start, Walk};
 use std::borrow::Borrow;
+use std::cmp::Ordering;
 
 /// The owner of a [`Lock`] that does not say who holds it. A model never names it: write the
 /// field type as `Lock`.
@@ -24,6 +25,12 @@ impl<Owner> Default for Lock<Owner> {
 impl<Owner> Start for Lock<Owner> {
     fn starts() -> Vec<Self> {
         vec![Self::default()]
+    }
+}
+
+impl<Owner: Walk> Walk for Lock<Owner> {
+    fn walk_cmp(&self, other: &Self) -> Ordering {
+        self.holder.walk_cmp(&other.holder)
     }
 }
 

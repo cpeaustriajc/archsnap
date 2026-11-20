@@ -8,6 +8,7 @@ mod listed;
 mod parts;
 mod replays;
 mod views;
+mod walk;
 
 use earnest::model::Domain;
 

@@ -6,8 +6,9 @@ use std::sync::Arc;
 /// An interned name: a text value, or the name of a record field.
 ///
 /// Only the [`Symbols`] that handed it out can turn it back into text. Two names from the same
-/// `Symbols` are equal exactly when their text is equal, and they sort in the order they were
-/// first interned, not alphabetically.
+/// `Symbols` are equal exactly when their text is equal. They sort in the order they were first
+/// interned, so a `Symbols` made by [`Symbols::alphabetical`] sorts them by their text, in the
+/// order of the code points, which is how a set, a map and a record are ordered everywhere.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 pub struct Sym(u32);
 
@@ -104,6 +105,29 @@ impl Symbols {
         self.names.push(text.to_owned());
         self.ids.insert(text.to_owned(), sym);
         sym
+    }
+
+    /// A `Symbols` that holds the same texts with the names handed out in the order of their
+    /// code points, which is the order of Rust's `str` and of the UTF-8 bytes.
+    ///
+    /// Intern every text into the result in any order and all the names sort by their text, so
+    /// the order of a set, of a map's keys and of a record's fields does not depend on the order
+    /// the texts were first met in. Names of the old `Symbols` mean something else in the new
+    /// one; intern the texts again.
+    #[must_use]
+    pub fn alphabetical(&self) -> Self {
+        let mut texts: Vec<&String> = self.names.iter().collect();
+        texts.sort();
+        let mut sorted = Self::default();
+        for text in texts {
+            sorted.intern(text);
+        }
+        sorted
+    }
+
+    /// Every text interned so far, in the order the names were handed out.
+    pub fn texts(&self) -> impl Iterator<Item = &str> {
+        self.names.iter().map(String::as_str)
     }
 
     /// The name for `text` if it was interned before. Unlike [`Symbols::intern`], it adds

@@ -1,24 +1,29 @@
 use super::Start;
+use super::walk::{Walk, Walked};
 use std::borrow::Borrow;
 use std::collections::BTreeSet;
 use std::fmt;
 
 /// A set of distinct items. As a model field it starts empty.
 ///
-/// Two sets with the same items are equal, whatever order the items were added in. `Debug`
-/// prints the items in their `Ord` order: `{Ann, Bob}`.
+/// Two sets with the same items are equal, whatever order the items were added in. The items
+/// are walked, and `Debug` prints them, in the order of [`Walk`]: `{Ann, Bob}`. That is the
+/// order of the names of an enum's variants, not the order they are declared in.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Set<T> {
-    items: BTreeSet<T>,
+pub struct Set<T: Walk> {
+    items: BTreeSet<Walked<T>>,
 }
 
-impl<T: fmt::Debug> fmt::Debug for Set<T> {
+impl<T: Walk + fmt::Debug> fmt::Debug for Set<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_set().entries(&self.items).finish()
+        formatter
+            .debug_set()
+            .entries(self.items.iter().map(|item| &item.0))
+            .finish()
     }
 }
 
-impl<T> Default for Set<T> {
+impl<T: Walk> Default for Set<T> {
     fn default() -> Self {
         Self {
             items: BTreeSet::new(),
@@ -26,31 +31,31 @@ impl<T> Default for Set<T> {
     }
 }
 
-impl<T> Start for Set<T> {
+impl<T: Walk> Start for Set<T> {
     fn starts() -> Vec<Self> {
         vec![Self::default()]
     }
 }
 
-impl<T: Clone + Ord> Set<T> {
+impl<T: Clone + Walk> Set<T> {
     /// The set of the listed items: `Set::of([Guest::Ann, Guest::Bob])`. An item listed twice
     /// is held once, and `Set::of([])` is the empty set.
     pub fn of(items: impl IntoIterator<Item = T>) -> Self {
         Self {
-            items: items.into_iter().collect(),
+            items: items.into_iter().map(Walked).collect(),
         }
     }
 
     /// Whether `item` is in the set.
     pub fn has(&self, item: impl Borrow<T>) -> bool {
-        self.items.contains(item.borrow())
+        self.items.contains(&Walked(item.borrow().clone()))
     }
 
     /// This set with `item` in it. Adding an item the set already has gives an equal set.
     #[must_use]
     pub fn add(&self, item: T) -> Self {
         let mut items = self.items.clone();
-        items.insert(item);
+        items.insert(Walked(item));
         Self { items }
     }
 
@@ -58,7 +63,7 @@ impl<T: Clone + Ord> Set<T> {
     #[must_use]
     pub fn delete(&self, item: impl Borrow<T>) -> Self {
         let mut items = self.items.clone();
-        items.remove(item.borrow());
+        items.remove(&Walked(item.borrow().clone()));
         Self { items }
     }
 
@@ -112,12 +117,12 @@ impl<T: Clone + Ord> Set<T> {
 
     /// Whether `test` is true for every item. True for the empty set.
     pub fn every(&self, test: impl Fn(T) -> bool) -> bool {
-        self.items.iter().cloned().all(test)
+        self.items.iter().map(|item| item.0.clone()).all(test)
     }
 
     /// Whether `test` is true for at least one item. False for the empty set.
     pub fn some(&self, test: impl Fn(T) -> bool) -> bool {
-        self.items.iter().cloned().any(test)
+        self.items.iter().map(|item| item.0.clone()).any(test)
     }
 
     /// The items for which `test` is true.
@@ -127,13 +132,17 @@ impl<T: Clone + Ord> Set<T> {
             items: self
                 .items
                 .iter()
-                .filter(|item| test(T::clone(item)))
+                .filter(|item| test(T::clone(&item.0)))
                 .cloned()
                 .collect(),
         }
     }
 
-    pub(super) fn from_sorted(items: BTreeSet<T>) -> Self {
+    pub(super) fn from_sorted(items: BTreeSet<Walked<T>>) -> Self {
         Self { items }
+    }
+
+    pub(super) fn walked(&self) -> impl ExactSizeIterator<Item = &T> {
+        self.items.iter().map(|item| &item.0)
     }
 }

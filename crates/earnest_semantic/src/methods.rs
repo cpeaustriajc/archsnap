@@ -171,7 +171,7 @@ impl Lowerer<'_> {
             | Type::Int(_)
             | Type::Text
             | Type::Variant(_)
-            | Type::Record(_) => Err(self.unknown(&on.ty, &call)),
+            | Type::Record { .. } => Err(self.unknown(&on.ty, &call)),
         }
     }
 
@@ -576,7 +576,7 @@ fn with_item(same: &Type, given: Type) -> Type {
         | Type::Text
         | Type::Variant(_)
         | Type::Optional(_)
-        | Type::Record(_)
+        | Type::Record { .. }
         | Type::Map(_, _)
         | Type::Lock(_)
         | Type::Timer

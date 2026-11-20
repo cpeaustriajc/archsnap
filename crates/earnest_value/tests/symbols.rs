@@ -158,3 +158,39 @@ fn one_text_with_a_quote_and_a_comma_does_not_print_as_two_texts() {
     assert_eq!(symbols.show(&single), r#"["a\", \"b"]"#);
     assert_eq!(symbols.show(&pair), r#"["a", "b"]"#);
 }
+
+#[test]
+fn an_alphabetical_table_hands_out_names_in_the_order_of_the_code_points() {
+    let listed = ["pear", "Fig", "apple", "\u{1f600}", "\u{ff5e}", "b"];
+    let mut met = Symbols::default();
+    for each in listed {
+        met.intern(each);
+    }
+    let mut sorted = met.alphabetical();
+    let mut names: Vec<_> = listed.into_iter().map(|each| sorted.intern(each)).collect();
+    names.sort();
+    let texts: Vec<&str> = names.iter().map(|name| sorted.name(*name)).collect();
+    assert_eq!(
+        texts,
+        ["Fig", "apple", "b", "pear", "\u{ff5e}", "\u{1f600}"],
+        "the names sort as the texts do, a capital first and a character past U+FFFF last"
+    );
+    assert_eq!(sorted.texts().count(), 6, "no text is added or lost");
+}
+
+#[test]
+fn a_set_of_values_from_an_alphabetical_table_is_walked_in_the_order_of_the_texts() {
+    let mut met = Symbols::default();
+    for each in ["pear", "apple", "fig"] {
+        met.intern(each);
+    }
+    let mut sorted = met.alphabetical();
+    let items: BTreeSet<Value> = ["pear", "apple", "fig"]
+        .into_iter()
+        .map(|each| text(&mut sorted, each))
+        .collect();
+    assert_eq!(
+        sorted.show(&Value::set(items)),
+        r#"{"apple", "fig", "pear"}"#
+    );
+}

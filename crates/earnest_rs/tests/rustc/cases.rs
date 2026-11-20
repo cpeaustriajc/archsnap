@@ -1048,4 +1048,70 @@ pub(super) const CASES: &[Case] = &[
         rustc: "E0382",
         group: Group::Borrow,
     },
+    Case {
+        name: "twin record passed to a function",
+        method: r"fn a(&self) -> bool { take_line(Line2 { qty: 1 }) > 0 }",
+        call: r"self.a()",
+        rustc: "E0308",
+        group: Group::Types,
+    },
+    Case {
+        name: "twin record returned from a helper",
+        method: r"fn mk(&self) -> Line { Line2 { qty: 1 } }
+ fn a(&self) -> bool { self.mk().qty > 0 }",
+        call: r"self.a()",
+        rustc: "E0308",
+        group: Group::Types,
+    },
+    Case {
+        name: "twin record bound to a typed let",
+        method: r"fn a(&self) -> bool { let l: Line = Line2 { qty: 1 }; l.qty > 0 }",
+        call: r"self.a()",
+        rustc: "E0308",
+        group: Group::Types,
+    },
+    Case {
+        name: "twin records compared as locals",
+        method: r"fn a(&self) -> bool { let x = Line2 { qty: 1 }; let y = Line { qty: 1 }; x == y }",
+        call: r"self.a()",
+        rustc: "E0308",
+        group: Group::Types,
+    },
+    Case {
+        name: "twin record spread into a record",
+        method: r"fn a(&self) -> bool { let l = Line { qty: 1_u8 }; let m = Line2 { qty: 2_u8, ..l }; m.qty > 0 }",
+        call: r"self.a()",
+        rustc: "E0308",
+        group: Group::Types,
+    },
+    Case {
+        name: "twin record passed through a closure",
+        method: r"fn a(&self) -> bool { self.line2.is_some_and(|l| take_line(l) > 0) }",
+        call: r"self.a()",
+        rustc: "E0308",
+        group: Group::Types,
+    },
+    Case {
+        name: "twin record passed through a helper that returns it",
+        method: r"fn mk(&self) -> Line2 { Line2 { qty: 1 } }
+ fn a(&self) -> bool { take_line(self.mk()) > 0 }",
+        call: r"self.a()",
+        rustc: "E0308",
+        group: Group::Types,
+    },
+    Case {
+        name: "own record passed to a function ok",
+        method: r"fn a(&self) -> bool { take_line(Line { qty: 1 }) > 0 }",
+        call: r"self.a()",
+        rustc: "",
+        group: Group::Borrow,
+    },
+    Case {
+        name: "own record returned from a helper ok",
+        method: r"fn mk(&self) -> Line { Line { qty: 1 } }
+ fn a(&self) -> bool { self.mk().qty > 0 }",
+        call: r"self.a()",
+        rustc: "",
+        group: Group::Borrow,
+    },
 ];

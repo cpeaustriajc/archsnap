@@ -20,9 +20,10 @@ pub(crate) enum Helper {
     SeqPop,
     SeqIncludes,
     SeqItems,
+    TextRank,
 }
 
-pub(crate) const EVERY_HELPER: [Helper; 18] = [
+pub(crate) const EVERY_HELPER: [Helper; 19] = [
     Helper::Fault,
     Helper::Remainder,
     Helper::Division,
@@ -41,6 +42,7 @@ pub(crate) const EVERY_HELPER: [Helper; 18] = [
     Helper::SeqPop,
     Helper::SeqIncludes,
     Helper::SeqItems,
+    Helper::TextRank,
 ];
 
 pub(crate) const REMAINDER_FAULT: &str = "a remainder with a negative number or a divisor below 1";
@@ -67,6 +69,7 @@ impl Helper {
             Self::SeqPop => "SeqPop",
             Self::SeqIncludes => "SeqIncludes",
             Self::SeqItems => "SeqItems",
+            Self::TextRank => "TextRank",
         }
     }
 
@@ -77,7 +80,7 @@ impl Helper {
         }
     }
 
-    pub(crate) fn definition(self, module: &Names) -> String {
+    pub(crate) fn definition(self, module: &Names, texts: &[String]) -> String {
         let mut names = module.clone();
         let name = self.name();
         match self {
@@ -99,6 +102,19 @@ impl Helper {
                 format!(
                     "{name}({left}, {right}) == IF ({left} >= 0) /\\ ({right} >= 1) \
                      THEN {left} \\div {right} ELSE Fault(\"{DIVISION_FAULT}\")"
+                )
+            }
+            Self::TextRank => {
+                let text = names.claim("text");
+                let index = names.claim("index");
+                let listed = texts
+                    .iter()
+                    .map(|each| crate::scribe::quoted(each))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                let last = texts.len();
+                format!(
+                    "{name}({text}) == CHOOSE {index} \\in 1..{last} : <<{listed}>>[{index}] = {text}"
                 )
             }
             Self::EmptyMap => {
@@ -201,7 +217,7 @@ mod tests {
     }
 
     fn defined(helper: Helper) -> String {
-        helper.definition(&module())
+        helper.definition(&module(), &[])
     }
 
     #[test]
@@ -317,11 +333,20 @@ mod tests {
     }
 
     #[test]
+    fn a_text_ranks_by_its_place_among_the_texts_in_code_point_order() {
+        let texts = ["a".to_owned(), "b".to_owned()];
+        assert_eq!(
+            Helper::TextRank.definition(&module(), &texts),
+            "TextRank(text) == CHOOSE index \\in 1..2 : <<\"a\", \"b\">>[index] = text"
+        );
+    }
+
+    #[test]
     fn a_parameter_steps_aside_for_a_name_the_module_has_taken() {
         let mut names = module();
         assert_eq!(names.claim("seq"), "seq");
         assert_eq!(
-            Helper::SeqShift.definition(&names),
+            Helper::SeqShift.definition(&names, &[]),
             "SeqShift(seq_2) == IF Len(seq_2) = 0 THEN seq_2 ELSE Tail(seq_2)"
         );
     }

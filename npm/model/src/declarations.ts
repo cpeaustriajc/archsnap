@@ -85,8 +85,9 @@ export class Declaration<T, In = T> {
 
   /**
    * Every value, in the order the checker tries them: `false` before `true`, numbers upward,
-   * enum values as listed, `null` before the values of an optional. Throws when there are more
-   * than `MOST_VALUES_LISTED`.
+   * enum values as listed, `null` before the values of an optional, a record's fields in the
+   * order declared with the first one changing slowest. Throws when there are more than
+   * `MOST_VALUES_LISTED`.
    */
   values(): readonly T[] {
     if (this.#shape.count > MOST_VALUES_LISTED) {

@@ -80,19 +80,19 @@ fn an_optional_without_a_starting_value_starts_at_null_and_every_inner_value() {
 }
 
 #[test]
-fn a_record_without_a_starting_value_starts_at_every_combination_of_its_fields() {
+fn a_record_without_a_starting_value_starts_at_every_combination_of_its_fields_printed_by_name() {
     let pair = record_shape(vec![("on", boolean()), ("level", range(0, 2))]);
     let mut found = starts_of(pair);
     found.sort();
     assert_eq!(
         found,
         [
-            "{on: false, level: 0}",
-            "{on: false, level: 1}",
-            "{on: false, level: 2}",
-            "{on: true, level: 0}",
-            "{on: true, level: 1}",
-            "{on: true, level: 2}",
+            "{level: 0, on: false}",
+            "{level: 0, on: true}",
+            "{level: 1, on: false}",
+            "{level: 1, on: true}",
+            "{level: 2, on: false}",
+            "{level: 2, on: true}",
         ]
     );
 }

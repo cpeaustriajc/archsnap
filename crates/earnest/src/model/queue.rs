@@ -62,6 +62,12 @@ impl<T, const CAPACITY: usize> Start for Queue<T, CAPACITY> {
     }
 }
 
+impl<T, const CAPACITY: usize> Queue<T, CAPACITY> {
+    pub(super) fn walked(&self) -> impl ExactSizeIterator<Item = &T> {
+        self.messages.iter()
+    }
+}
+
 impl<T: Clone + PartialEq, const CAPACITY: usize> Queue<T, CAPACITY> {
     /// How many messages are waiting.
     pub fn size(&self) -> usize {

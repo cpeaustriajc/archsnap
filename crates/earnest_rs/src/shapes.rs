@@ -482,6 +482,9 @@ impl Reader<'_> {
             }
         }
         self.open_records.pop();
-        Some(ShapeKind::Record(fields))
+        Some(ShapeKind::Record {
+            owner: Some(name.to_owned()),
+            fields,
+        })
     }
 }

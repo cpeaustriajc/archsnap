@@ -1,10 +1,16 @@
+use super::{Map, Queue, Request, Retry, Seq, Set, Timer, Walk};
+
 /// A value as the text output of `earnest verify` prints it in the input of a step.
 ///
 /// A text and an enum variant are in quotes, a number and a boolean are as they are, `None` is
-/// `null`, a `Some` is the value inside it, and a record is `{name: value}` in the order its
-/// fields are declared. `#[derive(Domain)]` implements it for the enum or the struct, so every
-/// type an action can take as an input has it, and [`Step::input`](super::Step::input) holds
-/// this text.
+/// `null`, a `Some` is the value inside it, and a record is `{name: value}` in the order of the
+/// field names. A [`Set`](super::Set) is `{a, b}` and a [`Map`](super::Map) is `{k -> v}` in
+/// the order of [`Walk`](super::Walk), a [`Seq`](super::Seq) or a [`Queue`](super::Queue) is
+/// `[a, b]`, a [`Timer`](super::Timer) or a [`Request`](super::Request) is its stage as a text,
+/// and a [`Retry`](super::Retry) is its attempts. It is the text of the checker's report, so a
+/// test can compare what it prints for a state with what `earnest verify` prints.
+/// `#[derive(Domain)]` implements it for the enum or the struct, so every type an action can
+/// take as an input has it, and [`Step::input`](super::Step::input) holds this text.
 ///
 /// ```
 /// use earnest::model::Report;
@@ -74,6 +80,55 @@ impl<T: Report> Report for Option<T> {
     fn report(&self) -> String {
         self.as_ref()
             .map_or_else(|| "null".to_owned(), Report::report)
+    }
+}
+
+fn listed(open: &str, items: impl Iterator<Item = String>, close: &str) -> String {
+    format!("{open}{}{close}", items.collect::<Vec<String>>().join(", "))
+}
+
+impl<T: Walk + Clone + Report> Report for Set<T> {
+    fn report(&self) -> String {
+        listed("{", self.walked().map(Report::report), "}")
+    }
+}
+
+impl<K: Walk + Clone + Report, V: Clone + Report> Report for Map<K, V> {
+    fn report(&self) -> String {
+        let entries = self
+            .entries_walked()
+            .map(|(key, value)| format!("{} -> {}", key.report(), value.report()));
+        listed("{", entries, "}")
+    }
+}
+
+impl<T: Report, const MAX: usize> Report for Seq<T, MAX> {
+    fn report(&self) -> String {
+        listed("[", self.walked().map(Report::report), "]")
+    }
+}
+
+impl<T: Report, const CAPACITY: usize> Report for Queue<T, CAPACITY> {
+    fn report(&self) -> String {
+        listed("[", self.walked().map(Report::report), "]")
+    }
+}
+
+impl Report for Timer {
+    fn report(&self) -> String {
+        self.stage_name().report()
+    }
+}
+
+impl Report for Request {
+    fn report(&self) -> String {
+        self.stage_name().report()
+    }
+}
+
+impl<const MAX: usize> Report for Retry<MAX> {
+    fn report(&self) -> String {
+        self.attempts().to_string()
     }
 }
 

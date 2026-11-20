@@ -20,8 +20,8 @@ pub enum Domain {
     OneOf(Vec<Value>),
     /// `null` and every value of the inner domain. The inner domain must not hold `null` itself.
     Optional(Box<Self>),
-    /// Records with exactly these fields. The fields must be sorted by name, as
-    /// [`Value::record`] sorts them.
+    /// Records with exactly these fields, listed in the order they were declared in. That order
+    /// is the order [`Domain::values`] walks them in, the first field changing slowest.
     Record(Vec<(Sym, Self)>),
     /// Every set of items from the inner domain, the empty set included.
     Set(Box<Self>),
@@ -93,7 +93,7 @@ impl Domain {
             (Self::OneOf(values), found) => values.contains(found),
             (Self::Optional(inner), found) => inner.contains(found),
             (Self::Record(fields), Value::Record(found)) => {
-                fields.len() == found.len() && fields.iter().zip(found.iter()).all(field_fits)
+                fields.len() == found.len() && fields.iter().all(|field| field_fits(field, found))
             }
             (Self::Set(item), Value::Set(found)) => found.iter().all(|each| item.contains(each)),
             (Self::Map(key, inner), Value::Map(found)) => {
@@ -124,9 +124,11 @@ impl Domain {
     }
 }
 
-fn field_fits(pair: (&(Sym, Domain), &(Sym, Value))) -> bool {
-    let ((name, inner), (found_name, found_value)) = pair;
-    name == found_name && inner.contains(found_value)
+fn field_fits((name, inner): &(Sym, Domain), found: &[(Sym, Value)]) -> bool {
+    found
+        .iter()
+        .find(|(found_name, _)| found_name == name)
+        .is_some_and(|(_, found_value)| inner.contains(found_value))
 }
 
 fn seq_count(each: u128, max: usize) -> u128 {

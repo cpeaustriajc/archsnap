@@ -244,7 +244,10 @@ impl Reader<'_> {
                 ty: None,
             },
             "enum" | "oneOf" => ShapeKind::OneOf(self.choices(call)),
-            "record" => ShapeKind::Record(self.record_fields(call)),
+            "record" => ShapeKind::Record {
+                owner: None,
+                fields: self.record_fields(call),
+            },
             "set" => ShapeKind::Set(Box::new(self.shape_argument(call, 0))),
             "map" => ShapeKind::Map(
                 Box::new(self.shape_argument(call, 0)),

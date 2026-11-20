@@ -24,6 +24,14 @@ impl Start for Timer {
 }
 
 impl Timer {
+    pub(super) fn stage_name(self) -> &'static str {
+        match self.stage {
+            Stage::Idle => "idle",
+            Stage::Running => "running",
+            Stage::Fired => "fired",
+        }
+    }
+
     /// Whether the timer is not running and has not fired.
     pub fn is_idle(&self) -> bool {
         self.stage == Stage::Idle

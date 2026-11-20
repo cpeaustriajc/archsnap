@@ -8,6 +8,7 @@ import {
   RequestValue,
   RetryValue,
   TimerValue,
+  compareText,
   m,
 } from "@earnest/model";
 
@@ -287,6 +288,59 @@ test("forall and exists range over a declaration or a collection", () => {
   expect(m.forall(m.setOf<number>(), () => false)).toBe(true);
   expect(m.exists(m.setOf<number>(), () => true)).toBe(false);
   expect(m.exists(m.mapOf(["a", 1]), ([key, value]) => key === "a" && value === 1)).toBe(true);
+});
+
+test("texts are walked by code point, as Rust and the checker walk them", () => {
+  const letters = m.setOf<string>("\u{1f600}", "\u{ff5e}", "z", "\u{e9}", "B", "b", "a");
+  expect([...letters]).toStrictEqual(["B", "a", "b", "z", "\u{e9}", "\u{ff5e}", "\u{1f600}"]);
+  expect(compareText("\u{1f600}", "\u{ff5e}")).toBeGreaterThan(0);
+  expect("\u{1f600}" < "\u{ff5e}").toBe(true);
+  expect(compareText("ab", "a")).toBeGreaterThan(0);
+  expect(compareText("a", "a")).toBe(0);
+});
+
+test("records are walked and printed by field name, whatever order the fields were written in", () => {
+  const spots = m.setOf({ zebra: 0, apple: 2 }, { zebra: 2, apple: 1 }, { apple: 1, zebra: 1 });
+  expect(json(spots)).toStrictEqual([
+    { apple: 1, zebra: 1 },
+    { apple: 1, zebra: 2 },
+    { apple: 2, zebra: 0 },
+  ]);
+  expect(JSON.stringify(json(m.setOf({ zebra: 1, apple: 2 })))).toBe('[{"apple":2,"zebra":1}]');
+});
+
+test("collections are walked item by item and a prefix comes first", () => {
+  const groups = m.setOf(
+    m.setOf(2),
+    m.setOf(1, 3),
+    m.setOf(1, 2, 3),
+    m.setOf(1, 2),
+    m.setOf<number>(),
+  );
+  expect(json(groups)).toStrictEqual([[], [1, 2], [1, 2, 3], [1, 3], [2]]);
+  const maps = m.setOf(
+    m.mapOf<string, number>(["b", 1]),
+    m.mapOf<string, number>(["a", 2]),
+    m.mapOf<string, number>(["a", 1], ["b", 1]),
+  );
+  expect(json(maps)).toStrictEqual([
+    [
+      ["a", 1],
+      ["b", 1],
+    ],
+    [["a", 2]],
+    [["b", 1]],
+  ]);
+});
+
+test("a quantifier over a set stops at the first item in that order", () => {
+  const seen: string[] = [];
+  const found = m.exists(m.setOf("c", "a", "b"), (letter) => {
+    seen.push(letter);
+    return letter === "b";
+  });
+  expect(found).toBe(true);
+  expect(seen).toStrictEqual(["a", "b"]);
 });
 
 test("a record put in a collection can no longer be changed", () => {

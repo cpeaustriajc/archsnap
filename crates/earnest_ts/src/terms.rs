@@ -393,7 +393,11 @@ impl Reader<'_> {
                 }
             }
         }
-        TermKind::Record { base, fields }
+        TermKind::Record {
+            owner: None,
+            base,
+            fields,
+        }
     }
 
     fn member(&mut self, member: &StaticMemberExpression<'_>) -> TermKind {

@@ -283,7 +283,7 @@ mod every_kind {
                     .iter()
                     .any(|(name, shown)| *name == "guest" && shown == "\"Bob\"")
                     && step.input.iter().any(|(name, shown)| {
-                        *name == "spot" && shown == "{row: 1, lit: true, who: \"Bob\"}"
+                        *name == "spot" && shown == "{lit: true, row: 1, who: \"Bob\"}"
                     })
                     && step
                         .input
@@ -300,7 +300,7 @@ mod every_kind {
                 who: Bob
             })
             .report(),
-            "{row: 0, lit: true, who: \"Bob\"}"
+            "{lit: true, row: 0, who: \"Bob\"}"
         );
     }
 }

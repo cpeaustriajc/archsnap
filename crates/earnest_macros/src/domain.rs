@@ -13,10 +13,18 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
             "`Domain` can't be derived for a generic type: its values must be known",
         ));
     }
-    let (values, report) = match &item.data {
-        Data::Enum(choices) => (variants(choices)?, reported_variants(choices)),
+    let (values, report, walk) = match &item.data {
+        Data::Enum(choices) => (
+            variants(choices)?,
+            reported_variants(choices),
+            walked_variants(choices),
+        ),
         Data::Struct(record) => match &record.fields {
-            Fields::Named(fields) => (combinations(fields)?, reported_fields(fields)),
+            Fields::Named(fields) => (
+                combinations(fields)?,
+                reported_fields(fields),
+                walked_fields(fields),
+            ),
             other @ (Fields::Unnamed(_) | Fields::Unit) => {
                 return Err(syn::Error::new(
                     other.span(),
@@ -46,7 +54,46 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                 #report
             }
         }
+
+        #[automatically_derived]
+        impl ::earnest::model::Walk for #name {
+            fn walk_cmp(&self, other: &Self) -> ::core::cmp::Ordering {
+                #walk
+            }
+        }
     })
+}
+
+fn walked_variants(choices: &DataEnum) -> TokenStream {
+    let mut by_name: Vec<(String, &syn::Ident)> = choices
+        .variants
+        .iter()
+        .map(|variant| (variant.ident.unraw().to_string(), &variant.ident))
+        .collect();
+    by_name.sort_by(|left, right| left.0.cmp(&right.0));
+    let names = by_name.iter().map(|(_, ident)| ident);
+    let ranks = 0..by_name.len();
+    quote! {
+        let rank = |value: &Self| match value {
+            #(Self::#names => #ranks,)*
+        };
+        ::core::cmp::Ord::cmp(&rank(self), &rank(other))
+    }
+}
+
+fn walked_fields(fields: &FieldsNamed) -> TokenStream {
+    let mut by_name: Vec<(String, &syn::Ident)> = fields
+        .named
+        .iter()
+        .filter_map(|field| field.ident.as_ref())
+        .map(|ident| (ident.unraw().to_string(), ident))
+        .collect();
+    by_name.sort_by(|left, right| left.0.cmp(&right.0));
+    let names = by_name.iter().map(|(_, ident)| ident);
+    quote! {
+        ::core::cmp::Ordering::Equal
+            #(.then_with(|| ::earnest::model::Walk::walk_cmp(&self.#names, &other.#names)))*
+    }
 }
 
 fn reported_variants(choices: &DataEnum) -> TokenStream {
@@ -63,12 +110,15 @@ fn reported_variants(choices: &DataEnum) -> TokenStream {
 }
 
 fn reported_fields(fields: &FieldsNamed) -> TokenStream {
-    let names: Vec<&syn::Ident> = fields
+    let mut by_name: Vec<(String, &syn::Ident)> = fields
         .named
         .iter()
         .filter_map(|field| field.ident.as_ref())
+        .map(|ident| (ident.unraw().to_string(), ident))
         .collect();
-    let labels = names.iter().map(|name| name.unraw().to_string());
+    by_name.sort_by(|left, right| left.0.cmp(&right.0));
+    let names: Vec<&syn::Ident> = by_name.iter().map(|(_, ident)| *ident).collect();
+    let labels = by_name.iter().map(|(label, _)| label);
     quote! {
         let earnest_parts: ::std::vec::Vec<::std::string::String> = ::std::vec![
             #(::std::format!("{}: {}", #labels, ::earnest::model::Report::report(&self.#names))),*
@@ -137,12 +187,23 @@ mod tests {
                     }
                 }
             }
+
+            #[automatically_derived]
+            impl ::earnest::model::Walk for Gate {
+                fn walk_cmp(&self, other: &Self) -> ::core::cmp::Ordering {
+                    let rank = |value: &Self| match value {
+                        Self::Locked => 0usize,
+                        Self::Open => 1usize,
+                    };
+                    ::core::cmp::Ord::cmp(&rank(self), &rank(other))
+                }
+            }
         };
         assert_eq!(expanded.to_string(), wanted.to_string(), "the impls");
     }
 
     #[test]
-    fn a_struct_reports_each_field_by_name_in_the_order_declared() {
+    fn a_struct_reports_each_field_by_name_in_the_order_of_the_names() {
         let expanded = expand(quote! {
             struct Spot {
                 #[range(0, 1)]
@@ -160,6 +221,40 @@ mod tests {
         assert!(
             expanded.contains("\"type\""),
             "a raw name is its plain spelling: {expanded}"
+        );
+    }
+
+    #[test]
+    fn a_struct_is_reported_and_walked_by_its_field_names_not_in_the_order_declared() {
+        let expanded = expand(quote! {
+            struct Spot {
+                zebra: bool,
+                apple: bool,
+            }
+        })
+        .expect("a struct")
+        .to_string();
+        let reported = quote! { "apple" }.to_string();
+        let other = quote! { "zebra" }.to_string();
+        assert!(
+            expanded.find(&reported) < expanded.find(&other),
+            "the report lists apple first: {expanded}"
+        );
+        let walk = quote! {
+            ::core::cmp::Ordering::Equal
+                .then_with(|| ::earnest::model::Walk::walk_cmp(&self.apple, &other.apple))
+                .then_with(|| ::earnest::model::Walk::walk_cmp(&self.zebra, &other.zebra))
+        }
+        .to_string();
+        assert!(
+            expanded.contains(&walk),
+            "the walk compares apple first: {expanded}"
+        );
+        let values = quote! { for earnest_choice_zebra }.to_string();
+        let inner = quote! { for earnest_choice_apple }.to_string();
+        assert!(
+            expanded.find(&values) < expanded.find(&inner),
+            "every value is still listed in the order declared: {expanded}"
         );
     }
 

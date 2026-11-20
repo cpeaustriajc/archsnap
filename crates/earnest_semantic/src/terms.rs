@@ -1,4 +1,4 @@
-use super::types::{Binding, Scope, Type, Typed, fitted, fitted_when_present};
+use super::types::{Binding, Scope, Type, Typed, fitted, fitted_when_present, same_owner};
 use super::{Lowerer, Lowering};
 use earnest_ast::{
     Binary, HelperKind, Language, MOST_NESTING, Reach, Shape, TOO_DEEP, Term, TermKind, Unary,
@@ -77,7 +77,7 @@ impl Lowerer<'_> {
                 self.binary(*binary, left, right, place, scope)
             }
             TermKind::Choose(test, yes, no) => self.choose(test, yes, no, place, scope),
-            TermKind::Record { base, fields } => self.record(base.as_deref(), fields, place, scope),
+            TermKind::Record { .. } => self.record_literal(term, scope),
             TermKind::SetOf(items) => self.listed(items, Shelf::Set, place, scope),
             TermKind::SeqOf(items) => self.listed(items, Shelf::Seq, place, scope),
             TermKind::MapOf(entries) => self.map_of(entries, place, scope),
@@ -531,9 +531,9 @@ impl Lowerer<'_> {
         scope: &mut Scope,
     ) -> Lowering<Typed> {
         let (base, fields) = match on.ty {
-            Type::Record(fields) => (on.expr, fields),
+            Type::Record { fields, .. } => (on.expr, fields),
             Type::Optional(inner) => match *inner {
-                Type::Record(fields) => (apply(Op::Unwrap, vec![on.expr]), fields),
+                Type::Record { fields, .. } => (apply(Op::Unwrap, vec![on.expr]), fields),
                 other => {
                     let unwrapped = Typed::new(on.expr, Type::optional(other));
                     return self.method(unwrapped, &snake_case(name), &[], place, scope);
@@ -812,8 +812,21 @@ impl Lowerer<'_> {
         Ok((first, second, ty))
     }
 
+    fn record_literal(&mut self, term: &Term, scope: &mut Scope) -> Lowering<Typed> {
+        let TermKind::Record {
+            owner,
+            base,
+            fields,
+        } = &term.kind
+        else {
+            return Err(self.stop(term.place, "a record", "this is not a record literal"));
+        };
+        self.record(owner.as_deref(), base.as_deref(), fields, term.place, scope)
+    }
+
     fn record(
         &mut self,
+        owner: Option<&str>,
         base: Option<&Term>,
         fields: &[(String, Term)],
         place: Place,
@@ -828,22 +841,39 @@ impl Lowerer<'_> {
         }
         let Some(spread) = base else {
             exprs.sort_by_key(|(sym, _)| *sym);
-            return Ok(Typed::new(Expr::Record(exprs), Type::record(types)));
+            return Ok(Typed::new(
+                Expr::Record(exprs),
+                Type::named(owner.map(str::to_owned), types),
+            ));
         };
         let spread_in = self.term(spread, scope)?;
         let on = match spread_in.ty {
-            Type::Optional(inner) if matches!(*inner, Type::Record(_)) => {
+            Type::Optional(inner) if matches!(*inner, Type::Record { .. }) => {
                 Typed::new(apply(Op::Unwrap, vec![spread_in.expr]), *inner)
             }
             other => Typed::new(spread_in.expr, other),
         };
-        let Type::Record(mut known) = on.ty else {
+        let Type::Record {
+            owner: spread_owner,
+            fields: mut known,
+        } = on.ty
+        else {
             return Err(self.stop(
                 place,
                 &format!("a spread of {}", on.ty.kind()),
                 "only a record can be spread into a record",
             ));
         };
+        let spread_owner_text = spread_owner.clone();
+        if let (Some(built), Some(spread)) = (owner, spread_owner_text.as_deref())
+            && built != spread
+        {
+            return Err(self.stop(
+                place,
+                &format!("a spread of a record of type `{spread}` into a `{built}`"),
+                "two structs are two types, even with the same fields (E0308)",
+            ));
+        }
         let mut changes = Vec::with_capacity(exprs.len());
         for ((sym, expr), (name, ty)) in exprs.into_iter().zip(types) {
             let wanted = known
@@ -860,7 +890,7 @@ impl Lowerer<'_> {
         }
         Ok(Typed::new(
             Expr::With(Box::new(on.expr), changes),
-            Type::record(known),
+            Type::named(owner.map(str::to_owned).or(spread_owner), known),
         ))
     }
 
@@ -969,13 +999,33 @@ impl Lowerer<'_> {
                     Box::new(apply(Op::SomeOf, vec![coerced])),
                 ))
             }
-            (Expr::Record(fields), Type::Record(have_types), Type::Record(want_types))
-                if have_types.len() == want_types.len() =>
+            (
+                Expr::Record(fields),
+                Type::Record {
+                    owner: have_owner,
+                    fields: have_types,
+                },
+                Type::Record {
+                    owner: want_owner,
+                    fields: want_types,
+                },
+            ) if have_types.len() == want_types.len()
+                && same_owner(have_owner.as_ref(), want_owner.as_ref()) =>
             {
                 self.coerce_record(fields, &have_types, want_types, place)
             }
-            (expr, Type::Record(have_types), Type::Record(want_types))
-                if have_types.len() == want_types.len() =>
+            (
+                expr,
+                Type::Record {
+                    owner: have_owner,
+                    fields: have_types,
+                },
+                Type::Record {
+                    owner: want_owner,
+                    fields: want_types,
+                },
+            ) if have_types.len() == want_types.len()
+                && same_owner(have_owner.as_ref(), want_owner.as_ref()) =>
             {
                 self.coerce_fields(expr, &have_types, want_types, place)
             }
@@ -1000,7 +1050,7 @@ impl Lowerer<'_> {
                 Ok(Expr::MapOf(coerced))
             }
             (_, ty, wanted) => {
-                let feature = format!("{} where {} is needed", ty.kind(), wanted.kind());
+                let feature = format!("{} where {} is needed", ty.described(), wanted.described());
                 Err(self.stop(
                     place,
                     &feature,

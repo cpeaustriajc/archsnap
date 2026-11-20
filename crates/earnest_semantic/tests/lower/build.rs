@@ -139,7 +139,12 @@ pub(crate) fn record(fields: Vec<(&str, Term)>) -> Term {
 }
 
 pub(crate) fn spread(base: Option<Term>, fields: Vec<(&str, Term)>) -> Term {
+    owned_by(None, base, fields)
+}
+
+pub(crate) fn owned_by(owner: Option<&str>, base: Option<Term>, fields: Vec<(&str, Term)>) -> Term {
     term(TermKind::Record {
+        owner: owner.map(str::to_owned),
         base: base.map(Box::new),
         fields: fields
             .into_iter()
@@ -208,12 +213,17 @@ pub(crate) fn optional(inner: Shape) -> Shape {
 }
 
 pub(crate) fn record_shape(fields: Vec<(&str, Shape)>) -> Shape {
-    shape(ShapeKind::Record(
-        fields
+    struct_shape(None, fields)
+}
+
+pub(crate) fn struct_shape(owner: Option<&str>, fields: Vec<(&str, Shape)>) -> Shape {
+    shape(ShapeKind::Record {
+        owner: owner.map(str::to_owned),
+        fields: fields
             .into_iter()
             .map(|(known, inner)| (known.to_owned(), inner))
             .collect(),
-    ))
+    })
 }
 
 pub(crate) fn set_shape(item: Shape) -> Shape {

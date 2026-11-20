@@ -11,6 +11,34 @@ export type Json =
   | readonly Json[]
   | { readonly [name: string]: Json };
 
+const WHERE_SURROGATES_SORT_LAST = 0x2000;
+const WHERE_HIGH_UNITS_MOVE_DOWN = 0x800;
+const FIRST_SURROGATE = 0xd800;
+const FIRST_UNIT_AFTER_SURROGATES = 0xe000;
+
+const byCodePoint = (unit: number): number => {
+  if (unit >= FIRST_UNIT_AFTER_SURROGATES) {
+    return unit - WHERE_HIGH_UNITS_MOVE_DOWN;
+  }
+  return unit >= FIRST_SURROGATE ? unit + WHERE_SURROGATES_SORT_LAST : unit;
+};
+
+/**
+ * Compares two texts by code point, the order of Rust's `str` and of the UTF-8 bytes, which is
+ * the order every set, map and record is kept in. JavaScript's own `<` compares UTF-16 code
+ * units, and so puts a character past U+FFFF before one from U+E000 to U+FFFF.
+ */
+export const compareText = (left: string, right: string): number => {
+  const shortest = Math.min(left.length, right.length);
+  for (let position = 0; position < shortest; position += 1) {
+    const order = byCodePoint(left.charCodeAt(position)) - byCodePoint(right.charCodeAt(position));
+    if (order !== 0) {
+      return order;
+    }
+  }
+  return left.length - right.length;
+};
+
 /** An object read by field name whose values are not yet known to fit any declaration. */
 export type Row = Readonly<Record<string, unknown>>;
 
@@ -53,7 +81,7 @@ export const keyOf = (value: unknown): string => {
   }
   if (isRecord(value)) {
     const fields = Object.keys(value)
-      .sort()
+      .sort(compareText)
       .map((name) => `${JSON.stringify(name)}:${keyOf(value[name])}`);
     return `{${fields.join(",")}}`;
   }
@@ -72,7 +100,11 @@ export const toJson = (value: unknown): Json => {
     return value === 0 ? 0 : value;
   }
   if (isRecord(value)) {
-    return Object.fromEntries(Object.keys(value).map((name) => [name, toJson(value[name])]));
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort(compareText)
+        .map((name) => [name, toJson(value[name])]),
+    );
   }
   throw new Error(`${String(value)} is not a value a model can hold`);
 };
@@ -128,12 +160,13 @@ const compareLists = (left: readonly Json[], right: readonly Json[]): number => 
 
 const flattened = (json: { readonly [name: string]: Json }): Json[] =>
   Object.keys(json)
-    .sort()
+    .sort(compareText)
     .flatMap((name) => [name, json[name] ?? null]);
 
 /**
  * The order set members and map keys are kept and printed in: `null`, then booleans, numbers,
- * text in code-unit order, records and collections. Returns a negative number, zero or a
+ * text in code point order (see `compareText`), records by their field names in that order, and
+ * collections item by item. Returns a negative number, zero or a
  * positive number, as a sort comparator does.
  */
 export const compareJson = (left: Json, right: Json): number => {
@@ -144,7 +177,7 @@ export const compareJson = (left: Json, right: Json): number => {
     return left - right;
   }
   if (typeof left === "string" && typeof right === "string") {
-    return left < right ? -1 : left > right ? 1 : 0;
+    return compareText(left, right);
   }
   if (left === null || right === null || typeof left !== "object" || typeof right !== "object") {
     return rank(left) - rank(right);

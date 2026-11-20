@@ -158,9 +158,12 @@ by its `label`, the action's sentence.
 - `===` on two records compares the objects in Node. Compare records field by field. Sets, maps,
   sequences, queues, locks, timers, requests and retries are shared by content, so `===` on them
   compares content.
-- Set members and map keys are printed in one fixed order: `null`, booleans, numbers, text in
-  code-unit order, records, collections. The checker's order may differ; compare sets as sets.
-  `replay` does.
+- Set members and map keys are walked and printed in one fixed order, the checker's and the Rust
+  library's: `null`, booleans, numbers, text by code point (`compareText`, which puts a character
+  past U+FFFF after one from U+E000 to U+FFFF, where `<` does not), records field by field in the
+  order of the field names, collections item by item. A quantifier over a set stops at the first
+  item in that order. `replay` still accepts the members of a set in any order. The README of the
+  repository has the rule for each kind.
 - A fault is a `TypeError` thrown by the model, `m.rem` of a negative number, or `m.some(null)`:
   reading a field of `null` or `m.some(null)` reports "reads a value that is null", any other
   `TypeError` reports "uses a value of the wrong kind". Where a model file reads a number from

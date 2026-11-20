@@ -46,5 +46,6 @@ export {
   SeqValue,
   SetValue,
   TimerValue,
+  compareText,
 } from "./values.ts";
 export type { Json, RequestStage, Row, TimerStage } from "./values.ts";

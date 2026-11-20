@@ -17,6 +17,7 @@ mod seq;
 mod set;
 mod timer;
 mod view;
+mod walk;
 
 pub use crate::require;
 pub use earnest_macros::{Domain, Model, model, view};
@@ -31,6 +32,7 @@ pub use seq::Seq;
 pub use set::Set;
 pub use timer::Timer;
 pub use view::View;
+pub use walk::Walk;
 
 /// A type whose every value can be listed, so the checker can try each one.
 ///

@@ -168,7 +168,7 @@ fn a_test_over_a_set_of_numbers_is_asked_about_until_an_item_decides() {
         "IF InRange /\\ (LET Ok(item) == ((item >= 0) /\\ (n >= 1)) IN LET Hit(item_2) == \
          (((item_2 >= 0) /\\ (n >= 1)) /\\ (Remainder(item_2, n) = 0)) IN \\A at \\in seen : \
          Ok(at) \\/ \\E before \\in seen : (before < at) /\\ Hit(before)) /\\ \
-         (\\E item \\in seen : (Remainder(item, n) = 0))"
+         (\\E item \\in seen : (((item >= 0) /\\ (n >= 1)) /\\ (Remainder(item, n) = 0)))"
     );
 }
 
@@ -193,7 +193,7 @@ fn a_test_over_a_sequence_is_asked_about_in_the_order_of_its_items() {
          (((item_2 >= 0) /\\ (n >= 1)) /\\ (~(Remainder(item_2, n) = 0))) IN \\A at \\in \
          1..Len(<<3, 1>>) : Ok(<<3, 1>>[at]) \\/ \\E before \\in 1..(at - 1) : \
          Hit(<<3, 1>>[before])) /\\ (\\A item \\in SeqItems(<<3, 1>>) : \
-         (Remainder(item, n) = 0))"
+         ((~((item >= 0) /\\ (n >= 1))) \\/ (Remainder(item, n) = 0)))"
     );
 }
 

@@ -280,13 +280,15 @@ impl Writer<'_> {
             .into_iter()
             .filter(|helper| written.contains(helper.name()))
             .collect();
+        let mut texts: Vec<String> = self.model.symbols.texts().map(str::to_owned).collect();
+        texts.sort();
         let helpers: Vec<String> = EVERY_HELPER
             .into_iter()
             .filter(|helper| {
                 used.iter()
                     .any(|other| other == helper || other.needs() == Some(*helper))
             })
-            .map(|helper| helper.definition(&self.names))
+            .map(|helper| helper.definition(&self.names, &texts))
             .collect();
         let mut sections = vec![
             format!("---- MODULE {name} ----\n{EXTENDED}"),

@@ -30,6 +30,12 @@ impl<T, const MAX: usize> Start for Seq<T, MAX> {
     }
 }
 
+impl<T, const MAX: usize> Seq<T, MAX> {
+    pub(super) fn walked(&self) -> impl ExactSizeIterator<Item = &T> {
+        self.items.iter()
+    }
+}
+
 impl<T: Clone + PartialEq, const MAX: usize> Seq<T, MAX> {
     /// The sequence of the listed items, in that order: `Seq::of([Stop::North, Stop::South])`.
     /// `Seq::of([])` is the empty sequence.

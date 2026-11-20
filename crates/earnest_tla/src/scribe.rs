@@ -465,14 +465,9 @@ impl<'a> Scribe<'a> {
         } else {
             over.text.clone()
         };
-        let order = if from_a_seq {
-            Some(Visit::Index)
-        } else {
-            Visit::of_set(&over.kind)
-        };
         let stops = matches!(reach, Sweep::Every | Sweep::Some);
-        let each = match (&tested.sound, stops, order) {
-            (Some(needed), true, Some(order)) => {
+        let each = match (&tested.sound, stops) {
+            (Some(needed), true) => {
                 let earlier = scope.bind(slot, "item", over.kind.item());
                 let again = self.expr(body, scope);
                 scope.release();
@@ -486,20 +481,36 @@ impl<'a> Scribe<'a> {
                 );
                 let names = [scope.claim("Ok"), scope.claim("Hit")];
                 let places = [scope.claim("at"), scope.claim("before")];
-                Some(short_circuit(
-                    &order,
-                    (&item, &earlier),
-                    &over.text,
-                    (needed, &stops_here),
-                    (&names, &places),
-                ))
+                let order = if from_a_seq {
+                    Some(Visit::Index)
+                } else {
+                    let [at, before] = &places;
+                    self.before(&over.kind.item(), before, at, scope)
+                        .map(Visit::Before)
+                };
+                Some(match order {
+                    Some(order) => short_circuit(
+                        &order,
+                        (&item, &earlier),
+                        &over.text,
+                        (needed, &stops_here),
+                        (&names, &places),
+                    ),
+                    None => format!("(\\A {item} \\in {items} : {needed})"),
+                })
             }
-            (Some(needed), _, _) => Some(format!("(\\A {item} \\in {items} : {needed})")),
-            (None, _, _) => None,
+            (Some(needed), false) => Some(format!("(\\A {item} \\in {items} : {needed})")),
+            (None, _) => None,
         };
         let done = match (reach, gives) {
-            (Sweep::Every, _) => Written::truth(format!("(\\A {item} \\in {items} : {test})")),
-            (Sweep::Some, _) => Written::truth(format!("(\\E {item} \\in {items} : {test})")),
+            (Sweep::Every, _) => Written::truth(match &tested.sound {
+                Some(needed) => format!("(\\A {item} \\in {items} : ((~{needed}) \\/ {test}))"),
+                None => format!("(\\A {item} \\in {items} : {test})"),
+            }),
+            (Sweep::Some, _) => Written::truth(match &tested.sound {
+                Some(needed) => format!("(\\E {item} \\in {items} : ({needed} /\\ {test}))"),
+                None => format!("(\\E {item} \\in {items} : {test})"),
+            }),
             (Sweep::Filter, Shelf::Set) => Written::new(
                 format!("{{{item} \\in {items} : {test}}}"),
                 Kind::set(over.kind.item()),
@@ -526,22 +537,134 @@ impl<'a> Scribe<'a> {
         needed.push(has_a_value(op, &given));
         applied(op, &given).needing(needed)
     }
+
+    fn before(
+        &mut self,
+        kind: &Kind,
+        left: &str,
+        right: &str,
+        scope: &mut Scope,
+    ) -> Option<String> {
+        Some(match kind {
+            Kind::Int => format!("({left} < {right})"),
+            Kind::Bool => format!("((~{left}) /\\ {right})"),
+            Kind::Text => format!(
+                "({} < {})",
+                call(Helper::TextRank, &[left], Kind::Int).text,
+                call(Helper::TextRank, &[right], Kind::Int).text
+            ),
+            Kind::Optional(inner) => {
+                let present =
+                    self.before(inner, &format!("{left}[1]"), &format!("{right}[1]"), scope)?;
+                format!(
+                    "((({left} = {NULL}) /\\ ({right} # {NULL})) \\/ (({left} # {NULL}) /\\ \
+                     ({right} # {NULL}) /\\ {present}))"
+                )
+            }
+            Kind::Record(fields) => self.before_fields(fields, left, right, scope)?,
+            Kind::Seq(item) => self.before_seqs(item, left, right, scope)?,
+            Kind::Set(item) => {
+                let member = |scribe: &mut Self, first: &str, second: &str, scope: &mut Scope| {
+                    scribe.before(item, first, second, scope)
+                };
+                self.before_sets(&member, left, right, scope)?
+            }
+            Kind::Map(key, value) => {
+                let member = |scribe: &mut Self, first: &str, second: &str, scope: &mut Scope| {
+                    let keys = scribe.before(
+                        key,
+                        &format!("{first}[1]"),
+                        &format!("{second}[1]"),
+                        scope,
+                    )?;
+                    let values = scribe.before(
+                        value,
+                        &format!("{first}[2]"),
+                        &format!("{second}[2]"),
+                        scope,
+                    )?;
+                    Some(format!(
+                        "({keys} \\/ (({first}[1] = {second}[1]) /\\ {values}))"
+                    ))
+                };
+                let pairs = |map: &str, scope: &mut Scope| {
+                    let each = scope.claim("key");
+                    format!("{{<<{each}, {map}[{each}]>> : {each} \\in DOMAIN {map}}}")
+                };
+                let (first, second) = (pairs(left, scope), pairs(right, scope));
+                self.before_sets(&member, &first, &second, scope)?
+            }
+            Kind::Unknown => return None,
+        })
+    }
+
+    fn before_fields(
+        &mut self,
+        fields: &[(Sym, Kind)],
+        left: &str,
+        right: &str,
+        scope: &mut Scope,
+    ) -> Option<String> {
+        let mut named: Vec<&(Sym, Kind)> = fields.iter().collect();
+        named.sort_by(|first, second| self.symbols.name(first.0).cmp(self.symbols.name(second.0)));
+        let mut text = "FALSE".to_owned();
+        for (name, kind) in named.into_iter().rev() {
+            let label = self.label(*name);
+            let (first, second) = (format!("{left}.{label}"), format!("{right}.{label}"));
+            let here = self.before(kind, &first, &second, scope)?;
+            text = format!("({here} \\/ (({first} = {second}) /\\ {text}))");
+        }
+        Some(text)
+    }
+
+    fn before_seqs(
+        &mut self,
+        item: &Kind,
+        left: &str,
+        right: &str,
+        scope: &mut Scope,
+    ) -> Option<String> {
+        let at = scope.claim("at");
+        let lead = scope.claim("lead");
+        let here = self.before(
+            item,
+            &format!("{left}[{at}]"),
+            &format!("{right}[{at}]"),
+            scope,
+        )?;
+        Some(format!(
+            "((\\E {at} \\in 1..Len({left}) : (({at} <= Len({right})) /\\ \
+             (\\A {lead} \\in 1..({at} - 1) : {left}[{lead}] = {right}[{lead}]) /\\ {here})) \\/ \
+             ((Len({left}) < Len({right})) /\\ \
+             (\\A {lead} \\in 1..Len({left}) : {left}[{lead}] = {right}[{lead}])))"
+        ))
+    }
+
+    fn before_sets(
+        &mut self,
+        member: &dyn Fn(&mut Self, &str, &str, &mut Scope) -> Option<String>,
+        left: &str,
+        right: &str,
+        scope: &mut Scope,
+    ) -> Option<String> {
+        let apart = scope.claim("apart");
+        let least = scope.claim("least");
+        let [first, second, other] = [scope.claim("x"), scope.claim("y"), scope.claim("z")];
+        let among = member(self, &first, &second, scope)?;
+        let beyond = member(self, &least, &other, scope)?;
+        Some(format!(
+            "(LET {apart} == (({left} \\ {right}) \\cup ({right} \\ {left})) IN \
+             (({apart} # {{}}) /\\ LET {least} == CHOOSE {first} \\in {apart} : \
+             \\A {second} \\in ({apart} \\ {{{first}}}) : {among} IN \
+             ((({least} \\in {left}) /\\ (\\E {other} \\in {right} : {beyond})) \\/ \
+             (({least} \\in {right}) /\\ (~(\\E {other} \\in {left} : {beyond}))))))"
+        ))
+    }
 }
 
 enum Visit {
     Index,
-    Number,
-    Truth,
-}
-
-impl Visit {
-    fn of_set(items: &Kind) -> Option<Self> {
-        match items.item() {
-            Kind::Int => Some(Self::Number),
-            Kind::Bool => Some(Self::Truth),
-            _ => None,
-        }
-    }
+    Before(String),
 }
 
 fn short_circuit(
@@ -560,16 +683,10 @@ fn short_circuit(
             "\\A {at} \\in 1..Len({source}) : {ok}({source}[{at}]) \\/ \\E {before} \\in \
              1..({at} - 1) : {hit}({source}[{before}])"
         ),
-        Visit::Number | Visit::Truth => {
-            let first = match order {
-                Visit::Number => format!("({before} < {at})"),
-                _ => format!("((~{before}) /\\ {at})"),
-            };
-            format!(
-                "\\A {at} \\in {source} : {ok}({at}) \\/ \\E {before} \\in {source} : \
-                 {first} /\\ {hit}({before})"
-            )
-        }
+        Visit::Before(first) => format!(
+            "\\A {at} \\in {source} : {ok}({at}) \\/ \\E {before} \\in {source} : \
+             {first} /\\ {hit}({before})"
+        ),
     };
     format!("({definitions} {body})")
 }

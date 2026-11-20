@@ -78,7 +78,7 @@ pub(crate) fn show(term: &Term) -> String {
         TermKind::Choose(test, yes, no) => {
             format!("(? {} {} {})", show(test), show(yes), show(no))
         }
-        TermKind::Record { base, fields } => record(base.as_deref(), fields),
+        TermKind::Record { base, fields, .. } => record(base.as_deref(), fields),
         TermKind::SetOf(items) => format!("set({})", listed(items)),
         TermKind::SeqOf(items) => format!("seq({})", listed(items)),
         TermKind::MapOf(entries) => {
@@ -123,7 +123,7 @@ fn show_kind(kind: &ShapeKind) -> String {
         ShapeKind::Int { lo, hi, .. } => format!("int({lo}, {hi})"),
         ShapeKind::OneOf(choices) => format!("enum({})", listed(choices)),
         ShapeKind::Optional(inner) => format!("optional({})", show_shape(inner)),
-        ShapeKind::Record(fields) => {
+        ShapeKind::Record { fields, .. } => {
             let shown: Vec<String> = fields
                 .iter()
                 .map(|(name, shape)| format!("{name}: {}", show_shape(shape)))

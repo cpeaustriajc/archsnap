@@ -10,7 +10,10 @@ pub(crate) enum Type {
     Text,
     Variant(String),
     Optional(Box<Type>),
-    Record(Vec<(String, Type)>),
+    Record {
+        owner: Option<String>,
+        fields: Vec<(String, Type)>,
+    },
     Set(Box<Type>),
     Map(Box<Type>, Box<Type>),
     Seq(Box<Type>),
@@ -31,7 +34,7 @@ impl Type {
             Self::Text => "a text value",
             Self::Variant(_) => "an enum variant",
             Self::Optional(_) => "an optional value",
-            Self::Record(_) => "a record",
+            Self::Record { .. } => "a record",
             Self::Set(_) => "a set",
             Self::Map(_, _) => "a map",
             Self::Seq(_) => "a sequence",
@@ -66,10 +69,31 @@ impl Type {
             (Self::Map(left_key, left_value), Self::Map(right_key, right_value)) => {
                 left_key.fits(right_key) && left_value.fits(right_value)
             }
-            (Self::Record(left), Self::Record(right)) => {
-                left.len() == right.len() && left.iter().zip(right.iter()).all(field_fits)
+            (
+                Self::Record {
+                    owner: left_owner,
+                    fields: left,
+                },
+                Self::Record {
+                    owner: right_owner,
+                    fields: right,
+                },
+            ) => {
+                same_owner(left_owner.as_ref(), right_owner.as_ref())
+                    && left.len() == right.len()
+                    && left.iter().zip(right.iter()).all(field_fits)
             }
             _ => false,
+        }
+    }
+
+    pub(crate) fn described(&self) -> String {
+        match self {
+            Self::Variant(owner) => format!("{} of `{owner}`", self.kind()),
+            Self::Record {
+                owner: Some(owner), ..
+            } => format!("a record of type `{owner}`"),
+            other => other.kind().to_owned(),
         }
     }
 
@@ -91,21 +115,32 @@ impl Type {
                 Box::new(left_key.merged(right_key)),
                 Box::new(left_value.merged(right_value)),
             ),
-            (Self::Record(left), Self::Record(right)) => Self::Record(
-                left.iter()
+            (
+                Self::Record {
+                    owner: left_owner,
+                    fields: left,
+                },
+                Self::Record {
+                    owner: right_owner,
+                    fields: right,
+                },
+            ) => Self::Record {
+                owner: left_owner.clone().or_else(|| right_owner.clone()),
+                fields: left
+                    .iter()
                     .zip(right.iter())
                     .map(|((name, left_type), (_, right_type))| {
                         (name.clone(), left_type.merged(right_type))
                     })
                     .collect(),
-            ),
+            },
             (kept, _) => kept.clone(),
         }
     }
 
-    pub(crate) fn record(mut fields: Vec<(String, Self)>) -> Self {
+    pub(crate) fn named(owner: Option<String>, mut fields: Vec<(String, Self)>) -> Self {
         fields.sort_by(|(left, _), (right, _)| left.cmp(right));
-        Self::Record(fields)
+        Self::Record { owner, fields }
     }
 
     pub(crate) fn optional(inner: Self) -> Self {
@@ -147,7 +182,7 @@ impl Type {
             Self::Map(key, value) => {
                 key.has_a_number_without_a_type() || value.has_a_number_without_a_type()
             }
-            Self::Record(fields) => fields
+            Self::Record { fields, .. } => fields
                 .iter()
                 .any(|(_, field)| field.has_a_number_without_a_type()),
             Self::Unknown
@@ -177,15 +212,30 @@ impl Type {
             (Self::Optional(inner), found) | (found, Self::Optional(inner)) => {
                 Some(Self::optional(inner.union(found)?))
             }
-            (Self::Record(left), Self::Record(right)) if left.len() == right.len() => left
-                .iter()
-                .zip(right)
-                .map(|((name, first), (other_name, second))| {
-                    (name == other_name).then_some(())?;
-                    Some((name.clone(), first.union(second)?))
-                })
-                .collect::<Option<Vec<_>>>()
-                .map(Self::Record),
+            (
+                Self::Record {
+                    owner: left_owner,
+                    fields: left,
+                },
+                Self::Record {
+                    owner: right_owner,
+                    fields: right,
+                },
+            ) if left.len() == right.len()
+                && same_owner(left_owner.as_ref(), right_owner.as_ref()) =>
+            {
+                left.iter()
+                    .zip(right)
+                    .map(|((name, first), (other_name, second))| {
+                        (name == other_name).then_some(())?;
+                        Some((name.clone(), first.union(second)?))
+                    })
+                    .collect::<Option<Vec<_>>>()
+                    .map(|fields| Self::Record {
+                        owner: left_owner.clone().or_else(|| right_owner.clone()),
+                        fields,
+                    })
+            }
             (first, second) if first.fits(second) => Some(first.merged(second).merged(first)),
             _ => None,
         }
@@ -229,6 +279,13 @@ pub(crate) fn fitted_when_present(expr: Expr, ty: IntType) -> Expr {
             body: Box::new(fitted_when_present(*body, ty)),
         },
         other => other,
+    }
+}
+
+pub(crate) fn same_owner(left: Option<&String>, right: Option<&String>) -> bool {
+    match (left, right) {
+        (Some(first), Some(second)) => first == second,
+        _ => true,
     }
 }
 
@@ -303,12 +360,42 @@ mod tests {
     }
 
     fn record(fields: &[(&str, Type)]) -> Type {
-        Type::record(
+        Type::named(
+            None,
             fields
                 .iter()
                 .map(|(name, ty)| ((*name).to_owned(), ty.clone()))
                 .collect(),
         )
+    }
+
+    fn struct_of(owner: &str, qty: Type) -> Type {
+        Type::named(Some(owner.to_owned()), vec![("qty".to_owned(), qty)])
+    }
+
+    #[test]
+    fn two_structs_with_the_same_fields_are_two_types() {
+        let line = struct_of("Line", Type::Int(None));
+        let other = struct_of("Line2", Type::Int(None));
+        assert!(line.fits(&line));
+        assert!(!line.fits(&other));
+        assert!(!other.fits(&line));
+        assert_eq!(line.union(&other), None);
+        assert_eq!(
+            other.described(),
+            "a record of type `Line2`",
+            "the sentence names the struct"
+        );
+    }
+
+    #[test]
+    fn a_record_without_a_name_fits_a_struct_with_the_same_fields() {
+        let line = struct_of("Line", Type::Int(None));
+        let written = record(&[("qty", Type::Int(None))]);
+        assert!(written.fits(&line) && line.fits(&written));
+        assert_eq!(line.union(&written), Some(line.clone()));
+        assert_eq!(line.merged(&written), line);
+        assert_eq!(written.merged(&line), line);
     }
 
     #[test]
