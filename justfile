@@ -1,7 +1,7 @@
 default: check
 
 # One recipe per check. To add a check, write its recipe and name it here.
-check: format unused-dependencies dependencies lint typescript test verify
+check: format unused-dependencies dependencies lint typescript test verify models
 
 format:
     cargo fmt --check
@@ -47,6 +47,10 @@ benchmark:
 
 verify:
     cargo verus focus
+
+models:
+    cargo build --release --locked -p earnest-cli
+    target/release/earnest verify --no-cache tasks/models
 
 mutants:
     cargo mutants --jobs {{ num_cpus() }} --timeout 30 --build-timeout 300

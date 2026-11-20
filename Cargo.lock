@@ -404,6 +404,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "earnest_models"
+version = "0.1.0"
+dependencies = [
+ "earnest",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "earnest_rs"
 version = "0.1.0"
 dependencies = [
