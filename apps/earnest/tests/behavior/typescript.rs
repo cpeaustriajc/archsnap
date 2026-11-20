@@ -7,7 +7,7 @@ use crate::support::{Sandbox, repository};
 
 #[test]
 fn r01_every_typescript_model_passes_the_strict_type_checker() {
-    let library = repository().join("npm/model/src/index.ts");
+    let library = repository().join("packages/model/src/index.ts");
     assert!(
         library.is_file(),
         "the TypeScript model library is missing at {}",

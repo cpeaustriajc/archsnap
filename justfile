@@ -16,14 +16,13 @@ unused-dependencies:
     cargo machete
 
 typescript:
-    pnpm --dir npm/model install --frozen-lockfile
-    pnpm --dir npm/model run typecheck
-    pnpm --dir npm/model run format
-    pnpm --dir npm/model test
-    pnpm --dir npm/cli install --frozen-lockfile
-    pnpm --dir npm/cli run typecheck
-    pnpm --dir npm/cli run format
-    pnpm --dir npm/cli test
+    bun install --frozen-lockfile
+    bun run --cwd packages/model typecheck
+    bun run --cwd packages/model format
+    bun run --cwd packages/model test
+    bun run --cwd packages/cli typecheck
+    bun run --cwd packages/cli format
+    bun run --cwd packages/cli test
 
 test:
     cargo test --locked

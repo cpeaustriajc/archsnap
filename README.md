@@ -33,14 +33,14 @@ npm install --save-dev @earnest/cli @earnest/model
 npx earnest verify
 ```
 
-`pnpm add -D` and `yarn add -D` do the same. `@earnest/cli` is one program: a small Node
+`bun add -d` and `yarn add -D` do the same. `@earnest/cli` is one program: a small Node
 launcher and, in an optional dependency chosen by operating system and cpu, the binary
 (`@earnest/cli-linux-x64-gnu`, `-linux-arm64-gnu`, `-darwin-arm64`, `-darwin-x64` and
 `-win32-x64-msvc`). It has no install script and downloads nothing, so after the install
 `earnest` needs no network, no Java and no setup step on its first run. `@earnest/model` is the
 library a TypeScript model imports; it ships compiled JavaScript and declarations, so it runs in
-Node and type-checks under strict `tsc` from `node_modules`. See `npm/cli/README.md` and
-`npm/model/README.md`. A Rust model needs no npm package: it uses the `earnest` crate.
+Node and type-checks under strict `tsc` from `node_modules`. See `packages/cli/README.md` and
+`packages/model/README.md`. A Rust model needs no npm package: it uses the `earnest` crate.
 
 To install the checker from source, with no npm and no registry:
 
@@ -1177,7 +1177,7 @@ and returns the states it passes through. Node can't see one fault of the checke
 or a `when`. JavaScript's operators can't be intercepted from a library, so `explore` gives the
 value JavaScript computes there, where `earnest verify` reports the fault. Only a next state
 that holds such a number is seen. `earnest verify` is the authority on these; see
-`npm/model/README.md`.
+`packages/model/README.md`.
 
 ### The order of a set and a map
 
@@ -1218,7 +1218,7 @@ model built with `rustc` and TLC give the same verdict for each rule and the sam
 ## Layout
 
 The repository is laid out as oxc is: one crate for each thing the tool is made of, named for what
-it is, with apps, npm packages and tasks beside them.
+it is, with apps, packages and tasks beside them.
 
 | Path | What it is |
 |---|---|
@@ -1234,8 +1234,8 @@ it is, with apps, npm packages and tasks beside them.
 | `crates/earnest_tla` | The TLA+ writer |
 | `crates/earnest_chart` | The Mermaid chart and Markdown report writer |
 | `crates/earnest`, `crates/earnest_macros` | The Rust model library and its macros |
-| `npm/model` | The TypeScript model library, `@earnest/model` |
-| `npm/cli` | `@earnest/cli`, which ships the binary: a Node launcher and one package for each platform that holds the release build |
+| `packages/model` | The TypeScript model library, `@earnest/model` |
+| `packages/cli` | `@earnest/cli`, which ships the binary: a Node launcher and one package for each platform that holds the release build |
 | `tasks/conformance` | Model files with their expected state counts, verdicts and paths, shared by every test |
 | `tasks/benchmark` | The speed measurement: fixed models in TypeScript and Rust with hand-derived state counts, and a binary that times the release `earnest verify` on them |
 
@@ -1259,17 +1259,17 @@ check`, `cargo machete`, the tests and the Verus proofs (`cargo verus focus`). I
 version of each. The lint table in `Cargo.toml` and the settings in `clippy.toml` are
 [BeautifulRust](https://github.com/morganlinton/BeautifulRust)'s `lints/lints.toml` and
 `lints/clippy.toml`, taken whole; update them from there, never by hand. The tests also need Node
-22.18 or newer and `tsc` on your `PATH`. `just fix` formats the code and applies clippy's fixes.
+22.18 or newer, bun and `tsc` on your `PATH`. `just fix` formats the code and applies clippy's fixes.
 
-The TypeScript library in `npm/model` has its own commands, run from that folder after
-`pnpm install --frozen-lockfile`: `pnpm run typecheck` (tsrs), `pnpm run format` (oxfmt, check
-only), `pnpm run format:fix` and `pnpm test` (vitest).
-
-`npm/cli` has the same commands, plus `node scripts/assemble.ts` to build the package of this
-machine's platform; its `pnpm test` builds the release binary, packs both packages, installs
+The JavaScript side is one bun workspace: the root `package.json` lists `packages/*` and the
+platform packages in `packages/cli/platforms/*`, and `bun.lock` is its one lockfile. After
+`bun install --frozen-lockfile` at the root, `bun run --cwd packages/model typecheck` (tsrs),
+`format` (oxfmt, check only), `format:fix` and `test` (vitest) work on the library, and
+`packages/cli` has the same commands, plus `node scripts/assemble.ts` to build the package of this
+machine's platform; its `bun run test` builds the release binary, packs both packages, installs
 them into a fresh project with no network and runs `earnest verify` there. `@earnest/model` is
-published with its `dist/` built by `pnpm pack`, and its tests include the same check for the
-installed library.
+published with its `dist/` built by `bun pm pack`, and its tests include the same check for the
+installed library. `just typecheck` runs all of it.
 
 The speed targets of the spec (the first app's 12 models in under 5 s in all, the slowest under
 10 s alone) are measured on stand-in models, since the app's are not in this repository:

@@ -12,7 +12,7 @@
   "type": "module",
   "scripts": {
     "build": "tsrs -p tsconfig.build.json",
-    "prepack": "node --eval \"fs.rmSync('dist', { recursive: true, force: true })\" && pnpm run build",
+    "prepack": "node --eval \"fs.rmSync('dist', { recursive: true, force: true })\" && bun run build",
     "assemble": "node scripts/assemble.ts",
     "typecheck": "tsrs --noEmit",
     "format": "oxfmt --check",

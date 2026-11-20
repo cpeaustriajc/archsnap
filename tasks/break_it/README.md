@@ -165,7 +165,7 @@ are what those searches reported. Every `.model.ts` file here except `early.mode
 | `third/early.model.ts` | `Early`: `n` goes 0 to 3 (4 states), a top-level `const LIMIT = 5` | The rule `low` is `{ const most = LIMIT; const LIMIT = 1; return s.n <= most + LIMIT - LIMIT; }`. In TypeScript the first `LIMIT` is the block's own constant, read before its declaration: `tsc` refuses it (TS2448) and Node throws a `ReferenceError`. It is never the top-level 5. Right result: `unreadable`, or the rule faulting | `pass`, 4 states: the first `LIMIT` is read as the top-level constant. `const a = a + 1;` in a block, and the same in a helper's block, read the outer constant the same way | `a_block_constant_read_before_its_declaration_is_not_the_top_level_one` |
 
 The library itself treats a number beyond 2^53 in a next state as the fault "computes a number
-too large to hold" (`npm/model/src/search.ts`); the checker does not, and neither checks a
+too large to hold" (`packages/model/src/search.ts`); the checker does not, and neither checks a
 number computed inside a rule or a `when`.
 
 ### A legal file read as something else
@@ -395,7 +395,7 @@ the pre-scan. The parsers and the lowering then take it without a crash (20 000 
 3`. The root `README.md` says a number compared or added with an optional number "is a fault in
 a state where it is `null`", so `small` is `unknown` with a fault in the start state, which is
 what the checker reports. `explore` runs `null <= 3` as JavaScript, gets `true`, and reports
-`holds` with no finding. `npm/model/README.md` does not list this among the places where Node
+`holds` with no finding. `packages/model/README.md` does not list this among the places where Node
 and the checker differ. The same holds for `null + 1`, `null * 0`, `n - null` and `null < n` in
 a rule, a `when`, an end and a helper, and in a `then`: `({ pick: s.pick! + 1 })` gives Node the
 value 1 and a model that passes with 4 states, where the checker reports a fault and 1 state.
@@ -479,7 +479,7 @@ is missing.
 
 `explore` only turns a `TypeError` into a fault, and JavaScript throws none for an order, a sum
 or a remainder of `null`, nor when `null` is passed to a primitive (`s.sq.includes(s.o!)`,
-`s.mp.get(s.o!)` differ the same way). `s.o! !== 7` is not a fault in either. `npm/model/README.md`
+`s.mp.get(s.o!)` differ the same way). `s.o! !== 7` is not a fault in either. `packages/model/README.md`
 lists the differences it knows and not this one, so either `explore` must check the values it is
 given or the list must say so, as it says for `%`.
 
@@ -553,7 +553,7 @@ unique).
   first broken state of a Rust model with inputs `a: Letter, b: u8` and a rule broken for `(C, 0)`
   and `(A, 2)` names `a = C, b = 0`), while `Behavior::steps()` of the library tries the last
   input fastest (it gives `(A, 2)` first). A path of the checker and the first path found by
-  walking `steps()` therefore differ, which `npm/model/README.md` states for `explore` and the
+  walking `steps()` therefore differ, which `packages/model/README.md` states for `explore` and the
   root `README.md` does not state for Rust.
 - A constant that is not exported (`const low = Cnt.rule({...})`) is the id `low` in the checker
   and the sentence in `explore`, which only knows the exported names. The contract says the id is
@@ -751,7 +751,7 @@ are tested in `crates/earnest/tests/model/replays.rs`.
   a `u8` at 255 in an action that returns `Self`, a single text that is not ASCII: `same`;
   `i64` at its ends: `cannot`, with the reason.
 - Views: a `Display` impl in the file and a helper that returns `&'static str` are refused.
-- `npm/cli/src/launch.ts` was read: exit codes and signals are passed through.
+- `packages/cli/src/launch.ts` was read: exit codes and signals are passed through.
 
 ### Not covered
 

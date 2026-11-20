@@ -8,7 +8,7 @@ npm install --save-dev @earnest/cli @earnest/model
 npx earnest verify
 ```
 
-`pnpm add -D` and `yarn add -D` work the same way. The package puts `earnest` on the `PATH` of
+`bun add -d` and `yarn add -D` work the same way. The package puts `earnest` on the `PATH` of
 your scripts and of `npx`.
 
 ## How it ships
@@ -37,17 +37,17 @@ a signal killed makes the launcher die of the same signal.
 
 ## Building it
 
-From `npm/cli`, after `pnpm install --frozen-lockfile`:
+From `packages/cli`, after `bun install --frozen-lockfile` at the repository root:
 
 ```sh
 cargo build --release -p earnest-cli
 node scripts/assemble.ts --out build/platform    # the package for this machine's platform
-pnpm pack --pack-destination build               # in build/platform, and again here for the launcher
+bun pm pack --destination build                  # in build/platform, and again here for the launcher
 ```
 
 `scripts/assemble.ts` copies `target/release/earnest` into `<out>/bin/` with the manifest kept in
-`platforms/<platform>/package.json`. `pnpm pack` in `npm/cli` builds the launcher into `dist/`
-first. `pnpm test` does all of this in a temporary folder, installs the two tarballs into a fresh
+`platforms/<platform>/package.json`. `bun pm pack` in `packages/cli` builds the launcher into `dist/`
+first. `bun run test` does all of this in a temporary folder, installs the two tarballs into a fresh
 project without network access and runs `earnest verify` there.
 
 Each platform package is assembled on a machine of that platform, from a release build made

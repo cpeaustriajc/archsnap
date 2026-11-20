@@ -19,7 +19,7 @@ const USAGE = `usage: node scripts/assemble.ts --out <folder> [--binary <path>]
 
 Writes the package for this machine's platform into <folder>: the built earnest binary
 (default: target/release/earnest) under bin/, and the package.json kept in platforms/ with its bin entry added.
-Pack it with \`pnpm pack\` in that folder.`;
+Pack it with \`bun pm pack\` in that folder.`;
 
 export interface Assembled {
   readonly name: string;

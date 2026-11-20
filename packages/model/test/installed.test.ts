@@ -7,6 +7,13 @@ import { afterAll, beforeAll, expect, test } from "vitest";
 const PACKAGE = resolve(import.meta.dirname, "..");
 const TYPE_CHECKER = join(PACKAGE, "node_modules", ".bin", "tsrs");
 const SLOW = 120_000;
+const NOWHERE = "http://127.0.0.1:9";
+
+const offline: NodeJS.ProcessEnv = {
+  ...process.env,
+  NPM_CONFIG_REGISTRY: NOWHERE,
+  npm_config_registry: NOWHERE,
+};
 
 const MODEL = `import { m } from "@earnest/model";
 
@@ -66,7 +73,10 @@ beforeAll(() => {
   project = join(scratch, "project");
   mkdirSync(packed);
   mkdirSync(project);
-  execFileSync("pnpm", ["pack", "--pack-destination", packed], { cwd: PACKAGE, stdio: "pipe" });
+  execFileSync("bun", ["pm", "pack", "--destination", packed, "--quiet"], {
+    cwd: PACKAGE,
+    stdio: "pipe",
+  });
   const [tarball] = readdirSync(packed);
   writeFileSync(
     join(project, "package.json"),
@@ -75,9 +85,10 @@ beforeAll(() => {
   writeFileSync(join(project, "tsconfig.json"), JSON.stringify(STRICT));
   writeFileSync(join(project, "counter.model.ts"), MODEL);
   writeFileSync(join(project, "run.ts"), RUN);
-  execFileSync("pnpm", ["add", "--offline", join(packed, tarball ?? "")], {
+  execFileSync("bun", ["add", join(packed, tarball ?? "")], {
     cwd: project,
     stdio: "pipe",
+    env: offline,
   });
 }, SLOW);
 

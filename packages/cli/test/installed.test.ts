@@ -73,8 +73,19 @@ let packed = "";
 
 const offline: NodeJS.ProcessEnv = {
   ...process.env,
+  NPM_CONFIG_REGISTRY: NOWHERE,
   npm_config_registry: NOWHERE,
-  npm_config_offline: "true",
+};
+
+const bunPack = (folder: string, destination: string): void => {
+  execFileSync("bun", ["pm", "pack", "--destination", destination, "--quiet"], {
+    cwd: folder,
+    stdio: "pipe",
+  });
+};
+
+const bunAdd = (folder: string, tarballs: string[]): void => {
+  execFileSync("bun", ["add", ...tarballs], { cwd: folder, stdio: "pipe", env: offline });
 };
 
 const targetFolder = (): string => process.env.CARGO_TARGET_DIR ?? join(REPOSITORY, "target");
@@ -115,8 +126,8 @@ beforeAll(() => {
     [join(PACKAGE, "scripts", "assemble.ts"), "--binary", binary, "--out", platform],
     { cwd: PACKAGE, stdio: "pipe" },
   );
-  execFileSync("pnpm", ["pack", "--pack-destination", packed], { cwd: platform, stdio: "pipe" });
-  execFileSync("pnpm", ["pack", "--pack-destination", packed], { cwd: PACKAGE, stdio: "pipe" });
+  bunPack(platform, packed);
+  bunPack(PACKAGE, packed);
 
   writeFileSync(
     join(project, "package.json"),
@@ -125,11 +136,7 @@ beforeAll(() => {
   writeFileSync(join(project, "models", "passing.model.ts"), PASSING);
   writeFileSync(join(project, "models", "failing.model.ts"), FAILING);
   const tarballs = readdirSync(packed).map((name) => join(packed, name));
-  execFileSync("pnpm", ["add", "--offline", ...tarballs], {
-    cwd: project,
-    stdio: "pipe",
-    env: offline,
-  });
+  bunAdd(project, tarballs);
 }, SLOW);
 
 afterAll(() => {
@@ -190,7 +197,7 @@ test("a project that holds only the launcher gets one sentence naming the platfo
   mkdirSync(bare);
   writeFileSync(join(bare, "package.json"), JSON.stringify({ name: "bare", private: true }));
   const launcher = join(packed, "earnest-cli-0.1.0.tgz");
-  execFileSync("pnpm", ["add", "--offline", launcher], { cwd: bare, stdio: "pipe", env: offline });
+  bunAdd(bare, [launcher]);
   const result = spawnSync(join(bare, "node_modules", ".bin", "earnest"), ["verify"], {
     cwd: bare,
     encoding: "utf8",

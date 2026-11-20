@@ -45,7 +45,7 @@ fn node(file: &str) -> Vec<Value> {
     sandbox.write("hooks.mjs", HOOKS);
     sandbox.write("explore.mjs", SCRIPT);
     sandbox.write("model.model.ts", &source(file));
-    let library = repository().join("npm/model/src/index.ts");
+    let library = repository().join("packages/model/src/index.ts");
     let output = Command::new("node")
         .args(["--import", "./hooks.mjs", "explore.mjs", "model.model.ts"])
         .env("EARNEST_MODEL_LIBRARY", &library)

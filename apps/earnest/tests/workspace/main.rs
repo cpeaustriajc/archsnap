@@ -64,6 +64,20 @@ fn crate_folders() -> Vec<PathBuf> {
     folders
 }
 
+fn package_folders() -> Vec<PathBuf> {
+    let packages = repository().join("packages");
+    let Ok(entries) = fs::read_dir(&packages) else {
+        return Vec::new();
+    };
+    let mut folders: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|folder| folder.join("package.json").is_file())
+        .collect();
+    folders.sort();
+    folders
+}
+
 fn takes_workspace_lints(manifest: &str) -> bool {
     let compact: Vec<String> = manifest
         .lines()
@@ -152,6 +166,24 @@ fn every_crate_has_a_readme() {
     assert!(
         without.is_empty(),
         "these crates have no `README.md`: {}",
+        names(&without)
+    );
+}
+
+#[test]
+fn every_package_has_a_readme() {
+    let folders = package_folders();
+    assert!(
+        !folders.is_empty(),
+        "`packages/` holds the packages published to npm"
+    );
+    let without: Vec<PathBuf> = folders
+        .into_iter()
+        .filter(|folder| !folder.join("README.md").is_file())
+        .collect();
+    assert!(
+        without.is_empty(),
+        "these packages have no `README.md`: {}",
         names(&without)
     );
 }

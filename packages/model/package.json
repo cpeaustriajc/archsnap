@@ -20,7 +20,8 @@
   },
   "scripts": {
     "build": "tsrs -p tsconfig.build.json",
-    "prepack": "node --eval \"fs.rmSync('dist', { recursive: true, force: true })\" && pnpm run build",
+    "prepack": "node --eval \"fs.rmSync('dist', { recursive: true, force: true })\" && bun run build && node scripts/publish-manifest.ts apply",
+    "postpack": "node scripts/publish-manifest.ts restore",
     "typecheck": "tsrs --noEmit",
     "format": "oxfmt --check",
     "format:fix": "oxfmt",

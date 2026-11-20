@@ -17,8 +17,9 @@ npm install --save-dev @earnest/model
 The published package holds compiled JavaScript and declarations in `dist/`, so it runs in Node
 and type-checks under a strict `tsc` in a project that installs it. In this repository `exports`
 points at `src/index.ts`, which Node runs by stripping types, and `publishConfig.exports` points
-at `dist/` for the tarball that `pnpm pack` makes; `pnpm run build` emits it and `prepack` runs
-the build. `test/installed.test.ts` packs the library, installs the tarball into a fresh project
+at `dist/` for the tarball that `bun pm pack` makes; `bun run build` emits it, and `prepack` runs
+the build and swaps `publishConfig.exports` into `exports` for the tarball (`postpack` restores
+`package.json`), since bun does not apply `publishConfig` itself. `test/installed.test.ts` packs the library, installs the tarball into a fresh project
 and runs `explore`, `replay` and a strict type check there.
 
 ## Writing a model
@@ -174,21 +175,21 @@ by its `label`, the action's sentence.
 
 ## Development
 
-From this folder, after `pnpm install --frozen-lockfile`:
+From this folder, after `bun install --frozen-lockfile` at the repository root:
 
 ```sh
-pnpm run typecheck   # tsrs --noEmit, over src/ and test/
-pnpm run format      # oxfmt --check
-pnpm run format:fix  # oxfmt, rewriting the files in place
-pnpm test            # vitest run
+bun run typecheck   # tsrs --noEmit, over src/, scripts/ and test/
+bun run format      # oxfmt --check
+bun run format:fix  # oxfmt, rewriting the files in place
+bun run test        # vitest run
 ```
 
 - The package has no runtime dependencies and no build step. Node 22.18 or newer runs the `.ts`
   files by stripping types, so the source uses only erasable syntax.
 - The devDependencies are pinned to exact versions: `tsrs` (the Rust port of the TypeScript
   checker), `oxfmt` (the formatter) and `vitest`, with `@types/node` for the tests. The lockfile
-  is `pnpm-lock.yaml`.
-- `typecheck` is one project: `tsconfig.json` covers `src/` and `test/` and excludes
+  is `bun.lock` at the repository root.
+- `typecheck` is one project: `tsconfig.json` covers `src/`, `scripts/` and `test/` and excludes
   `test/rejected/`. It sets `types` to `node` so the tests can import `node:` modules.
 - `test/types.ts` only has to compile: it holds the type-level proofs, such as what `m.Infer`
   gives and which values a `then` rejects.

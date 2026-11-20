@@ -85,7 +85,7 @@ fn state_limit(file: &Path) -> Option<&'static str> {
 }
 
 fn node_results(scratch: &Path, file: &Path) -> Vec<Value> {
-    let library = repository().join("npm/model/src/index.ts");
+    let library = repository().join("packages/model/src/index.ts");
     let output = Command::new("node")
         .args(["--import", "./hooks.mjs", "explore.mjs"])
         .arg(file)

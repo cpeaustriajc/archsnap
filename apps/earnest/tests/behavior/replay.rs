@@ -43,7 +43,7 @@ fn as_record(state: &Value) -> Value {
 }
 
 fn replay_in_node(sandbox: &Sandbox, file: &str, name: &str, path: &Value) -> Vec<Value> {
-    let library = repository().join("npm/model/src/index.ts");
+    let library = repository().join("packages/model/src/index.ts");
     assert!(
         library.is_file(),
         "the TypeScript model library is missing at {}",

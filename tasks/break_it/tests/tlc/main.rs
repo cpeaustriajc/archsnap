@@ -256,7 +256,7 @@ impl Sandbox {
     }
 
     pub(crate) fn explore(&self, file: &str, model: &str) -> Report {
-        let library = repository().join("npm/model/src/index.ts");
+        let library = repository().join("packages/model/src/index.ts");
         assert!(
             library.is_file(),
             "the TypeScript model library is missing at {}",

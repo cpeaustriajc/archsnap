@@ -2,7 +2,5 @@
 /.earnest
 /.claude/worktrees/
 /mutants.out
-/npm/model/node_modules
-/npm/model/dist
-/npm/cli/node_modules
-/npm/cli/dist
+node_modules
+/packages/*/dist

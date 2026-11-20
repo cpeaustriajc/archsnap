@@ -17,7 +17,7 @@ env:
   RUST_VERSION: 1.97.0
   JUST_VERSION: 1.59.0
   NODE_VERSION: 22.23.5
-  PNPM_VERSION: 10.28.0
+  BUN_VERSION: 1.4.4
   TYPESCRIPT_VERSION: 6.0.2
   TLC_VERSION: 1.8.0
   TLC_SHA256: fdffef247f563ef6edbfd44958d2a82db79e7564e07cb673262d896353fa6713
@@ -40,7 +40,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - run: sudo npm install --global "rust-just@$JUST_VERSION" "pnpm@$PNPM_VERSION" "typescript@$TYPESCRIPT_VERSION"
+      - run: sudo npm install --global "rust-just@$JUST_VERSION" "bun@$BUN_VERSION" "typescript@$TYPESCRIPT_VERSION"
       - uses: actions/cache@v4
         with:
           path: ~/cargo-tools
