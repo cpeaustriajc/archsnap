@@ -4,11 +4,11 @@ A model checker for models written in your app's own language. A coding agent st
 a change as a model in TypeScript or Rust, `earnest verify` visits every reachable state, and the
 result goes into the PR as a statechart and a report.
 
-Status: version 1 is built and passes its own checks, and is not yet proven. Five adversarial
-passes each found models with a broken rule that were reported as passing; those are fixed
-except what "Where Node and the checker differ" in `npm/model/README.md` says, and a sixth pass
-has not been run. TLC 1.8.0 confirms the TLA+ export of every conformance model in CI. The spec is the
-Claude Doc "A formal verification suite for agents".
+Status: version 1 is built and passes its own checks, and is not yet proven. Six adversarial
+passes each found models with a broken rule that were reported as passing, and no pass has come
+back clean. TLC 1.8.0 confirms the TLA+ export of every conformance model in CI.
+[Limits of the current build](docs/limits.md) says what earnest does not do, what was checked and
+how far that evidence goes. The spec is the Claude Doc "A formal verification suite for agents".
 
 ## Why the app's own language
 
