@@ -2,11 +2,15 @@ use crate::cut::cut_points;
 use crate::expand::{
     Asked, Budget, Clock, Expanded, Index, Key, Known, State, Whence, Width, expand_state,
 };
-use crate::helpers::Helpers;
+use crate::helpers::{Helpers, Loan};
 use crate::outcome::Outcome;
 use earnest_ir::{Fault, Field, Model};
 use earnest_value::Value;
-use std::sync::Arc;
+use std::any::Any;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread::Scope;
 use std::time::{Duration, Instant};
 
 /// How far a search may go and what it keeps.
@@ -24,8 +28,9 @@ pub struct Limits {
     /// Worker threads for a level of 512 states or more. 0 counts as 1. The outcome is the
     /// same for every number.
     pub jobs: usize,
-    /// Idle threads the search may borrow, on top of `jobs`, for each level it spreads and
-    /// gives back when the level is done. Searches that run side by side share one handle, so
+    /// Idle threads the search may borrow, on top of `jobs`, for the parts of each level it
+    /// spreads, when it starts the level and whenever it is about to take a part, and gives
+    /// back as soon as the level has no part left for them. Searches that run side by side share one handle, so
     /// a thread one of them leaves idle goes to another. The outcome is the same whatever is
     /// borrowed.
     pub helpers: Option<Helpers>,
@@ -55,7 +60,9 @@ impl Default for Limits {
 /// search or for a model should be given this much.
 pub const WORKER_STACK: usize = 256 * 1024 * 1024;
 
+const TIME_LIMIT_REASON: &str = "time limit of";
 const SMALLEST_SHARED_LEVEL: usize = 512;
+const MOST_PARTS: usize = 64;
 const WORTH_SPREADING: Duration = Duration::from_millis(1);
 const STATES_BETWEEN_CLOCK_READS: usize = 64;
 
@@ -106,6 +113,15 @@ struct Expansion {
     workers: usize,
 }
 
+/// Whether `reason`, the [`Outcome::reason`] of a search, says the time limit stopped it.
+///
+/// A search that a state limit stopped is the same on every run, one that a time limit stopped
+/// is not: it ends wherever the clock caught it.
+#[must_use]
+pub fn stopped_by_time_limit(reason: &str) -> bool {
+    reason.starts_with(TIME_LIMIT_REASON)
+}
+
 /// Visits every state `model` can reach from its start states, breadth first, and says what
 /// it found.
 ///
@@ -145,6 +161,23 @@ pub fn explore(model: &Model, limits: &Limits) -> Outcome {
     };
     search.run();
     search.outcome()
+}
+
+struct Level<'a> {
+    frontier: &'a [usize],
+    cuts: Vec<usize>,
+    deadline: Option<Instant>,
+    asked: Asked,
+}
+
+#[derive(Default)]
+struct Shared {
+    next: AtomicUsize,
+    stopped: AtomicBool,
+    running: AtomicUsize,
+    peak: AtomicUsize,
+    done: Mutex<Vec<(usize, Expansion)>>,
+    panic: Mutex<Option<Box<dyn Any + Send>>>,
 }
 
 struct Starts<'a> {
@@ -222,8 +255,7 @@ impl Search<'_> {
                 .checked_div(u32::try_from(frontier.len()).unwrap_or(u32::MAX))
                 .unwrap_or_default();
             if level.stopped {
-                let seconds = self.limits.time_limit.map_or(0, |limit| limit.as_secs());
-                self.reason = Some(format!("time limit of {seconds} s"));
+                self.reason = Some(self.time_limit_reason());
                 break;
             }
             frontier = self.merge(&frontier, level.done);
@@ -238,12 +270,18 @@ impl Search<'_> {
             self.record(id, &expanded);
         }
         if level.stopped {
+            self.reason = Some(self.time_limit_reason());
             self.states.truncate(self.judged);
             self.parents.truncate(self.judged);
             let kept = self.judged;
             self.arrows
                 .retain(|arrow| arrow.from < kept && arrow.to < kept);
         }
+    }
+
+    fn time_limit_reason(&self) -> String {
+        let seconds = self.limits.time_limit.map_or(0, |limit| limit.as_secs());
+        format!("{TIME_LIMIT_REASON} {seconds} s")
     }
 
     fn budget(&self, deadline: Option<Instant>) -> Budget {
@@ -318,52 +356,148 @@ impl Search<'_> {
         let states = u32::try_from(frontier.len()).unwrap_or(u32::MAX);
         let worth_spreading = frontier.len() >= SMALLEST_SHARED_LEVEL
             || per_state.saturating_mul(states) >= WORTH_SPREADING;
-        if !worth_spreading {
-            return self.expand_ids(frontier, deadline, asked);
-        }
         let own = self.limits.jobs.max(1);
-        let loan = self
-            .limits
-            .helpers
-            .as_ref()
-            .map(|helpers| helpers.borrow(frontier.len().saturating_sub(own)));
-        let jobs = own.saturating_add(loan.as_ref().map_or(0, crate::helpers::Loan::threads));
-        if jobs == 1 {
+        if !worth_spreading || (own == 1 && self.limits.helpers.is_none()) {
             return self.expand_ids(frontier, deadline, asked);
         }
-        let share = frontier.len().div_ceil(jobs);
-        let cuts = cut_points(frontier.len(), share);
+        let level = Level {
+            frontier,
+            cuts: cut_points(frontier.len(), frontier.len().div_ceil(MOST_PARTS)),
+            deadline,
+            asked,
+        };
+        let parts = level.cuts.len().saturating_sub(1);
+        if parts <= 1 {
+            return self.expand_ids(frontier, deadline, asked);
+        }
+        let shared = Shared::default();
         std::thread::scope(|scope| {
-            let workers: Vec<_> = cuts
-                .windows(2)
-                .filter_map(|pair| match pair {
-                    [from, to] => frontier.get(*from..*to),
-                    _ => None,
-                })
-                .map(|ids| {
-                    std::thread::Builder::new()
-                        .stack_size(WORKER_STACK)
-                        .spawn_scoped(scope, move || self.expand_ids(ids, deadline, asked))
-                        .expect("a worker thread starts")
-                })
-                .collect();
-            let mut level = Expansion {
-                done: Vec::with_capacity(frontier.len()),
-                stopped: false,
-                workers: jobs,
-            };
-            for worker in workers {
-                let part = match worker.join() {
-                    Ok(part) => part,
-                    Err(panic) => std::panic::resume_unwind(panic),
-                };
-                if !level.stopped {
-                    level.done.extend(part.done);
-                    level.stopped = part.stopped;
-                }
+            for _ in 0..own.min(parts) {
+                self.start_worker(scope, &level, &shared, None);
             }
-            level
-        })
+            let helpers = self.limits.helpers.as_ref();
+            for _ in 0..parts.saturating_sub(own) {
+                let Some(loan) = helpers
+                    .map(|helpers| helpers.borrow(1))
+                    .filter(|loan| loan.threads() > 0)
+                else {
+                    break;
+                };
+                self.start_worker(scope, &level, &shared, Some(loan));
+            }
+        });
+        if let Some(panic) = shared
+            .panic
+            .into_inner()
+            .unwrap_or_else(PoisonError::into_inner)
+        {
+            std::panic::resume_unwind(panic);
+        }
+        let mut finished = shared
+            .done
+            .into_inner()
+            .unwrap_or_else(PoisonError::into_inner);
+        finished.sort_by_key(|(part, _)| *part);
+        let mut expansion = Expansion {
+            done: Vec::with_capacity(frontier.len()),
+            stopped: false,
+            workers: shared.peak.into_inner(),
+        };
+        for (_, part) in finished {
+            expansion.done.extend(part.done);
+            if part.stopped {
+                expansion.stopped = true;
+                break;
+            }
+        }
+        expansion
+    }
+
+    fn start_worker<'scope, 'env>(
+        &'env self,
+        scope: &'scope Scope<'scope, 'env>,
+        level: &'env Level<'env>,
+        shared: &'env Shared,
+        loan: Option<Loan<'env>>,
+    ) {
+        std::thread::Builder::new()
+            .stack_size(WORKER_STACK)
+            .spawn_scoped(scope, move || {
+                let running = shared
+                    .running
+                    .fetch_add(1, Ordering::SeqCst)
+                    .saturating_add(1);
+                shared.peak.fetch_max(running, Ordering::SeqCst);
+                let outcome = catch_unwind(AssertUnwindSafe(|| {
+                    self.take_parts(scope, level, shared);
+                }));
+                drop(loan);
+                shared.running.fetch_sub(1, Ordering::SeqCst);
+                if let Err(panic) = outcome {
+                    shared.stopped.store(true, Ordering::SeqCst);
+                    shared
+                        .panic
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .get_or_insert(panic);
+                }
+            })
+            .expect("a worker thread starts");
+    }
+
+    fn take_parts<'scope, 'env>(
+        &'env self,
+        scope: &'scope Scope<'scope, 'env>,
+        level: &'env Level<'env>,
+        shared: &'env Shared,
+    ) {
+        let parts = level.cuts.len().saturating_sub(1);
+        loop {
+            self.take_up_idle_threads(scope, level, shared, parts);
+            let part = shared.next.fetch_add(1, Ordering::SeqCst);
+            if part >= parts || shared.stopped.load(Ordering::SeqCst) {
+                return;
+            }
+            let ids = level
+                .cuts
+                .get(part)
+                .zip(level.cuts.get(part.saturating_add(1)))
+                .and_then(|(from, to)| level.frontier.get(*from..*to));
+            let Some(ids) = ids else {
+                return;
+            };
+            let expansion = self.expand_ids(ids, level.deadline, level.asked);
+            if expansion.stopped {
+                shared.stopped.store(true, Ordering::SeqCst);
+            }
+            shared
+                .done
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push((part, expansion));
+        }
+    }
+
+    fn take_up_idle_threads<'scope, 'env>(
+        &'env self,
+        scope: &'scope Scope<'scope, 'env>,
+        level: &'env Level<'env>,
+        shared: &'env Shared,
+        parts: usize,
+    ) {
+        let Some(helpers) = self.limits.helpers.as_ref() else {
+            return;
+        };
+        while helpers.idle() > 0
+            && shared.running.load(Ordering::SeqCst)
+                < parts.saturating_sub(shared.next.load(Ordering::SeqCst))
+        {
+            let loan = helpers.borrow(1);
+            if loan.threads() == 0 {
+                return;
+            }
+            self.start_worker(scope, level, shared, Some(loan));
+        }
     }
 
     fn merge(&mut self, frontier: &[usize], level: Vec<Expanded>) -> Vec<usize> {

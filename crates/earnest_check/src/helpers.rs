@@ -1,12 +1,14 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// A shared count of idle threads that searches may borrow, one level of states at a time.
+/// A shared count of idle threads that searches may borrow, a part of a level of states at a
+/// time.
 ///
 /// Give every search of a run the same handle, with the threads no search is using in it. A
-/// search borrows what is idle when it starts a level and gives it back when the level is
-/// done, so threads a finished search leaves behind go to the searches that still run, and no
-/// thread waits while another search has a level to spread.
+/// search borrows what is idle when it starts a level and again before it takes each part of
+/// the level, and gives each thread back when it has no part left, so threads a finished
+/// search leaves behind go to the searches that still run, and no thread waits while another
+/// search has a part of a level to spread.
 #[derive(Clone, Debug, Default)]
 pub struct Helpers {
     idle: Arc<AtomicUsize>,

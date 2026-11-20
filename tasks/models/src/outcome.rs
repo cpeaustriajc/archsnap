@@ -104,11 +104,14 @@ struct Outcome {
     exit_without_skipped: Exit,
     #[initial(false)]
     error_names_skipped: bool,
+    #[initial(false)]
+    error_names_unreadable: bool,
 }
 
 fn matched(selection: Selection, first: Kind) -> bool {
     selection == Selection::Everything
-        || (selection == Selection::ModelOfFirst && first == Kind::Model)
+        || (selection == Selection::ModelOfFirst
+            && (first == Kind::Model || first == Kind::Unreadable))
 }
 
 fn selected(selection: Selection, file: File) -> bool {
@@ -145,13 +148,12 @@ fn searched(outcome: &Outcome, file: File) -> bool {
         && kind_of(outcome, file) == Kind::Model
 }
 
-fn names_a_read_model(selection: Selection, first: Kind) -> bool {
-    selection == Selection::Everything
-        || (selection == Selection::ModelOfFirst && first == Kind::Model)
+fn names_a_declared_model(selection: Selection, first: Kind) -> bool {
+    matched(selection, first)
 }
 
 fn asked_for(selection: Selection, first: Kind, kind: Kind, file: File) -> bool {
-    names_a_read_model(selection, first)
+    names_a_declared_model(selection, first)
         && kind == Kind::Model
         && (selection == Selection::Everything || file == File::First)
 }
@@ -327,6 +329,7 @@ impl Outcome {
             exit: exit_code(self, Skipped::Listed),
             exit_without_skipped: exit_code(self, Skipped::Removed),
             error_names_skipped: !printed && self.first == Kind::SkippedTest,
+            error_names_unreadable: !printed && self.unreadable(),
             ..self.clone()
         })
     }
@@ -384,7 +387,7 @@ impl Outcome {
     #[rule("Exit 1 when a checked model did not pass or a file was unreadable")]
     fn exit_one_when_something_is_wrong(&self) -> bool {
         !self.reported()
-            || !names_a_read_model(self.selection, self.first)
+            || !names_a_declared_model(self.selection, self.first)
             || !(self.unreadable() || exists::<File>(|file| self.asked(file) && !self.passed(file)))
             || self.exit == Exit::One
     }
@@ -392,7 +395,7 @@ impl Outcome {
     #[rule("Exit 2 exactly when --model names no model that was read")]
     fn exit_two_when_nothing_matched(&self) -> bool {
         !self.reported()
-            || (self.exit == Exit::Two) != names_a_read_model(self.selection, self.first)
+            || (self.exit == Exit::Two) != names_a_declared_model(self.selection, self.first)
     }
 
     #[rule("A skipped test file never changes the exit code")]
@@ -408,6 +411,23 @@ impl Outcome {
             || self.selection != Selection::ModelOfFirst
             || self.first != Kind::SkippedTest
             || (self.exit == Exit::Two && self.error_names_skipped)
+    }
+
+    #[rule(
+        "A --model that names a model an unreadable file holds is exit 1, and the file is reported as unreadable"
+    )]
+    fn named_unreadable_file_is_reported(&self) -> bool {
+        !self.reported()
+            || self.selection != Selection::ModelOfFirst
+            || self.first != Kind::Unreadable
+            || (self.exit == Exit::One && self.word_first == Word::Unreadable)
+    }
+
+    #[rule(
+        "A --model that names no declared model is exit 2, and the error names every unreadable file, which may hold it"
+    )]
+    fn unreadable_files_are_named_with_no_such_model(&self) -> bool {
+        self.exit != Exit::Two || !self.unreadable() || self.error_names_unreadable
     }
 
     #[end("earnest has printed the results and exited")]

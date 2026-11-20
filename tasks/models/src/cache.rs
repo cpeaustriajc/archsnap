@@ -220,10 +220,6 @@ fn key_of(flags: Flags) -> Key {
     }
 }
 
-fn hits_state_limit(made: &Made) -> bool {
-    made.model == Job::A && made.max_states == MaxStates::Small
-}
-
 fn stops(job: Job, timing: Timing) -> bool {
     timing == Timing::BothStop
         || (job == Job::A && timing == Timing::AStops)
@@ -242,7 +238,7 @@ fn fresh(job: Job, flags: Flags) -> Made {
 }
 
 fn lasting(key: &Key, made: &Made) -> bool {
-    !(key.time_limit == TimeLimit::Seconds && (made.timed_out || hits_state_limit(made)))
+    !(key.time_limit == TimeLimit::Seconds && made.timed_out)
 }
 
 fn answers(made: &Made, job: Job, asked: &Asked) -> bool {
@@ -294,7 +290,7 @@ fn due_of(cache: &Cache, job: Job) -> bool {
 }
 
 fn loaded(cache: &Cache, job: Job, flags: Flags) -> Option<Made> {
-    if flags.caching == Caching::Used && cache.entry == Some(key_of(flags)) {
+    if cache.entry == Some(key_of(flags)) {
         stored_of(cache, job)
     } else {
         None
@@ -303,7 +299,7 @@ fn loaded(cache: &Cache, job: Job, flags: Flags) -> Option<Made> {
 
 fn pass_for(cache: &Cache, job: Job, flags: Flags) -> Pass {
     let old = loaded(cache, job, flags);
-    let from = if checks(job, flags) {
+    let from = if checks(job, flags) && flags.caching == Caching::Used {
         old.clone()
     } else {
         None
@@ -344,24 +340,16 @@ fn shown(pass: &Pass) -> Option<Made> {
     }
 }
 
-fn stopped_early(made: &Made, flags: Flags) -> bool {
-    made.timed_out || (flags.timing != Timing::NoLimit && hits_state_limit(made))
+fn stopped_early(made: &Made) -> bool {
+    made.timed_out
 }
 
 fn lasting_after(cache: &Cache, job: Job, flags: Flags, pass: &Pass) -> Option<Asked> {
     let asked = asked_of(flags);
     let last = lasting_of(cache, job);
     if !checks(job, flags) {
-        if flags.caching == Caching::Used && last == Some(asked) {
-            last
-        } else {
-            None
-        }
-    } else if pass
-        .fresh
-        .clone()
-        .is_some_and(|made| stopped_early(&made, flags))
-    {
+        if last == Some(asked) { last } else { None }
+    } else if pass.fresh.clone().is_some_and(|made| stopped_early(&made)) {
         None
     } else {
         Some(asked)
@@ -507,7 +495,7 @@ mod tests {
         assert_eq!(
             walked,
             Walked {
-                states: 330,
+                states: 394,
                 broken: Vec::new(),
                 stuck: 0,
             },

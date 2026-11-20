@@ -57,4 +57,7 @@ When a state or an arrow is left out, the block is followed by one line such as
 for (`Node::states`), so a box left out takes every state it stands for, while an arrow is one box
 to another. When a broken state is among them because its
 route did not fit, the line says so: `Not shown: 5 of 26 states and 5 of 25 arrows. A broken
-state lies beyond what is shown.` The same graph always gives the same chart.
+state lies beyond what is shown.` When another broken state is drawn, the line says `Another
+broken state lies beyond what is shown.` or `2 more broken states lie beyond what is shown.`,
+so a drawn broken state is never one of those it says lie beyond. The same graph always gives
+the same chart.

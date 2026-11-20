@@ -1,5 +1,5 @@
 use crate::support::{broken, edge, graph, node, read, start};
-use earnest_chart::{ARROW_LIMIT, chart};
+use earnest_chart::{ARROW_LIMIT, chart, chart_with_limit};
 use earnest_check::{Edge, Graph, Node};
 
 const SIDE: usize = 6;
@@ -201,9 +201,46 @@ fn a_second_route_that_does_not_fit_keeps_its_first_arrows() {
     assert_eq!(
         drawn.note.as_deref(),
         Some(
-            "Not shown: 10 of 31 states and 10 of 30 arrows. A broken state lies beyond what is \
-             shown."
+            "Not shown: 10 of 31 states and 10 of 30 arrows. Another broken state lies beyond \
+             what is shown."
         )
+    );
+}
+
+#[test]
+fn a_chart_with_another_limit_draws_that_many_arrows() {
+    let long = chain(30);
+    for limit in [1, 5, 30, 100] {
+        let drawn = read(&chart_with_limit(&long, limit));
+        assert_eq!(drawn.arrows.len(), limit.min(30), "the limit is {limit}");
+    }
+    assert_eq!(
+        chart_with_limit(&long, ARROW_LIMIT),
+        chart(&long),
+        "the default is the limit of `chart`"
+    );
+    assert_eq!(
+        read(&chart_with_limit(&long, 30)).note,
+        None,
+        "a chart that fits says nothing"
+    );
+}
+
+#[test]
+fn many_broken_states_with_the_first_drawn_say_that_more_lie_beyond() {
+    let mut climb = chain(30);
+    for node in &mut climb.nodes[3..] {
+        node.broken = vec!["low".to_owned()];
+    }
+    let drawn = read(&chart(&climb));
+    assert_eq!(drawn.members("broken").len(), 18, "s3 to s20 are drawn");
+    assert_eq!(
+        drawn.note.as_deref(),
+        Some(
+            "Not shown: 10 of 31 states and 10 of 30 arrows. 10 more broken states lie beyond \
+             what is shown."
+        ),
+        "the drawn broken states are not among those beyond"
     );
 }
 

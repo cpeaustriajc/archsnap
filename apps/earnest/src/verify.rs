@@ -1,10 +1,11 @@
 use crate::arguments::Verify;
 use crate::cache::{Cache, Key};
 use crate::changes::{Compare, check_base, rule_changes};
-use crate::commands::{Exit, Gathered, gather, limits_of, refusing};
+use crate::commands::{Exit, Gathered, gather, limits_of, refusing, say_what_is_unread};
 use crate::print::{Since, Verified, to_stderr, to_stdout};
 use crate::run::{Bounds, Checked, Graphs, Search, checked, explore_each};
 use crate::select::{Target, select_with_removed};
+use earnest_check::stopped_by_time_limit;
 use std::path::Path;
 
 const HERE: &str = ".";
@@ -43,11 +44,7 @@ fn entries<'a>(
             continue;
         }
         let key = Key::new(path, &target.file.source, bounds, rule);
-        let stored = if arguments.no_cache {
-            Vec::new()
-        } else {
-            cache.load(&key)
-        };
+        let stored = cache.load(&key);
         entries.push(Entry {
             path,
             key,
@@ -62,8 +59,14 @@ fn keep(entry: &Entry<'_>, cache: &Cache) {
     if entry.fresh.is_empty() {
         return;
     }
-    let lasting =
-        |checked: &&Checked| !(entry.key.has_time_limit() && checked.result.reason.is_some());
+    let lasting = |checked: &&Checked| {
+        !(entry.key.has_time_limit()
+            && checked
+                .result
+                .reason
+                .as_deref()
+                .is_some_and(stopped_by_time_limit))
+    };
     let still_current = |old: &&Checked| {
         !entry
             .fresh
@@ -105,6 +108,7 @@ fn check_all(
                 .stored
                 .iter()
                 .find(|stored| is_result_of(stored, target))
+                .filter(|_| !arguments.no_cache)
                 .map(served)
         })
         .collect();
@@ -151,6 +155,7 @@ pub(crate) fn verify(arguments: &Verify) -> Result<Exit, String> {
     let selected = select_with_removed(&files, model, rule, arguments.base.as_deref())
         .map_err(|error| refusing(&skipped, model, rule, error))?;
     let targets = selected.targets;
+    say_what_is_unread(&files, model, rule, &targets);
     let checked = match check_all(&targets, arguments, bounds) {
         Ok(checked) => checked,
         Err(error) => {

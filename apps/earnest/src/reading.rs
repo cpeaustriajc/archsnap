@@ -3,6 +3,7 @@ use earnest_ast::{Draft, Reading};
 use earnest_diagnostics::Problem;
 use earnest_ir::Model;
 use earnest_semantic::lower;
+use syn::{Attribute, ImplItem, Item, Type};
 
 #[derive(Debug)]
 pub(crate) struct Readable {
@@ -16,10 +17,17 @@ pub(crate) enum Content {
     Unreadable(Vec<Problem>),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Declared {
+    pub(crate) name: String,
+    pub(crate) rules: Vec<String>,
+}
+
 #[derive(Debug)]
 pub(crate) struct ModelFile {
     pub(crate) path: String,
     pub(crate) source: String,
+    pub(crate) declared: Vec<Declared>,
     pub(crate) content: Content,
 }
 
@@ -37,6 +45,96 @@ impl ModelFile {
             Content::Unreadable(problems) => problems,
         }
     }
+
+    pub(crate) fn declares_unread(&self, model: Option<&str>, rule: Option<&str>) -> bool {
+        !self.problems().is_empty()
+            && self.declared.iter().any(|declared| {
+                model.is_none_or(|name| declared.name == name)
+                    && rule.is_none_or(|id| declared.rules.iter().any(|each| each == id))
+            })
+    }
+}
+
+fn derives_model(attributes: &[Attribute]) -> bool {
+    let mut found = false;
+    for attribute in attributes
+        .iter()
+        .filter(|each| each.path().is_ident("derive"))
+    {
+        let parsed = attribute.parse_nested_meta(|meta| {
+            found |= meta
+                .path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "Model");
+            Ok(())
+        });
+        if parsed.is_err() {
+            return found;
+        }
+    }
+    found
+}
+
+fn declared_in_rust(items: &[Item], declared: &mut Vec<Declared>) {
+    for item in items {
+        match item {
+            Item::Struct(each) if derives_model(&each.attrs) => declared.push(Declared {
+                name: each.ident.to_string(),
+                rules: Vec::new(),
+            }),
+            Item::Mod(each) => {
+                if let Some((_, inner)) = &each.content {
+                    declared_in_rust(inner, declared);
+                }
+            }
+            _ => {}
+        }
+    }
+    for item in items {
+        let Item::Impl(block) = item else {
+            continue;
+        };
+        let Type::Path(owner) = &*block.self_ty else {
+            continue;
+        };
+        let Some(name) = owner.path.get_ident().map(ToString::to_string) else {
+            continue;
+        };
+        for rule in block.items.iter().filter_map(|member| match member {
+            ImplItem::Fn(function)
+                if function
+                    .attrs
+                    .iter()
+                    .any(|attribute| attribute.path().is_ident("rule")) =>
+            {
+                Some(function.sig.ident.to_string())
+            }
+            _ => None,
+        }) {
+            if let Some(found) = declared.iter_mut().find(|each| each.name == name) {
+                found.rules.push(rule);
+            }
+        }
+    }
+}
+
+fn declared_by(language: Language, source: &str, reading: &Reading) -> Vec<Declared> {
+    if reading.drafts.is_empty() && language == Language::Rust && !reading.problems.is_empty() {
+        let mut declared = Vec::new();
+        if let Ok(parsed) = syn::parse_file(source) {
+            declared_in_rust(&parsed.items, &mut declared);
+        }
+        return declared;
+    }
+    reading
+        .drafts
+        .iter()
+        .map(|draft| Declared {
+            name: draft.name.clone(),
+            rules: draft.rules.iter().map(|rule| rule.id.clone()).collect(),
+        })
+        .collect()
 }
 
 pub(crate) fn read(language: Language, path: &str, source: &str) -> Reading {
@@ -69,16 +167,19 @@ fn understand(reading: Reading) -> Content {
 pub(crate) fn load(found: Found) -> ModelFile {
     match found.text {
         Text::Model { language, source } => {
-            let content = understand(read(language, &found.path, &source));
+            let reading = read(language, &found.path, &source);
+            let declared = declared_by(language, &source, &reading);
             ModelFile {
                 path: found.path,
                 source,
-                content,
+                declared,
+                content: understand(reading),
             }
         }
         Text::Unread(problem) => ModelFile {
             path: found.path,
             source: String::new(),
+            declared: Vec::new(),
             content: Content::Unreadable(vec![problem]),
         },
     }
@@ -86,7 +187,7 @@ pub(crate) fn load(found: Found) -> ModelFile {
 
 #[cfg(test)]
 mod tests {
-    use super::{Content, ModelFile, load};
+    use super::{Content, Declared, ModelFile, load};
     use crate::discovery::{Found, Language, Text};
     use earnest_diagnostics::{Place, Problem};
 
@@ -182,6 +283,63 @@ impl Lamp {
             file.problems()
         );
         assert_eq!(file.models().len(), 1, "one Rust model");
+    }
+
+    #[test]
+    fn an_unreadable_typescript_file_still_declares_the_models_the_reader_got() {
+        let file = loaded("src/counter.model.ts", Language::TypeScript, COUNTER);
+        assert!(!file.problems().is_empty(), "the file is unreadable");
+        assert!(file.declares_unread(Some("Counter"), None), "the model");
+        assert!(file.declares_unread(None, Some("bounded")), "its rule");
+        assert!(!file.declares_unread(Some("Other"), None), "no other model");
+    }
+
+    #[test]
+    fn an_unreadable_rust_file_declares_its_derived_models_and_their_rules() {
+        let source = "\
+use earnest::model::{Model, model};
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Model)]
+pub struct Lamp {
+    #[initial(false)]
+    lit: bool,
+}
+
+#[model]
+impl Lamp {
+    #[action(\"someone flips the switch\")]
+    fn flip(&self) -> Option<Self> {
+        loop {}
+    }
+
+    #[rule(\"The lamp is never lit\")]
+    fn dark(&self) -> bool {
+        !self.lit
+    }
+}
+";
+        let file = loaded("lamp.rs", Language::Rust, source);
+        assert!(!file.problems().is_empty(), "the file is unreadable");
+        assert_eq!(
+            file.declared,
+            [Declared {
+                name: "Lamp".to_owned(),
+                rules: vec!["dark".to_owned()]
+            }],
+            "the struct and its rule"
+        );
+        assert!(file.declares_unread(Some("Lamp"), Some("dark")));
+        assert!(
+            !file.declares_unread(Some("Lamp"), Some("flip")),
+            "an action"
+        );
+    }
+
+    #[test]
+    fn a_readable_file_declares_nothing_unread() {
+        let source = COUNTER.replace("LIMIT", "3");
+        let file = loaded("src/counter.model.ts", Language::TypeScript, &source);
+        assert!(!file.declares_unread(Some("Counter"), None), "it is read");
     }
 
     #[test]

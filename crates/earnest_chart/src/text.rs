@@ -25,8 +25,21 @@ fn named(values: &[Named]) -> String {
         .join(", ")
 }
 
+/// The fields of the state a path ends in: every field of the start, with the value of its last
+/// change.
+fn ending(path: &Path) -> Vec<Named> {
+    let mut state = path.start.clone();
+    for change in path.steps.iter().flat_map(|step| &step.changes) {
+        if let Some(field) = state.iter_mut().find(|named| named.name == change.field) {
+            field.value = change.after.clone();
+        }
+    }
+    state
+}
+
 /// A path in the form the text output documents: a `start` line with every field, then one
-/// numbered line per action with its id, its input when it has one and each field it changed.
+/// numbered line per action with its id, its input when it has one and each field it changed,
+/// then, after the last action, an `end` line with every field of the state the path ends in.
 ///
 /// The lines are not indented. A line break inside a value is printed as a space, so each
 /// entry is one line.
@@ -65,6 +78,14 @@ pub fn path_lines(path: &Path) -> Vec<String> {
                 .collect::<Vec<_>>()
                 .join("  "),
         );
+    }
+    if !path.steps.is_empty() {
+        let fields = named(&ending(path));
+        lines.push(if fields.is_empty() {
+            "end".to_owned()
+        } else {
+            format!("end    {fields}")
+        });
     }
     lines
 }

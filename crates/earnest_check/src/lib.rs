@@ -13,7 +13,7 @@ mod helpers;
 mod outcome;
 mod report;
 
-pub use explore::{Limits, WORKER_STACK, explore};
+pub use explore::{Limits, WORKER_STACK, explore, stopped_by_time_limit};
 pub use graph::{Edge, Graph, Node};
 pub use helpers::{Helpers, Loan};
 pub use outcome::{

@@ -5,8 +5,11 @@ use crate::discovery::{discover, language_of};
 use crate::print::{problem_lines, skipped_line, to_stderr, to_stdout, unreadable_lines};
 use crate::reading::{ModelFile, load, read};
 use crate::run::{Bounds, Graphs, Ran, Search, checked, explore_each};
-use crate::select::{Target, select, select_with_removed};
-use earnest_chart::{RuleChange, RuleChanges, Section, Unreadable, chart, report, skipped_section};
+use crate::select::{Target, held_back, select, select_with_removed};
+use earnest_chart::{
+    RuleChange, RuleChanges, Section, Unreadable, chart_with_limit, report_with_limit,
+    skipped_section,
+};
 use earnest_check::Status;
 use earnest_tla::{BEYOND_32_BITS_COMPUTED, Files, limits, write};
 use std::fs;
@@ -61,6 +64,19 @@ fn holds_the_asked_for(path: &str, model: Option<&str>, rule: Option<&str>) -> b
         model.is_none_or(|name| draft.name == name)
             && rule.is_none_or(|id| draft.rules.iter().any(|each| each.id == id))
     })
+}
+
+pub(crate) fn say_what_is_unread(
+    files: &[ModelFile],
+    model: Option<&str>,
+    rule: Option<&str>,
+    targets: &[Target<'_>],
+) {
+    if targets.is_empty()
+        && let Some(said) = held_back(files, model, rule)
+    {
+        to_stderr(&said);
+    }
 }
 
 pub(crate) fn refusing(
@@ -134,6 +150,7 @@ pub(crate) fn chart_command(arguments: &Chart) -> Result<Exit, String> {
     let model = arguments.selection.models.model.as_deref();
     let targets =
         select(&files, model, rule).map_err(|error| refusing(&skipped, model, rule, error))?;
+    say_what_is_unread(&files, model, rule, &targets);
     let ran = explore_each(
         &searched(&targets, rule),
         limits_of(&arguments.bounds),
@@ -142,7 +159,7 @@ pub(crate) fn chart_command(arguments: &Chart) -> Result<Exit, String> {
     let charts: Vec<String> = ran
         .iter()
         .filter_map(|ran| ran.outcome.graph.as_ref())
-        .map(chart)
+        .map(|graph| chart_with_limit(graph, arguments.arrows.max_arrows.get()))
         .collect();
     to_stdout(&charts.join("\n\n"));
     say_what_was_skipped(&skipped);
@@ -164,6 +181,7 @@ pub(crate) fn report_command(arguments: &Report) -> Result<Exit, String> {
     let selected = select_with_removed(&files, model, rule, arguments.base.as_deref())
         .map_err(|error| refusing(&skipped, model, rule, error))?;
     let targets = selected.targets;
+    say_what_is_unread(&files, model, rule, &targets);
     let ran = explore_each(&searched(&targets, rule), bounds, Graphs::Kept);
     let sections: Vec<Section<'_>> = targets
         .iter()
@@ -210,7 +228,12 @@ pub(crate) fn report_command(arguments: &Report) -> Result<Exit, String> {
             problems: lines,
         })
         .collect();
-    let mut written = report(&sections, &unreadable, since.as_ref());
+    let mut written = report_with_limit(
+        &sections,
+        &unreadable,
+        since.as_ref(),
+        arguments.arrows.max_arrows.get(),
+    );
     if let Some(section) = skipped_section(&skipped) {
         if !written.is_empty() {
             written.push_str("\n\n");
@@ -259,6 +282,7 @@ pub(crate) fn tla_command(arguments: &Tla) -> Result<Exit, String> {
     let model = arguments.models.model.as_deref();
     let targets =
         select(&files, model, None).map_err(|error| refusing(&skipped, model, None, error))?;
+    say_what_is_unread(&files, model, None, &targets);
     let all = exported(&targets)?;
     let out = &arguments.out;
     if !all.is_empty()
@@ -318,6 +342,7 @@ pub(crate) fn confirm_command(arguments: &Confirm) -> Result<Exit, String> {
     let model = arguments.models.model.as_deref();
     let targets =
         select(&files, model, None).map_err(|error| refusing(&skipped, model, None, error))?;
+    say_what_is_unread(&files, model, None, &targets);
     let all = exported(&targets)?;
     let ran = explore_each(&searched(&targets, None), bounds, Graphs::Dropped);
     let mut everything_agrees = true;

@@ -67,7 +67,8 @@ earnest confirm --tla-rs ~/.cargo/bin/tla-rs
 | `--max-states <n>` | 5000000 | Stop a model after this many distinct states. Every state that is counted has its rules judged |
 | `--time-limit <seconds>` | none | Stop a model after this long, also inside one state: a rule or an action that takes very long in one state is stopped too |
 | `--jobs <n>` | all cores | Worker threads |
-| `--no-cache` | off | Check every model again, even when unchanged |
+| `--no-cache` | off | Check every model again, even when unchanged. The results it leaves unchecked stay stored |
+| `--max-arrows <n>` | 20 | `chart` and `report` only: the most arrows a chart draws, at least 1 (see "Statechart and report") |
 | `--base <git ref>` | none | Compare each model's rules with the same file at this commit |
 
 `earnest verify` runs in one process, needs no network, no Java and no setup, and writes only to
@@ -76,9 +77,10 @@ earnest confirm --tla-rs ~/.cargo/bin/tla-rs
 `--jobs` is the number of worker threads for the whole run. Models are checked side by side, and
 the threads a model is not using go to the others: the levels of one large model are spread
 over every thread that is free, and when a model finishes and no model waits to start, its
-threads go to the models still running, also to one that started with a single thread. The
-results, their order and the path of each broken rule are the same for every `--jobs` and on
-every run.
+threads go to the models still running, also to one that started with a single thread, and a
+model takes up such a thread before it starts its next part of a level (a level is cut in at
+most 64 parts), not only at its next level. The results, their order and the path of each
+broken rule are the same for every `--jobs` and on every run.
 
 ### Which files are models
 
@@ -182,9 +184,11 @@ fail        Turnstile  3 states  1 ms
   broken  staysLocked  "The gate stays locked until the visitor pays"
     start  gate = "locked", paid = false
     1. push  gate: "locked" -> "open"
+    end    gate = "open", paid = false
   stuck  no action can happen here, and the model does not mark it as an end
     start  gate = "locked", paid = false
     1. pay  paid: false -> true
+    end    gate = "locked", paid = true
 unfinished  Ledger  1000 states so far  3 ms  (state limit of 1000)
 unreadable  src/clock.model.ts
   src/clock.model.ts:12:17  `Date.now`  the system clock is outside the library
@@ -195,11 +199,15 @@ unreadable  src/clock.model.ts
 - A model line has the status, the model name, `<n> states` (`<n> states so far` when unfinished)
   and `<n> ms`. An unchanged model served from the cache ends with `(cached)`. A cached result
   is served only by a build of the checker made from the same sources as the build that stored
-  it.
+  it. A result is stored unless `--time-limit` stopped it, so one that stopped at `--max-states`
+  is stored too. A run that checks only some models, with `--no-cache` or not, leaves the stored
+  results of the others as they were.
 - `broken` names the rule's id and its sentence, and is followed by the shortest path to the first
   state that breaks it: a `start` line with every field, then one numbered line per action with
   the action's id, its input as `name = value` when it has one, and each field that changed as
-  `field: before -> after`.
+  `field: before -> after`, then an `end` line with every field of the state the path ends in, so
+  a reader need not add the steps up. A path with no step is its `start` line alone. `earnest
+  report` prints the same lines.
 - `stuck`, `out of range` and `fault` findings have the same path form. A model is out of range
   when an action gives a field a value outside what the field declares. That is a fault of the
   model, reported with the path to the state. The state out of range is counted, no rule is
@@ -247,8 +255,8 @@ unreadable  src/clock.model.ts
 | Code | Meaning |
 |---|---|
 | 0 | Every model passed |
-| 1 | A rule broke, a model was stuck, out of range or faulted, a model was unfinished, or a file was unreadable |
-| 2 | Bad flags, or no model matched `--model` or `--rule`. The error names a skipped test file that holds the model or rule, and the skipped line comes before it |
+| 1 | A rule broke, a model was stuck, out of range or faulted, a model was unfinished, or a file was unreadable. A `--model` or `--rule` that names what an unreadable file declares is this, not 2: the error says the file is unreadable and its problems are listed |
+| 2 | Bad flags, or no model matched `--model` or `--rule`. The error names a skipped test file that holds the model or rule, and the skipped line comes before it. When a file was unreadable and none of them declares the name, the error names the unreadable files, which may hold it |
 
 ### JSON output
 
@@ -361,14 +369,17 @@ arrows carry the labels from the model's view, which a TypeScript model writes w
 and a Rust model with a `#[view]` block (see "Writing a model in Rust"). A Rust model and its
 TypeScript twin with the same view give the same chart, text for text. A state that breaks a
 rule has the class `broken`.
-A chart never has more than 20 arrows: when the model has more, the chart keeps the paths to the
+A chart never has more than 20 arrows, or the `--max-arrows <n>` of `chart` and `report` (at
+least 1): when the model has more, the chart keeps the paths to the
 broken states first and says how many states and arrows it left out. The states are counted
 for what they are: a box of the chart stands for every state with its label, so the note counts
 the states of the boxes it left out, and an arrow is one box to another however many actions it
-carries. When the shortest path to a broken state is longer than what is left of the 20 arrows,
+carries. When the shortest path to a broken state is longer than what is left of the arrows allowed,
 the chart keeps the first arrows of that path, does not draw the broken state, and the note
 says so: `Not shown: 5 of 26 states and 5 of 25 arrows. A broken state lies beyond what is
-shown.`
+shown.` When a broken state is drawn and others are not, the note counts only the others and
+says so: `Another broken state lies beyond what is shown.` or `10 more broken states lie beyond
+what is shown.`
 
 `earnest report` prints Markdown for a PR body: one section per model with its result line, its
 chart, the path to each broken rule, a section `Unreadable files` that names each file the

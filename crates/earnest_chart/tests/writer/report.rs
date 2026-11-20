@@ -155,13 +155,16 @@ broken  safe  "The heat is never on with the door open"
   start  door = "Closed", heat = "Off"
   1. start  heat: "Off" -> "On"
   2. open  door: "Closed" -> "Open"
+  end    door = "Open", heat = "On"
 broken  closed  "The door stays closed"
   start  door = "Closed", heat = "Off"
   1. open  door: "Closed" -> "Open"
+  end    door = "Open", heat = "Off"
 stuck  no action can happen here, and the model does not mark it as an end
   start  door = "Closed", heat = "Off"
   1. start  heat: "Off" -> "On"
   2. open  door: "Closed" -> "Open"
+  end    door = "Open", heat = "On"
 ```"#;
 
 #[test]
@@ -398,6 +401,7 @@ fn a_path_prints_the_input_of_a_step_before_its_changes() {
             "start  box = [], sent = 0",
             "1. deliver  letter = \"Bill\", copies = 2  box: [] -> [\"Bill\"], sent: 0 -> -1",
             "2. wait",
+            "end    box = [\"Bill\"], sent = -1",
         ]
     );
 }
@@ -499,9 +503,11 @@ fn text_a_developer_wrote_cannot_open_or_close_a_block_or_a_heading() {
 broken  {flat}  "{flat}"
   start  {flat} = "{flat}"
   1. {flat}  {flat} = "{flat}"  {flat}: "{flat}" -> "{flat}"
+  end    {flat} = "{flat}"
 fault  {flat}
   start  {flat} = "{flat}"
   1. {flat}  {flat} = "{flat}"  {flat}: "{flat}" -> "{flat}"
+  end    {flat} = "{flat}"
 ```
 
 ## Rule changes

@@ -1,4 +1,4 @@
-use crate::select::{Selection, marked, select};
+use crate::select::{ARROW_LIMIT, Selection, marked, select};
 use earnest_check::{Graph, Node};
 use std::fmt::Write as _;
 
@@ -136,8 +136,8 @@ struct Drawing<'a> {
 }
 
 impl<'a> Drawing<'a> {
-    fn new(graph: &'a Graph) -> Self {
-        let selection = select(graph);
+    fn new(graph: &'a Graph, limit: usize) -> Self {
+        let selection = select(graph, limit);
         let mut groups: Vec<&'a str> = Vec::new();
         let mut group_of = vec![None; graph.nodes.len()];
         for state in &selection.states {
@@ -275,10 +275,12 @@ impl<'a> Drawing<'a> {
             .map(|position| self.graph.nodes[*position].states)
             .sum();
         let hidden_states = states.saturating_sub(shown);
-        let beyond = match self.selection.beyond {
-            0 => String::new(),
-            1 => " A broken state lies beyond what is shown.".to_owned(),
-            many => format!(" {many} broken states lie beyond what is shown."),
+        let beyond = match (self.selection.beyond, self.selection.shown) {
+            (0, _) => String::new(),
+            (1, 0) => " A broken state lies beyond what is shown.".to_owned(),
+            (many, 0) => format!(" {many} broken states lie beyond what is shown."),
+            (1, _) => " Another broken state lies beyond what is shown.".to_owned(),
+            (many, _) => format!(" {many} more broken states lie beyond what is shown."),
         };
         (hidden_boxes > 0 || hidden_arrows > 0).then(|| {
             format!(
@@ -306,10 +308,19 @@ impl<'a> Drawing<'a> {
 /// and an arrow is one box to another, however many actions it carries. When the route to a state that
 /// breaks a rule or is out of range does not fit, its first arrows are drawn as far as the
 /// limit allows, the state itself is not, and the line goes on with `A broken state lies
-/// beyond what is shown.` or `2 broken states lie beyond what is shown.`
+/// beyond what is shown.` or `2 broken states lie beyond what is shown.` When another broken
+/// state is drawn, it says `Another broken state lies beyond what is shown.` or `2 more broken
+/// states lie beyond what is shown.`, so it never reads as if the drawn one were missing.
 #[must_use]
 pub fn chart(graph: &Graph) -> String {
-    let drawing = Drawing::new(graph);
+    chart_with_limit(graph, ARROW_LIMIT)
+}
+
+/// [`chart`] with room for `limit` arrows instead of [`ARROW_LIMIT`](crate::ARROW_LIMIT).
+/// A `limit` of 0 draws no arrow.
+#[must_use]
+pub fn chart_with_limit(graph: &Graph, limit: usize) -> String {
+    let drawing = Drawing::new(graph, limit);
     let mut lines = vec!["```mermaid".to_owned()];
     if let Some(text) = &graph.title {
         lines.push("---".to_owned());

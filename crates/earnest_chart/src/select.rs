@@ -8,6 +8,7 @@ pub(crate) struct Selection {
     pub(crate) states: Vec<usize>,
     pub(crate) arrows: Vec<usize>,
     pub(crate) beyond: usize,
+    pub(crate) shown: usize,
 }
 
 pub(crate) fn marked(node: &Node) -> bool {
@@ -53,7 +54,7 @@ fn route(graph: &Graph, into: &[Option<usize>], kept: &[bool], target: usize) ->
     arrows
 }
 
-pub(crate) fn select(graph: &Graph) -> Selection {
+pub(crate) fn select(graph: &Graph, limit: usize) -> Selection {
     let mut leaving = vec![Vec::new(); graph.nodes.len()];
     for (position, edge) in sound(graph) {
         leaving[edge.from].push(position);
@@ -73,7 +74,7 @@ pub(crate) fn select(graph: &Graph) -> Selection {
             continue;
         }
         let whole = route(graph, &into, &kept, target);
-        let room = ARROW_LIMIT.saturating_sub(count);
+        let room = limit.saturating_sub(count);
         let left_out = whole.len().saturating_sub(room);
         let arrows = whole.get(left_out..).unwrap_or_default();
         count = count.saturating_add(arrows.len());
@@ -88,7 +89,7 @@ pub(crate) fn select(graph: &Graph) -> Selection {
             reached[edge.to] = true;
         }
     }
-    while count < ARROW_LIMIT {
+    while count < limit {
         let Some((position, edge)) =
             sound(graph).find(|(position, edge)| !kept[*position] && reached[edge.from])
         else {
@@ -108,11 +109,18 @@ pub(crate) fn select(graph: &Graph) -> Selection {
             marked(node) && !drawn[*target] && (node.start || into[*target].is_some())
         })
         .count();
+    let shown = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(target, node)| marked(node) && drawn[*target])
+        .count();
     Selection {
         states: (0..graph.nodes.len()).filter(|node| drawn[*node]).collect(),
         arrows: (0..graph.edges.len())
             .filter(|position| kept[*position])
             .collect(),
         beyond,
+        shown,
     }
 }

@@ -4,6 +4,7 @@ mod build;
 mod counts;
 mod findings;
 mod graphs;
+mod lending;
 mod limits;
 mod rules;
 mod turnstile;

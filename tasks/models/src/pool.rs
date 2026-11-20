@@ -46,7 +46,11 @@ struct Task {
     #[range(0, 2)]
     busy: u8,
     #[range(0, 4)]
-    states: u8,
+    parts: u8,
+    #[range(0, 4)]
+    taken: u8,
+    spread: bool,
+    polled: bool,
 }
 
 const MOST_LEVELS: u8 = 2;
@@ -71,11 +75,11 @@ struct Pool {
     #[range(0, 3)]
     #[initial(0)]
     leaving: u8,
-    #[initial(Task { phase: Phase::Waiting, levels: 0, loan: 0, busy: 0, states: 0 })]
+    #[initial(Task { phase: Phase::Waiting, levels: 0, loan: 0, busy: 0, parts: 0, taken: 0, spread: false, polled: false })]
     a: Task,
-    #[initial(Task { phase: Phase::Waiting, levels: 0, loan: 0, busy: 0, states: 0 })]
+    #[initial(Task { phase: Phase::Waiting, levels: 0, loan: 0, busy: 0, parts: 0, taken: 0, spread: false, polled: false })]
     b: Task,
-    #[initial(Task { phase: Phase::Waiting, levels: 0, loan: 0, busy: 0, states: 0 })]
+    #[initial(Task { phase: Phase::Waiting, levels: 0, loan: 0, busy: 0, parts: 0, taken: 0, spread: false, polled: false })]
     c: Task,
 }
 
@@ -85,32 +89,10 @@ fn absent() -> Task {
         levels: 0,
         loan: 0,
         busy: 0,
-        states: 0,
-    }
-}
-
-fn share(states: u8, jobs: u8) -> u8 {
-    if jobs >= states {
-        1
-    } else if 2 * jobs >= states {
-        2
-    } else if 3 * jobs >= states {
-        3
-    } else {
-        4
-    }
-}
-
-fn chunks(states: u8, jobs: u8) -> u8 {
-    let size = share(states, jobs);
-    if size >= states {
-        1
-    } else if 2 * size >= states {
-        2
-    } else if 3 * size >= states {
-        3
-    } else {
-        4
+        parts: 0,
+        taken: 0,
+        spread: false,
+        polled: false,
     }
 }
 
@@ -167,7 +149,25 @@ fn stage(pool: &Pool) -> Stage {
 }
 
 fn borrows_within(task: &Task) -> bool {
-    task.loan == 0 || task.loan + OWN_THREADS <= task.states
+    task.loan == 0 || task.loan + OWN_THREADS <= task.parts
+}
+
+fn could_use_another(task: &Task) -> bool {
+    task.phase == Phase::Spreading
+        && task.spread
+        && task.taken < task.parts
+        && task.loan + OWN_THREADS < task.parts
+}
+
+fn looked_past_an_idle_thread(task: &Task) -> bool {
+    task.polled && could_use_another(task)
+}
+
+fn unseen(task: &Task) -> Task {
+    Task {
+        polled: false,
+        ..task.clone()
+    }
 }
 
 fn holds_nothing(task: &Task) -> bool {
@@ -268,27 +268,29 @@ impl Pool {
         Some(Self {
             leaving: self.leaving - 1,
             idle: self.idle + 1,
+            a: unseen(&self.a),
+            b: unseen(&self.b),
+            c: unseen(&self.c),
             ..self.clone()
         })
     }
 
     #[action("a model starts a level and borrows idle threads for it")]
-    fn start_level(&self, job: Job, #[range(1, 4)] states: u8, level: Level) -> Option<Self> {
+    fn start_level(&self, job: Job, #[range(1, 4)] parts: u8, level: Level) -> Option<Self> {
         let task = self.task(job);
         require!(task.phase == Phase::Between && task.levels < MOST_LEVELS);
-        let wanted = if level == Level::WorthSpreading {
-            states - OWN_THREADS
-        } else {
-            0
-        };
+        let spread = level == Level::WorthSpreading;
+        let wanted: u8 = if spread { parts - OWN_THREADS } else { 0 };
         let loan = smaller(self.idle, wanted);
-        let busy = chunks(states, OWN_THREADS + loan) - OWN_THREADS;
         let changed = Task {
             phase: Phase::Spreading,
             levels: task.levels + 1,
             loan,
-            busy,
-            states,
+            busy: loan,
+            parts,
+            taken: NONE,
+            spread,
+            polled: true,
         };
         Some(Self {
             idle: self.idle - loan,
@@ -299,22 +301,78 @@ impl Pool {
         })
     }
 
+    #[action("a running level looks at the idle threads and takes up as many as it has parts for")]
+    fn poll(&self, job: Job) -> Option<Self> {
+        let task = self.task(job);
+        require!(task.phase == Phase::Spreading && task.spread && !task.polled);
+        let joining = smaller(self.idle, task.parts - OWN_THREADS - task.loan);
+        let changed = Task {
+            loan: task.loan + joining,
+            busy: task.busy + joining,
+            polled: true,
+            ..task
+        };
+        Some(Self {
+            idle: self.idle - joining,
+            a: pick(job, Job::A, &changed, &self.a),
+            b: pick(job, Job::B, &changed, &self.b),
+            c: pick(job, Job::C, &changed, &self.c),
+            ..self.clone()
+        })
+    }
+
+    #[action(
+        "a thread of a running level takes the next part, after the level has looked at the idle threads"
+    )]
+    fn take_part(&self, job: Job) -> Option<Self> {
+        let task = self.task(job);
+        require!(
+            task.phase == Phase::Spreading && task.spread && task.polled && task.taken < task.parts
+        );
+        let changed = Task {
+            taken: task.taken + 1,
+            polled: false,
+            ..task
+        };
+        Some(Self {
+            a: pick(job, Job::A, &changed, &self.a),
+            b: pick(job, Job::B, &changed, &self.b),
+            c: pick(job, Job::C, &changed, &self.c),
+            ..self.clone()
+        })
+    }
+
     #[action("a model finishes its level and gives the borrowed threads back")]
     fn end_level(&self, job: Job) -> Option<Self> {
         let task = self.task(job);
-        require!(task.phase == Phase::Spreading);
+        require!(task.phase == Phase::Spreading && (!task.spread || task.taken == task.parts));
         let changed = Task {
             phase: Phase::Between,
             loan: 0,
             busy: 0,
-            states: 0,
+            parts: 0,
+            taken: 0,
+            spread: false,
+            polled: false,
             ..task
         };
         Some(Self {
             idle: self.idle + task.loan,
-            a: pick(job, Job::A, &changed, &self.a),
-            b: pick(job, Job::B, &changed, &self.b),
-            c: pick(job, Job::C, &changed, &self.c),
+            a: if job == Job::A {
+                changed.clone()
+            } else {
+                unseen(&self.a)
+            },
+            b: if job == Job::B {
+                changed.clone()
+            } else {
+                unseen(&self.b)
+            },
+            c: if job == Job::C {
+                changed
+            } else {
+                unseen(&self.c)
+            },
             ..self.clone()
         })
     }
@@ -359,14 +417,24 @@ impl Pool {
         waiting(self) <= self.claiming || self.idle + lent(self) == 0
     }
 
-    #[rule("A level runs no more helper threads than it borrowed")]
+    #[rule("Every thread a level borrowed runs a part of it")]
     fn runs_what_it_borrowed(&self) -> bool {
-        self.a.busy <= self.a.loan && self.b.busy <= self.b.loan && self.c.busy <= self.c.loan
+        self.a.busy == self.a.loan && self.b.busy == self.b.loan && self.c.busy == self.c.loan
     }
 
     #[rule("A level borrows no more threads than it has states to share out")]
     fn borrows_what_it_can_share(&self) -> bool {
         borrows_within(&self.a) && borrows_within(&self.b) && borrows_within(&self.c)
+    }
+
+    #[rule(
+        "No thread stays idle beside a running level that has looked at the idle threads and could use it"
+    )]
+    fn none_idle_beside_a_level(&self) -> bool {
+        self.idle == 0
+            || !(looked_past_an_idle_thread(&self.a)
+                || looked_past_an_idle_thread(&self.b)
+                || looked_past_an_idle_thread(&self.c))
     }
 
     #[rule("A finished model holds no borrowed thread")]
@@ -388,6 +456,8 @@ impl Pool {
         find_none = "nothing left",
         retire = "retire",
         start_level = "borrow",
+        poll = "take idle threads",
+        take_part = "take a part",
         end_level = "give back",
         finish = "model done"
     )
@@ -428,7 +498,7 @@ mod tests {
         assert_eq!(
             walked,
             Walked {
-                states: 1702,
+                states: 35612,
                 broken: Vec::new(),
                 stuck: 0,
             },

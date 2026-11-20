@@ -186,10 +186,21 @@ proptest! {
                 marked && steps.is_some() && drawn.label_of(&format!("s{position}")).is_none()
             })
             .count();
-        let lies_beyond = match beyond {
-            0 => String::new(),
-            1 => " A broken state lies beyond what is shown.".to_owned(),
-            many => format!(" {many} broken states lie beyond what is shown."),
+        let shown = graph
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(position, node)| {
+                let marked = !node.broken.is_empty() || !node.outside.is_empty();
+                marked && drawn.label_of(&format!("s{position}")).is_some()
+            })
+            .count();
+        let lies_beyond = match (beyond, shown) {
+            (0, _) => String::new(),
+            (1, 0) => " A broken state lies beyond what is shown.".to_owned(),
+            (many, 0) => format!(" {many} broken states lie beyond what is shown."),
+            (1, _) => " Another broken state lies beyond what is shown.".to_owned(),
+            (many, _) => format!(" {many} more broken states lie beyond what is shown."),
         };
         let expected = (boxes > 0 || arrows > 0).then(|| format!(
             "Not shown: {states} of {all} states and {arrows} of {} arrows.{lies_beyond}",
@@ -268,6 +279,6 @@ proptest! {
             .filter(|line| line.trim_start().starts_with('#'))
             .count();
         prop_assert_eq!(headings, 2, "the headings of\n{}", text);
-        prop_assert_eq!(text.split(['\n', '\r']).count(), 21,"the lines of\n{}", text);
+        prop_assert_eq!(text.split(['\n', '\r']).count(), 23,"the lines of\n{}", text);
     }
 }

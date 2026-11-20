@@ -5,8 +5,8 @@ checked with `earnest verify`:
 
 | File | Model | States | What it stands for |
 |---|---|---|---|
-| `src/pool.rs` | `Pool` | 1702 | The shared thread pool: `earnest_check::Helpers`, `apps/earnest/src/workers.rs` and the level loop of the search |
-| `src/cache.rs` | `Cache` | 330 | The result cache: `apps/earnest/src/cache.rs`, `verify.rs` and the build fingerprint in `sources.rs` |
+| `src/pool.rs` | `Pool` | 35612 | The shared thread pool: `earnest_check::Helpers`, `apps/earnest/src/workers.rs` and the level loop of the search |
+| `src/cache.rs` | `Cache` | 394 | The result cache: `apps/earnest/src/cache.rs`, `verify.rs` and the build fingerprint in `sources.rs` |
 | `src/outcome.rs` | `Outcome` | 7222 | How a search becomes a result word, rule verdicts and an exit code: `earnest_check/src/report.rs`, `apps/earnest/src/print.rs`, `select.rs`, `verify.rs` |
 
 Each model has two halves. The actions copy what the code does, function by function, and the
@@ -15,7 +15,7 @@ against the inputs rather than against the code's own helpers, so a change to an
 breaks a promise breaks a rule. Every rule below was broken on purpose by at least one wrong
 version of an action (a mutation), listed per model.
 
-Every model passes. Six rules that the code breaks are not in the files, because the crate's
+Every model passes. One rule that the code breaks is not in the files, because the crate's
 test asserts that the files pass; each is under "Findings" with the change that brings it back
 and the path the checker prints.
 
@@ -40,15 +40,21 @@ and `earnest confirm --tlc` gives the same count a third time.
 | `leaving`, action `retire` | a crew thread whose claim gave `None` and that has not yet run `pool.retire()`, which is `helpers.add(1)` |
 | `a`, `b`, `c` (`Task`) | one model each; `phase` is `Absent` (no such model in this setup), `Waiting` (not yet claimed), `Between` (claimed, between two levels), `Spreading` (inside `expand_level`), `Done` |
 | `Task.levels` | levels started, at most `MOST_LEVELS` = 2 |
-| `Task.loan` | `Loan::threads()` of the level's loan |
-| `Task.states`, `Task.busy` | `frontier.len()` of the level and the helper threads `expand_level` actually starts: `cut_points(len, len.div_ceil(jobs))` gives that many parts, less the model's own |
-| action `start_level(job, states, level)` | `expand_level` in `earnest_check/src/explore.rs`: when the level is worth spreading it calls `helpers.borrow(len - own)` with `own = 1` (`run.rs` sets `jobs: 1`), which takes `min(idle, wanted)` |
-| action `end_level(job)` | the `Loan` dropped at the end of `expand_level`, which is `helpers.add(loan)` |
+| `Task.loan`, `Task.busy` | the threads the level has borrowed (the loans its workers hold) and the helper threads running parts of it: the same number, because a thread is only borrowed to start a worker |
+| `Task.parts`, `Task.taken`, `Task.spread` | the parts `expand_level` cuts the level into (`cut_points` with at most `MOST_PARTS` = 64 parts, so 1 to 4 here, each a part of its own), how many a worker has taken, and whether the level is worth spreading (`Level`) or runs on one thread |
+| `Task.polled` | the level has looked at the idle count since a thread last became idle, which every worker does before it takes a part (`take_up_idle_threads`) |
+| action `start_level(job, parts, level)` | `expand_level` in `earnest_check/src/explore.rs`: when the level is worth spreading it starts its own worker and borrows one thread for each part beyond it, `min(idle, parts - own)` with `own = 1` (`run.rs` sets `jobs: 1`), so a borrowed thread always has a part |
+| action `poll(job)` | `take_up_idle_threads`: a worker sees idle threads while parts are left, borrows one and starts a worker on it, as long as there are more parts left than workers |
+| action `take_part(job)` | a worker takes the next part: `shared.next.fetch_add(1)`, after it polled |
+| action `end_level(job)` | the last worker returning: the `Loan` of each worker is dropped when it finds no part left, which is `helpers.add(1)`; the model gives them all back at the end of the level, and a level that is not spread ends whenever |
 | action `finish(job)` | `explore` returning to the crew thread's loop, which claims again |
 | end `all_back` | every model done and `idle` is the whole `--jobs` |
 
-`share` and `chunks` are `div_ceil` and the number of parts `cut_points` makes, written as
-comparisons because the library has no division.
+`parts` stands for the number of parts, which `expand_level` makes from the size of the level
+alone (`cut_points(len, len.div_ceil(64))`), not from the number of threads, so threads that
+join late find parts left to take. `poll` and `take_part` are two steps so that a thread can
+become idle between them; a thread that becomes idle (`retire`, `end_level`) clears `polled`,
+because the levels have not seen it yet.
 
 ### Bounds
 
@@ -57,8 +63,8 @@ crew smaller than the models (so a model waits and starts late on a thread that 
 another), a crew smaller than the threads (so threads start idle and two models compete for
 them), and a crew thread that retires while another model still runs. Two levels per model are
 the fewest that let a model borrow, give back, and borrow again what another model left. A
-level of 1 to 4 states with 3 threads covers every case of `cut_points`, including the one
-where it makes fewer parts than there are threads (4 states over 3 threads: parts of 2).
+level of 1 to 4 parts with 3 threads covers a level with fewer parts than threads, with as many
+and with more.
 
 ### Rules
 
@@ -71,9 +77,14 @@ where it makes fewer parts than there are threads (4 states over 3 threads: part
 - `none_idle_while_waiting`: while more models wait than crew threads are about to claim, no
   thread is idle or lent. A waiting model can only be started by a crew thread, so this is "no
   thread sits idle while a model waits with no one to start it".
-- `runs_what_it_borrowed`: a level starts no more helper threads than its loan.
-- `borrows_what_it_can_share`: a level borrows no more threads than it has states beyond its
-  own.
+- `runs_what_it_borrowed`: a level starts exactly as many helper threads as its loan, so no
+  borrowed thread sits unused for the level.
+- `borrows_what_it_can_share`: a level borrows no more threads than it has parts beyond its own.
+- `none_idle_beside_a_level`: when a spread level has looked at the idle threads since the last
+  one became idle, either no thread is idle or the level has no part left for another thread.
+  A thread that becomes idle waits at most until the next part is taken, not until the next
+  level; that is the strict form of "no thread sits idle while a spread level could use it" that
+  a pool that looks at the idle count whenever it takes a part can keep.
 - `finished_holds_nothing`: a finished model holds no loan.
 - End `all_back`: every model is finished and every thread is back in `idle`. Any state where no
   action can happen and that is not this end is stuck. The model has no cycle (every action
@@ -82,9 +93,9 @@ where it makes fewer parts than there are threads (4 states over 3 threads: part
 
 ### States
 
-1702, the same in `earnest verify`, in the `rustc` walk and in TLC. Not derived by hand: the
-two setups interleave up to three models with two levels each and a choice of level size, and
-an honest hand count of that is a program, which the `rustc` walk is.
+35612, the same in `earnest verify` and in the `rustc` walk. Not derived by hand: the two
+setups interleave up to three models with two levels each, a choice of level size and the parts
+taken one by one, and an honest hand count of that is a program, which the `rustc` walk is.
 
 ### Mutations
 
@@ -99,6 +110,7 @@ an honest hand count of that is a program, which the `rustc` walk is.
 | the level starts the helpers it wanted, not those it got | `runs_what_it_borrowed` |
 | a model can finish in the middle of a level | `finished_holds_nothing`, a stuck state |
 | a level borrows every idle thread | `borrows_what_it_can_share` |
+| `poll` takes up no thread | `none_idle_beside_a_level` |
 
 ### Chart
 
@@ -113,9 +125,9 @@ stateDiagram-v2
         state "AllStarted, 0 idle, 0 lent" as s7
         [*] --> s0
         s0 --> s2 : make the pool
-        s2 --> s2 : claim / borrow / give back / model done
+        s2 --> s2 : claim / borrow / give back / take a part / model done / take idle threads
         s2 --> s7 : claim
-        s7 --> s7 : borrow / give back / model done / nothing left
+        s7 --> s7 : borrow / give back / take idle threads / take a part / model done / nothing left
     }
     state "ThreeThreadsTwoModels" as g1 {
         state "NoPoolYet, 0 idle, 0 lent" as s1
@@ -126,28 +138,27 @@ stateDiagram-v2
         state "AllStarted, 2 idle, 0 lent" as s8
         state "AllFinished, 1 idle, 0 lent" as s9
         state "AllStarted, 1 idle, 1 lent" as s10
-        state "AllStarted, 0 idle, 2 lent" as s11
         [*] --> s1
         s1 --> s3 : make the pool
-        s3 --> s3 : claim / borrow / give back / model done
+        s3 --> s3 : claim / borrow / give back / take a part / model done / take idle threads
         s3 --> s4 : claim
         s3 --> s5 : borrow
-        s4 --> s4 : borrow / give back / model done / nothing left
-        s4 --> s6 : borrow
+        s4 --> s4 : borrow / give back / take a part / model done / take idle threads / nothing left
+        s4 --> s6 : borrow / take idle threads
         s5 --> s6 : claim
+        s5 --> s5 : take a part / take idle threads
+        s6 --> s6 : borrow / take a part / give back / take idle threads / model done / nothing left
         s5 --> s3 : give back
-        s6 --> s6 : borrow / give back / model done / nothing left
-        s6 --> s4 : give back
         s4 --> s8 : retire
+        s6 --> s4 : give back
         s4 --> s9 : model done
         s6 --> s10 : retire
-        s8 --> s8 : borrow / give back
-        s8 --> s10 : borrow
-        s8 --> s11 : borrow
+        s8 --> s8 : borrow / give back / take idle threads / take a part
+        s8 --> s10 : borrow / take idle threads
     }
 ```
 
-Not shown: 264 of 1702 states and 17 of 37 arrows.
+Not shown: 1304 of 35612 states and 22 of 42 arrows.
 
 ## The result cache (`src/cache.rs`)
 
@@ -160,15 +171,14 @@ Not shown: 264 of 1702 states and 17 of 37 arrows.
 | `Flags.max_states`, `Flags.timing` | `--max-states` (default or small), `--time-limit` (none, or set with each of `A` and `B` stopped by it or not) |
 | `Flags.picked`, `Flags.only` | `--model B` and `--rule` naming a rule of `A` only; `--model B --rule` of `A` is refused (exit 2, `select.rs`) and leaves the cache alone |
 | `Flags.build` | the binary: `Old`, `Rebuilt` (built again from the same sources) or `New` (other sources) |
-| `Flags.caching` | `--no-cache` |
+| `Flags.caching` | `--no-cache`: the stored results are loaded but none is served |
 | `Flags.noise` | what can't change a result: another `--jobs`, or a touched file (a new modification time with the same bytes) |
 | `Key`, `key_of`, `fingerprint` | `cache::Key::new`: engine, file, source, max states, time limit in seconds and rule. `fingerprint` is `EARNEST_ENGINE` from `sources::engine`, the same for `Old` and `Rebuilt`. The file's path is the same in every run, so it is left out |
 | `entry`, `stored_a`, `stored_b` | the one entry file for the path, `Entry { key, models }` |
-| `loaded` | `Cache::load` (the stored models when the key is equal) or nothing with `--no-cache`, in `entries` |
-| `pass_for`, `Pass` | for one model: what was loaded, what is served (`is_result_of`), and what is checked fresh |
-| `kept`, `lasting` | `keep`: stored models without a fresh result, then fresh results that are not `has_time_limit() && reason.is_some()` |
-| `hits_state_limit` | `A` stops at the small state limit, `B` never does: the result has a `reason` |
-| `Made` | what a result was computed from: model, sources, content, state limit, rule, whether a time limit stopped it |
+| `loaded` | `Cache::load` (the stored models when the key is equal), in `entries`, also with `--no-cache` |
+| `pass_for`, `Pass` | for one model: what was loaded, what is served (`is_result_of`, and not with `--no-cache`), and what is checked fresh |
+| `kept`, `lasting` | `keep`: stored models without a fresh result, then fresh results that are not `has_time_limit() && stopped_by_time_limit(reason)` |
+| `Made` | what a result was computed from: model, sources, content, state limit, rule, whether a time limit stopped it (`reason` starts with `time limit of`; a stop at the state limit is not that) |
 | `asked`, `served_*`, `shown_*` | what the last run asked, and for each model whether it was cached, fresh or not checked, and the result shown |
 | `lasting_*`, `due_*`, `forced` | the rules' own memory: the inputs of each model's last check that was not stopped early, whether this run should have been served, and whether it had `--no-cache` |
 
@@ -191,14 +201,15 @@ follow, and the state space closes because the state holds only the cache and th
 - `no_cache_checks_again`: a `--no-cache` run serves nothing from the cache.
 - `timed_out_never_stored`: no stored result was stopped by a time limit.
 - `reused_when_nothing_changed`: a model checked with exactly the inputs of its last check that
-  was not stopped early (another `--jobs`, a touched file or a rebuilt binary are the same
-  inputs) is served from the cache, unless a run since then had another key, or was a
-  `--no-cache` run that did not check it. Those two exceptions, and "stopped early" including a
-  state limit under a time limit, are narrower than the contract's sentence; see "Findings".
+  was not stopped by a time limit (another `--jobs`, a touched file or a rebuilt binary are the
+  same inputs) is served from the cache, unless a run since then had another key, which the
+  single entry of a file cannot keep beside the new one, or was checked again by `--no-cache`.
+  A run that does not check the model leaves its stored result alone, with `--no-cache` too,
+  and a result that the state limit stopped is stored, with a time limit set or not.
 
 ### States
 
-330, the same in `earnest verify`, in the `rustc` walk and in TLC. Not derived by hand: the
+394, the same in `earnest verify`, in the `rustc` walk and in TLC. Not derived by hand: the
 cache content after a run depends on the one before it, and the reachable pairs of entry and
 last run are not a product of independent parts.
 
@@ -213,6 +224,8 @@ last run are not a product of independent parts.
 | the key leaves out the engine | `served_for_the_same_input` |
 | the engine is the binary, not its sources | `reused_when_nothing_changed` |
 | `keep` stores a result a time limit stopped | `served_for_the_same_input`, `timed_out_never_stored` |
+| `keep` drops a result that the state limit stopped when a time limit is set | `reused_when_nothing_changed` |
+| `--no-cache` drops the stored results of the models the run did not check | `reused_when_nothing_changed` |
 | `load` ignores `--no-cache` | `no_cache_checks_again` |
 | `is_result_of` takes the other model's result | `served_for_the_same_input`, `reused_when_nothing_changed` |
 | nothing is ever stored | `reused_when_nothing_changed` |
@@ -264,7 +277,7 @@ stateDiagram-v2
     s2 --> s4 : verify
 ```
 
-Not shown: 8 of 330 states and 46 of 66 arrows.
+Not shown: 16 of 394 states and 46 of 66 arrows.
 
 ## The run outcome (`src/outcome.rs`)
 
@@ -273,13 +286,14 @@ Not shown: 8 of 330 states and 46 of 66 arrows.
 | Model | Code |
 |---|---|
 | `first`, `second` | two files found by the run: a model file read with one model, an `unreadable` file, or a skipped test file (`discovery.rs`) |
-| `selection` | no `--model`, `--model` naming the first file's model, or `--model` naming no model that was read (`select.rs`) |
+| `selection` | no `--model`, `--model` naming a model the first file declares (read, or in an unreadable file whose declaration the reader got), or `--model` naming no model any file declares (`select.rs`) |
 | `phase_*`, action `stop` | the search of the file's model: still searching, or ended at the last state, at `--max-states` or at `--time-limit` (`Search::run`, `reason`) |
 | `found_*`, action `find` | what the search found so far: a broken rule (`first_broken`), a rule with no value in a state (`unjudged`), a stuck state, or a state cut short (out of range, or a fault of an action or end, `trouble`) |
 | action `report`, `status`, `verdict` | `Search::outcome` in `earnest_check/src/report.rs`: `Fail` when a finding or a broken rule, else `Unfinished` at a limit, else `Pass`; a rule is `Broken` when seen broken, `Holds` when the search ended with no reason and the rule was judged everywhere, else `Unknown` |
-| `exit_code`, `not_passed`, `matched` | `Summary::everything_passed` in `print.rs` and the `refusing` error path of `verify`: exit 2 when `--model` matches nothing, else 0 only with no `fail`, no `unfinished` and no unreadable file |
+| `exit_code`, `not_passed`, `matched` | `Summary::everything_passed` in `print.rs` and the `refusing` error path of `verify`: exit 2 when `--model` matches no declared model, else 0 only with no `fail`, no `unfinished` and no unreadable file |
 | `exit_without_skipped` | the exit code of the same run with the skipped test file deleted |
 | `error_names_skipped` | the `refusing` sentence naming the skipped test file that holds the model |
+| `error_names_unreadable` | the error of `select` naming the unreadable files that may declare the model, when none declares it |
 | `word_*`, `verdict_*` | the printed status word (`Pending` when nothing is printed because of exit 2) and the one rule's verdict |
 
 One rule per model is enough: verdicts are judged rule by rule. A rule that faults also makes a
@@ -309,11 +323,16 @@ free, and every subset of the four findings with each of the three ways to end i
   unreadable.
 - `exit_one_when_something_is_wrong`: when the selection matched, exit 1 when a checked model did
   not pass or a file was unreadable.
-- `exit_two_when_nothing_matched`: exit 2 exactly when `--model` names no model that was read.
+- `exit_two_when_nothing_matched`: exit 2 exactly when `--model` names no model that any file
+  declares, an unreadable file included.
 - `skipped_never_changes_the_exit`: the exit code is the one the run would have with the skipped
   test file deleted.
 - `named_skipped_file_is_reported`: `--model` naming a model that only a skipped test file holds
   is exit 2 and the error names the file.
+- `named_unreadable_file_is_reported`: `--model` naming a model that an unreadable file declares
+  is exit 1 and the file is reported as `unreadable`, with its problems.
+- `unreadable_files_are_named_with_no_such_model`: `--model` naming no declared model while a
+  file is unreadable is exit 2 and the error names the unreadable files, which may hold it.
 - End `exited`: earnest has printed and exited.
 
 ### States
@@ -334,7 +353,7 @@ stays at its start values):
 | no `--model`, one model file | 4 | 1 | 64 + 48 | 448 |
 | no `--model`, no model file | 4 | 0 | 1 + 1 | 8 |
 | `--model` of the first, first is a model file | 3 | 1 | 64 + 48 | 336 |
-| `--model` of the first, first is not a model file | 6 | 0 | 1 + 1 | 12 |
+| `--model` of the first, first is not a model file (skipped, or unreadable and declaring it) | 6 | 0 | 1 + 1 | 12 |
 | `--model` that names nothing | 9 | 0 | 1 + 1 | 18 |
 | | 27 | | | 7222 |
 
@@ -352,6 +371,8 @@ stays at its start values):
 | a skipped test file counts as unreadable | `skipped_never_changes_the_exit` |
 | `--model` reads the model of a skipped test file | `exit_two_when_nothing_matched`, `named_skipped_file_is_reported` |
 | the error does not name the skipped file | `named_skipped_file_is_reported` |
+| `--model` ignores the models an unreadable file declares (exit 2) | `named_unreadable_file_is_reported`, `exit_two_when_nothing_matched` |
+| the error does not name the unreadable files | `unreadable_files_are_named_with_no_such_model` |
 | `--model` that names nothing checks every model | `exit_two_when_nothing_matched` |
 
 ### Chart
@@ -374,24 +395,24 @@ stateDiagram-v2
     }
     state "ModelOfFirst" as g1 {
         state "exit Pending" as s1
-        state "exit Two" as s5
-        state "exit Zero" as s7
-        state "exit One" as s8
+        state "exit One" as s5
+        state "exit Two" as s6
+        state "exit Zero" as s8
         [*] --> s1
         s1 --> s1 : found / search ends
         s1 --> s5 : report
-        s1 --> s7 : report
+        s1 --> s6 : report
         s1 --> s8 : report
         s5 --> [*]
-        s7 --> [*]
+        s6 --> [*]
         s8 --> [*]
     }
     state "NoSuchModel" as g2 {
         state "exit Pending" as s2
-        state "exit Two" as s6
+        state "exit Two" as s7
         [*] --> s2
-        s2 --> s6 : report
-        s6 --> [*]
+        s2 --> s7 : report
+        s7 --> [*]
     }
 ```
 
@@ -399,63 +420,6 @@ stateDiagram-v2
 
 Each finding is a rule the code breaks. The rule is not in the file, so that the file passes;
 the change below brings it back, and the path is what `earnest verify` printed with it.
-
-### 1. A lent thread can run nothing (pool)
-
-Rule: "every thread on loan runs a part of the level": in `runs_what_it_borrowed`, `<=` becomes
-`==`. Broken after `open`, `claim`, `claim`, `start_level[A, 1 state, not worth spreading]`,
-`end_level[A]`, `finish[A]`, `find_none`, `retire`, `start_level[B, 4 states, worth spreading]`:
-`idle: 2 -> 0`, `b.loan = 2`, `b.busy = 1`.
-
-`expand_level` (`crates/earnest_check/src/explore.rs`) borrows `frontier.len() - own` threads,
-then cuts the level in parts of `len.div_ceil(jobs)`; `cut_points` gives
-`ceil(len / ceil(len / jobs))` parts, which is fewer than `jobs` when `len` is small next to
-`jobs` (4 states over 3 jobs: 2 parts). The loan keeps the threads it does not start from every
-other model for the whole level, and `per_state` is scaled by `level.workers = jobs`, not by the
-parts that ran. A level of 512 states, the smallest that is always spread, first loses a
-thread at 28 jobs (parts of 19 give 27 parts); at 64 jobs, 600 states give 60 parts and keep 4
-lent threads idle. Small levels spread because they are slow lose more. A code fault in
-the use of the pool, not a lost thread.
-
-### 2. Threads that come free in the middle of a level wait for the next level (pool)
-
-Rule: "no thread sits idle while a spread level could use it". Add the rule
-`self.idle == 0 || no task is Spreading with 0 < loan and loan + 1 < states`. Broken after
-`open`, `claim`, `claim`, `start_level[A, 1 state]`, `start_level[B, 3 states, worth
-spreading]` (B borrows the one idle thread), `end_level[A]`, `finish[A]`, `find_none`, `retire`:
-`idle: 0 -> 1` while `B` is in a level that wanted 2.
-
-This is the design: a search borrows once per level (`Helpers` doc: "borrows what is idle when
-it starts a level and gives it back when the level is done"). The root `README.md` says "when a
-model finishes and no model waits to start, its threads go to the models still running"; they
-go only when that model starts its next level, which for a model with a few wide levels is most
-of its run. Measured on this crate with `--jobs 4`: `Cache` alone takes 6.1 s, and 15.2 s when
-`pool.rs` and `outcome.rs` are in the same run, though those two finish in under 0.1 s. A
-design question: the contract sentence promises more than the per-level loan gives.
-
-### 3. `--no-cache --model` forgets the other models of the file (cache)
-
-Rule: `reused_when_nothing_changed` without its `--no-cache` exception: in `lasting_after`,
-drop `flags.caching == Caching::Used &&`. Broken after `run[all models]`, `run[--model B
---no-cache]`, `run[all models]`: `A` is checked again (`served_a: Fresh`) though every input is
-the same as in the first run.
-
-`entries` in `apps/earnest/src/verify.rs` loads nothing under `--no-cache`, and `keep` writes the
-entry from that empty `stored` plus the fresh results, so the stored results of the models the
-run did not check are dropped. Reproduced with the binary: `verify two.rs`, `verify two.rs`
-(both cached), `verify --no-cache --model Stove two.rs`, `verify two.rs` (Oven is no longer
-`(cached)`). A code fault that costs a re-check, never a wrong result.
-
-### 4. A state-limited result is not stored when a time limit is set (cache)
-
-Rule: `reused_when_nothing_changed` without its state-limit exception: in `lasting_after`, the
-test becomes `made.timed_out`. Broken after `run[--max-states small --time-limit, both finish]`
-twice: `A`, which stopped at the state limit and not at the time limit, is checked again.
-
-`keep` stores a fresh result only when `!(key.has_time_limit() && reason.is_some())`, and a state
-limit sets `reason` too. Reproduced: `verify --model Oven --rule closed --max-states 1
---time-limit 100 two.rs` twice prints no `(cached)`; without `--time-limit` the second run is
-cached. Conservative and safe; a design question whether it is meant.
 
 ### 5. A rule `holds` in a model whose search was cut short (outcome)
 
@@ -473,14 +437,91 @@ documented as "True in every reachable state" and `Unknown` as "not judged in ev
 root README lists only "unfinished or the rule faulted" for `unknown`, so code and README agree
 with each other and disagree with the verdict's own doc. A contract gap.
 
-### 6. `--model` naming a model in an unreadable file says no such model exists (outcome)
+## Fixed
 
-Rule: "an unreadable file that holds the model `--model` names is reported as unreadable".
-Broken at once from `selection = ModelOfFirst, first = Unreadable`: `report` gives exit 2 and
-prints nothing about the file.
+Each was a finding: a rule the code broke, kept out of the file so that it passed. The rule is
+now in the file and holds, the actions describe the changed code, and the state counts above
+are those of the model with the rule.
 
-`select` (`apps/earnest/src/select.rs`) only looks at readable models, and the error path of
-`verify` prints `error: no model is named `Lamp`` and exits 2. `refusing` names a skipped test
-file that holds the model, but nothing names an unreadable file, although the root README says
-"it is never left out without a word". Reproduced with a file holding `struct Lamp` and a `loop`.
-A contract gap: exit 2 with a sentence that is false about the file the user meant.
+### 1. A lent thread can run nothing (pool, fixed)
+
+`runs_what_it_borrowed` states `==`, where it was `<=`. Before the fix it broke after `open`,
+`claim`, `claim`, `start_level[A, 1 state, not worth spreading]`, `end_level[A]`, `finish[A]`,
+`find_none`, `retire`, `start_level[B, 4 states, worth spreading]`: `idle: 2 -> 0`, `b.loan =
+2`, `b.busy = 1`. `expand_level` borrowed `frontier.len() - own` threads and only then cut the
+level in parts of `len.div_ceil(jobs)`, which are fewer than `jobs` when `len` is small next to
+`jobs` (4 states over 3 jobs: 2 parts), so a lent thread was kept from every other model for the
+whole level and ran nothing. Now `expand_level` works out the parts for the threads it could
+get (`parts_of`), borrows only the threads those parts use and gives back at once any that a
+race left over (`Loan::keep_at_most`). The model's `start_level` does the same, and the pool
+has 1694 states, down from 1702: the levels that borrowed a thread to no use are gone.
+
+### 2. Threads that come free in the middle of a level wait for the next level (pool, fixed)
+
+The finding was the rule "no thread sits idle while a spread level could use it":
+`self.idle == 0 || no task is Spreading with loan + 1 < states`. It broke after `open`, `claim`,
+`claim`, `start_level[A, 2 states, not worth spreading]`, with `idle = 1` beside a level of 2
+states that was running on one thread, and, once the levels that run on one thread are left
+out, after `start_level[A, 1 state]`, `start_level[B, 3 states, worth spreading]`, `end_level[A]`,
+`finish[A]`, `find_none`, `retire`: `idle: 0 -> 1` while `B` is in a level that wanted 2. A search
+borrowed once per level, so threads that came free during a level went to the next level of
+some model, which for a model with a few wide levels is most of its run. Measured with
+`--jobs 4` on the 4-core container (`target/release/earnest verify --no-cache --jobs 4
+tasks/models`, whole run): 15.2 to 16.3 s over 7 runs (one 10.8 s), against 6.3 to 6.5 s over 6
+runs now, the time `Cache` takes alone.
+
+Now `expand_level` cuts a level in at most 64 parts that do not depend on the number of
+threads, starts one worker for each of its own threads, and each worker looks at the idle count
+before it takes a part; when a thread is idle and parts are left, the worker borrows it and
+starts another worker on it, which gives its thread back when it finds no part left. The parts
+are merged in order, so the result is the same for every `--jobs`, every timing and every run.
+The rule is in the model as `none_idle_beside_a_level`, with the actions `poll` and `take_part`;
+without `poll` taking the idle threads it breaks, as `poll` that takes none shows in the
+mutations. The strict form without `polled` cannot hold for any pool that looks at the idle
+count at the parts' boundaries: a thread is idle from the moment it is freed to the next part
+taken. 35612 states, up from 1694: each level now takes its parts one at a time.
+
+### 3. `--no-cache --model` forgets the other models of the file (cache, fixed)
+
+`reused_when_nothing_changed` no longer has its `--no-cache` exception: `lasting_after` kept a
+model's last check only when `flags.caching == Caching::Used`, and the code behind it was
+`entries` in `apps/earnest/src/verify.rs`, which loaded nothing under `--no-cache`, so `keep`
+wrote the entry from the fresh results alone. Before the fix the rule broke after `run[all
+models]`, `run[--model B --no-cache]`, `run[all models]`: `A` was checked again. Reproduced
+with the binary: `verify two.rs`, `verify two.rs` (both cached), `verify --no-cache --model
+Stove two.rs`, `verify two.rs`: `Oven` was no longer `(cached)`. Now `entries` loads the stored
+results always and `check_all` serves none of them with `--no-cache`, so `keep` leaves the
+results of the models the run did not check as they were. The model's `loaded` ignores
+`--no-cache` and `pass_for` serves only when it is not given.
+
+### 4. A state-limited result is not stored when a time limit is set (cache, fixed)
+
+`reused_when_nothing_changed` no longer counts a state limit under a time limit as "stopped
+early": `stopped_early` and `lasting` test `made.timed_out` alone. Before the fix it broke after
+`run[--max-states small --time-limit, both finish]` twice: `A`, which stopped at the state limit
+and not at the time limit, was checked again. `keep` stored a fresh result only when `!(key
+.has_time_limit() && reason.is_some())`, and a state limit sets `reason` too. Now `keep` asks
+`earnest_check::stopped_by_time_limit(reason)`, which is true for `time limit of N s` and false
+for `state limit of N`. The search also says `time limit` when the clock cut short the last
+judging of the states it had found (`judge_the_rest`), where it said `state limit` before and
+left a result that depended on the clock. Reproduced and fixed: `verify --model Oven --rule
+closed --max-states 1 --time-limit 100 two.rs` twice now prints `(cached)` the second time.
+The model has 394 states, up from 330: the results that were never stored are stored now.
+
+### 6. `--model` naming a model in an unreadable file says no such model exists (outcome, fixed)
+
+`named_unreadable_file_is_reported` is in the file and holds: `--model` naming a model that an
+unreadable file declares is exit 1 and the file is reported as unreadable with its problems.
+Before the fix it broke at once from `selection = ModelOfFirst, first = Unreadable`: `report`
+gave exit 2 and printed nothing about the file. `select` (`apps/earnest/src/select.rs`) only
+looked at readable models, and `verify`, `chart`, `report`, `tla` and `confirm` printed `error:
+no model is named `Lamp`` and exited 2. Now `ModelFile` keeps the models the reader declared
+also for an unreadable file (the drafts of a TypeScript file; for a Rust file, the `#[derive(Model)]`
+structs and their `#[rule]` methods, found with `syn`, because the Rust reader gives no draft
+for an unreadable file), `select` lets a name or a rule that such a file declares through with
+no model, and the command says `error: the model `Lamp` is declared in `lamp.rs`, which is
+unreadable, so it was not checked` and goes on to list the file's problems, exit 1. A name that
+no file declares is still exit 2, and the error now names the unreadable files, which may hold
+it: `no model is named `Lamp`; the unreadable file `lamp.rs` may declare it`. The second rule,
+`unreadable_files_are_named_with_no_such_model`, states that. The model's count is the same,
+7222: no new state, only other exits.

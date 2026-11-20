@@ -104,11 +104,11 @@ fn assert_passes(file: &str, name: &str, states: u64, rules: &[&str]) {
 }
 
 #[test]
-fn the_thread_pool_passes_with_1702_states() {
+fn the_thread_pool_passes_with_35612_states() {
     assert_passes(
         "pool.rs",
         "Pool",
-        1702,
+        35612,
         &[
             "lent_once",
             "none_lost",
@@ -116,17 +116,18 @@ fn the_thread_pool_passes_with_1702_states() {
             "none_idle_while_waiting",
             "runs_what_it_borrowed",
             "borrows_what_it_can_share",
+            "none_idle_beside_a_level",
             "finished_holds_nothing",
         ],
     );
 }
 
 #[test]
-fn the_cache_passes_with_330_states() {
+fn the_cache_passes_with_394_states() {
     assert_passes(
         "cache.rs",
         "Cache",
-        330,
+        394,
         &[
             "served_for_the_same_input",
             "no_cache_checks_again",
@@ -153,6 +154,8 @@ fn the_run_outcome_passes_with_7222_states() {
             "exit_two_when_nothing_matched",
             "skipped_never_changes_the_exit",
             "named_skipped_file_is_reported",
+            "named_unreadable_file_is_reported",
+            "unreadable_files_are_named_with_no_such_model",
         ],
     );
 }

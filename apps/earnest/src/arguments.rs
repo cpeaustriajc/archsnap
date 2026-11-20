@@ -88,11 +88,24 @@ pub(crate) struct Verify {
 }
 
 #[derive(Debug, Args)]
+pub(crate) struct Arrows {
+    #[arg(
+        long,
+        value_name = "N",
+        default_value = "20",
+        help = "Draw at most this many arrows in a chart (at least 1)"
+    )]
+    pub(crate) max_arrows: NonZeroUsize,
+}
+
+#[derive(Debug, Args)]
 pub(crate) struct Chart {
     #[command(flatten)]
     pub(crate) selection: Selection,
     #[command(flatten)]
     pub(crate) bounds: Bounds,
+    #[command(flatten)]
+    pub(crate) arrows: Arrows,
 }
 
 #[derive(Debug, Args)]
@@ -101,6 +114,8 @@ pub(crate) struct Report {
     pub(crate) selection: Selection,
     #[command(flatten)]
     pub(crate) bounds: Bounds,
+    #[command(flatten)]
+    pub(crate) arrows: Arrows,
     #[arg(
         long,
         value_name = "GIT REF",

@@ -1,6 +1,7 @@
 use crate::changes::{RuleChanges, rule_change_lines};
 use crate::markdown::{code_span, fenced, one_line, prose};
-use crate::mermaid::chart;
+use crate::mermaid::chart_with_limit;
+use crate::select::ARROW_LIMIT;
 use crate::text::{detail_lines, word};
 use earnest_check::{Outcome, Status};
 
@@ -75,9 +76,15 @@ pub fn skipped_section(skipped: &[String]) -> Option<String> {
     ))
 }
 
-fn model(section: &Section<'_>) -> String {
+fn model(section: &Section<'_>, max_arrows: usize) -> String {
     let mut blocks = vec![format!("## {}", prose(section.name)), result_line(section)];
-    blocks.extend(section.outcome.graph.as_ref().map(chart));
+    blocks.extend(
+        section
+            .outcome
+            .graph
+            .as_ref()
+            .map(|graph| chart_with_limit(graph, max_arrows)),
+    );
     let detail = detail_lines(section.outcome);
     if !detail.is_empty() {
         blocks.push(fenced(&detail));
@@ -103,7 +110,22 @@ pub fn report(
     unreadable: &[Unreadable<'_>],
     changes: Option<&RuleChanges<'_>>,
 ) -> String {
-    let mut blocks: Vec<String> = sections.iter().map(model).collect();
+    report_with_limit(sections, unreadable, changes, ARROW_LIMIT)
+}
+
+/// [`report`] with charts of at most `max_arrows` arrows instead of
+/// [`ARROW_LIMIT`](crate::ARROW_LIMIT).
+#[must_use]
+pub fn report_with_limit(
+    sections: &[Section<'_>],
+    unreadable: &[Unreadable<'_>],
+    changes: Option<&RuleChanges<'_>>,
+    max_arrows: usize,
+) -> String {
+    let mut blocks: Vec<String> = sections
+        .iter()
+        .map(|section| model(section, max_arrows))
+        .collect();
     if !unreadable.is_empty() {
         let lines: Vec<String> = unreadable.iter().flat_map(unread_lines).collect();
         blocks.push(format!("## Unreadable files\n\n{}", fenced(&lines)));
