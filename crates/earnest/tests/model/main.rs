@@ -4,7 +4,10 @@
 mod behavior;
 mod collections;
 mod derives;
+mod listed;
 mod parts;
+mod replays;
+mod views;
 
 use earnest::model::Domain;
 

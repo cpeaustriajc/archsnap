@@ -170,4 +170,25 @@ mod tests {
         });
         assert!(union.contains("union"), "{union}");
     }
+
+    #[test]
+    fn a_listed_field_loops_over_its_list() {
+        let expanded = expand(quote! {
+            struct Seat {
+                #[one_of(1, 3)]
+                row: u8,
+                #[one_of("window", "aisle")]
+                side: &'static str,
+            }
+        })
+        .expect("a struct of listed fields")
+        .to_string();
+        for piece in [
+            quote! { for earnest_choice_row in ::core::iter::IntoIterator::into_iter([1, 3]) },
+            quote! { for earnest_choice_side in ::core::iter::IntoIterator::into_iter(["window", "aisle"]) },
+        ] {
+            let text = piece.to_string();
+            assert!(expanded.contains(&text), "{text} in {expanded}");
+        }
+    }
 }

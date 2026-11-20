@@ -24,6 +24,7 @@ const ONLY_MODELS: &str =
 struct Found<'a> {
     models: Vec<&'a ItemStruct>,
     blocks: Vec<&'a ItemImpl>,
+    views: Vec<&'a ItemImpl>,
     constants: Vec<(String, &'a Type, &'a Expr)>,
     functions: Vec<&'a ItemFn>,
 }
@@ -58,7 +59,7 @@ fn is_part_of_a_model(item: &Item) -> bool {
     match item {
         Item::Struct(found) => derives(&found.attrs, "Model") || derives(&found.attrs, "Domain"),
         Item::Enum(found) => derives(&found.attrs, "Domain"),
-        Item::Impl(found) => marks_model(&found.attrs),
+        Item::Impl(found) => marks_model(&found.attrs) || marks_view(&found.attrs),
         _ => false,
     }
 }
@@ -79,6 +80,16 @@ fn marks_model(attributes: &[Attribute]) -> bool {
             .segments
             .last()
             .is_some_and(|segment| name_of(&segment.ident) == "model")
+    })
+}
+
+fn marks_view(attributes: &[Attribute]) -> bool {
+    attributes.iter().any(|attribute| {
+        attribute
+            .path()
+            .segments
+            .last()
+            .is_some_and(|segment| name_of(&segment.ident) == "view")
     })
 }
 
@@ -189,10 +200,20 @@ impl Reader<'_> {
                 );
             }
         }
+        for block in &found.views {
+            if !owner_of(block).is_some_and(|owner| models.contains(&owner)) {
+                let feature = format!("impl {}", self.short_text(block.self_ty.span()));
+                self.refuse(
+                    block.self_ty.span(),
+                    &feature,
+                    "`#[view]` goes on the `impl` block of a struct that derives `Model`",
+                );
+            }
+        }
         found
             .models
             .iter()
-            .map(|state| self.model(state, &found.blocks, &constants, &helpers))
+            .map(|state| self.model(state, &found, &constants, &helpers))
             .collect()
     }
 
@@ -226,6 +247,7 @@ impl Reader<'_> {
                     self.declare_record(record);
                 }
                 Item::Impl(block) if marks_model(&block.attrs) => found.blocks.push(block),
+                Item::Impl(block) if marks_view(&block.attrs) => found.views.push(block),
                 Item::Impl(block) => self.refuse(block.impl_token.span, "impl", ONLY_MODELS),
                 Item::Const(constant) => {
                     let name = name_of(&constant.ident);
@@ -385,7 +407,7 @@ impl Reader<'_> {
     fn model(
         &mut self,
         state: &ItemStruct,
-        blocks: &[&ItemImpl],
+        found: &Found<'_>,
         constants: &[(String, Term)],
         helpers: &[HelperDraft],
     ) -> Draft {
@@ -408,7 +430,8 @@ impl Reader<'_> {
                 Vec::new()
             }
         };
-        let own: Vec<&ImplItemFn> = blocks
+        let own: Vec<&ImplItemFn> = found
+            .blocks
             .iter()
             .filter(|block| owner_of(block).as_deref() == Some(name.as_str()))
             .flat_map(|block| self.methods_of(block))
@@ -440,12 +463,49 @@ impl Reader<'_> {
             self.method(method, &mut draft);
         }
         self.methods.clear();
+        self.view_of(state, found, &mut draft);
+        self.texts.clear();
         draft
+    }
+
+    fn view_of(&mut self, state: &ItemStruct, found: &Found<'_>, draft: &mut Draft) {
+        let name = name_of(&state.ident);
+        let mut places = Vec::new();
+        let mut seen = false;
+        for block in found
+            .views
+            .iter()
+            .filter(|block| owner_of(block).as_deref() == Some(name.as_str()))
+        {
+            if seen {
+                self.refuse(
+                    block.impl_token.span,
+                    "#[view]",
+                    "a model has one view: put every label in one `#[view]` block",
+                );
+                continue;
+            }
+            seen = true;
+            places = self.view(block, draft);
+        }
+        for step in places {
+            if !draft.actions.iter().any(|action| action.id == step.action) {
+                self.refuse(
+                    step.span,
+                    &step.action,
+                    "a view's `step` labels an action of the model by its id, and this model \
+                     has no action with this id: the chart would leave the label out",
+                );
+            }
+        }
     }
 
     fn field(&mut self, field: &Field) -> Option<FieldDraft> {
         let name = name_of(field.ident.as_ref()?);
         self.refuse_conditional(&field.attrs);
+        if is_text_reference(&field.ty) {
+            self.texts.insert(name.clone());
+        }
         let mut shape = self.shape(&field.ty, &field.attrs);
         if let Some(initial) = attribute(&field.attrs, "initial") {
             shape.initial = Some(match initial.parse_args::<Expr>() {
@@ -503,7 +563,7 @@ impl Reader<'_> {
         let inputs = self.inputs(signature);
         let says = self.sentence(role, sentence);
         if role == "action" {
-            self.returns(signature, "Option<Self>", "an action");
+            self.action_returns(signature);
             let taken: Vec<String> = inputs.iter().map(|(name, _)| name.clone()).collect();
             let body = |term: Term| ActionBody {
                 state_name: Some(STATE.to_owned()),
@@ -579,7 +639,17 @@ impl Reader<'_> {
         }
     }
 
-    fn returns(&mut self, signature: &Signature, wanted: &str, what: &str) {
+    fn action_returns(&mut self, signature: &Signature) {
+        let given = match &signature.output {
+            ReturnType::Default => String::new(),
+            ReturnType::Type(_, ty) => self.text(ty.span()).replace(' ', ""),
+        };
+        if given != "Self" {
+            self.returns(signature, "Option<Self>", "an action");
+        }
+    }
+
+    pub(crate) fn returns(&mut self, signature: &Signature, wanted: &str, what: &str) {
         let (span, given) = match &signature.output {
             ReturnType::Default => (signature.ident.span(), String::new()),
             ReturnType::Type(_, ty) => (ty.span(), self.text(ty.span()).replace(' ', "")),
@@ -593,7 +663,7 @@ impl Reader<'_> {
         }
     }
 
-    fn reads_state(&mut self, signature: &Signature) {
+    pub(crate) fn reads_state(&mut self, signature: &Signature) {
         let reads_state = match signature.inputs.first() {
             Some(FnArg::Receiver(receiver)) => {
                 receiver.reference.is_some()
@@ -666,7 +736,7 @@ impl Reader<'_> {
         self.refuse_repeats(&written, "field", "E0124");
     }
 
-    fn plain_function(&mut self, signature: &Signature) {
+    pub(crate) fn plain_function(&mut self, signature: &Signature) {
         let written: Vec<(String, Span)> = signature
             .inputs
             .iter()
@@ -775,6 +845,15 @@ impl Reader<'_> {
             parameters,
             body,
         }
+    }
+}
+
+fn is_text_reference(ty: &Type) -> bool {
+    match ty {
+        Type::Reference(borrowed) => {
+            matches!(borrowed.elem.as_ref(), Type::Path(named) if named.path.is_ident("str"))
+        }
+        _ => false,
     }
 }
 

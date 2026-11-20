@@ -432,7 +432,7 @@ impl Lowerer<'_> {
             }
             pieces
         } else {
-            vec![Piece::Shown(self.term(&found.term, &mut scope).ok()?.expr)]
+            vec![self.shown(&found.term, &mut scope).ok()?]
         };
         Some(Label {
             pieces,
@@ -440,10 +440,23 @@ impl Lowerer<'_> {
         })
     }
 
+    fn shown(&mut self, term: &Term, scope: &mut Scope) -> Lowering<Piece> {
+        let typed = self.term(term, scope)?;
+        if self.is_rust() && !matches!(typed.ty, Type::Bool | Type::Int(_) | Type::Text) {
+            return Err(self.stop(
+                term.place,
+                "a value in a label",
+                "a Rust label shows a boolean, a number, an enum variant or a text: `Debug` \
+                 prints anything else differently from the chart",
+            ));
+        }
+        Ok(Piece::Shown(typed.expr))
+    }
+
     fn piece(&mut self, part: &TemplatePiece, place: Place, scope: &mut Scope) -> Lowering<Piece> {
         match part {
             TemplatePiece::Text(text) => Ok(Piece::Text(text.clone())),
-            TemplatePiece::Value(term) => Ok(Piece::Shown(self.term(term, scope)?.expr)),
+            TemplatePiece::Value(term) => self.shown(term, scope),
             _ => Err(self.stop(
                 place,
                 "a part of a template string",
@@ -624,6 +637,18 @@ impl Lowerer<'_> {
             let (value, found) = match &option.kind {
                 TermKind::Text(text) => (Value::Str(self.symbols.intern(text)), Type::Text),
                 TermKind::Int(number) => (Value::Int(*number), Type::Int(None)),
+                TermKind::Declared { shape, value } => match (&shape.kind, &value.kind) {
+                    (ShapeKind::Int { ty, .. }, TermKind::Int(number)) => {
+                        (Value::Int(*number), Type::Int(*ty))
+                    }
+                    _ => {
+                        return Err(self.stop(
+                            option.place,
+                            "a choice that is not a plain value",
+                            "list text, numbers or booleans",
+                        ));
+                    }
+                },
                 TermKind::Bool(flag) => (Value::Bool(*flag), Type::Bool),
                 _ => {
                     return Err(self.stop(

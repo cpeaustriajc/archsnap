@@ -287,7 +287,7 @@ fn constructs_outside_the_allowed_forms_are_each_refused() {
 
     #[rule(\"Four\")]
     fn four(&self) -> bool {
-        self.label() == \"tall\"
+        self.label() == 1.5
     }
 ",
     );
@@ -298,7 +298,7 @@ fn constructs_outside_the_allowed_forms_are_each_refused() {
             at(24, 21, "`as`"),
             at(29, 12, "`if let`"),
             at(34, 14, "`self.label()`"),
-            at(34, 25, "`\"tall\"`"),
+            at(34, 25, "`1.5`"),
         ],
         "every problem of the file, in order"
     );

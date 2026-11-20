@@ -5,6 +5,8 @@
 
 mod forms;
 mod limits;
+mod lints;
+mod listed;
 mod names;
 #[path = "models/party.rs"]
 mod party;
@@ -15,6 +17,7 @@ mod ticket;
 mod twins;
 mod typed;
 mod unreadable;
+mod views;
 
 use earnest_ast::Draft;
 use earnest_check::{Limits, Outcome, Path, explore};

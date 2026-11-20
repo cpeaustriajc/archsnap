@@ -95,6 +95,11 @@ fn take_role(attributes: &mut Vec<Attribute>) -> syn::Result<Option<Role>> {
     Ok(found)
 }
 
+fn gives_self(signature: &syn::Signature) -> bool {
+    matches!(&signature.output, syn::ReturnType::Type(_, ty)
+        if matches!(ty.as_ref(), syn::Type::Path(path) if path.qself.is_none() && path.path.is_ident("Self")))
+}
+
 fn takes_self(method: &ImplItemFn) -> bool {
     matches!(method.sig.inputs.first(), Some(FnArg::Receiver(_)))
 }
@@ -131,9 +136,9 @@ fn steps_of(method: &mut ImplItemFn, sentence: &LitStr) -> syn::Result<TokenStre
         };
         let choices = domain_choices(&typed.attrs, &typed.ty)?;
         slots.push(Slot::new(&pattern.ident, choices));
-        typed
-            .attrs
-            .retain(|attribute| !attribute.path().is_ident("range"));
+        typed.attrs.retain(|attribute| {
+            !attribute.path().is_ident("range") && !attribute.path().is_ident("one_of")
+        });
     }
     let name = &method.sig.ident;
     let id = name.unraw().to_string();
@@ -143,20 +148,27 @@ fn steps_of(method: &mut ImplItemFn, sentence: &LitStr) -> syn::Result<TokenStre
         let variable = &slot.variable;
         quote! { (#input, ::std::format!("{:?}", #variable)) }
     });
-    let loops = for_each_combination(
-        &slots,
-        Fastest::First,
+    let step = quote! {
+        earnest_steps.push(::earnest::model::Step {
+            action: #id,
+            label: #sentence,
+            input: ::std::vec![#(#shown),*],
+            state: earnest_next,
+        });
+    };
+    let attempt = if gives_self(&method.sig) {
+        quote! {
+            let earnest_next = Self::#name(self #(, #copies)*);
+            #step
+        }
+    } else {
         quote! {
             if let ::core::option::Option::Some(earnest_next) = Self::#name(self #(, #copies)*) {
-                earnest_steps.push(::earnest::model::Step {
-                    action: #id,
-                    label: #sentence,
-                    input: ::std::vec![#(#shown),*],
-                    state: earnest_next,
-                });
+                #step
             }
-        },
-    );
+        }
+    };
+    let loops = for_each_combination(&slots, Fastest::First, attempt);
     Ok(quote! {
         {
             let mut earnest_steps = ::std::vec::Vec::new();
@@ -290,5 +302,34 @@ mod tests {
             }
         });
         assert!(pattern.contains("a plain name"), "{pattern}");
+    }
+
+    #[test]
+    fn an_action_that_gives_back_the_state_is_a_step_without_a_match() {
+        let expanded = expand(
+            &TokenStream::new(),
+            quote! {
+                impl Lamp {
+                    #[action("the lamp is switched")]
+                    fn toggle(&self, #[one_of("a", "b")] how: &'static str) -> Self {
+                        self.clone()
+                    }
+                }
+            },
+        )
+        .expect("a model block")
+        .to_string();
+        let wanted = [
+            quote! { for earnest_choice_how in ::core::iter::IntoIterator::into_iter(["a", "b"]) },
+            quote! { let earnest_next = Self::toggle(self, ::core::clone::Clone::clone(&earnest_choice_how)); },
+        ];
+        for piece in wanted {
+            let text = piece.to_string();
+            assert!(expanded.contains(&text), "{text} in {expanded}");
+        }
+        assert!(
+            !expanded.contains("# [one_of"),
+            "the attribute is read: {expanded}"
+        );
     }
 }

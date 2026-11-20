@@ -256,7 +256,8 @@ pub enum ShapeKind {
         /// must stay inside. `None` in TypeScript.
         ty: Option<IntType>,
     },
-    /// `m.enum([...])`, `m.oneOf([...])` or a Rust enum. Each choice is a [`TermKind::Text`], a
+    /// `m.enum([...])`, `m.oneOf([...])`, a Rust enum, or in Rust a number or a `&'static str`
+    /// listed with `#[one_of(...)]`. Each choice is a [`TermKind::Text`], a
     /// [`TermKind::Int`] or a [`TermKind::Bool`], all of one kind.
     OneOf(Vec<Term>),
     /// `.optional()` or `Option<T>`.

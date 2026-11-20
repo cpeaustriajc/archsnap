@@ -1,4 +1,6 @@
-use crate::choices::{RANGE_NEEDED, Slot, every_combination, is_integer, ranged_choices};
+use crate::choices::{
+    RANGE_NEEDED, Slot, every_combination, is_integer, ranged_choices, text_needed,
+};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::spanned::Spanned;
@@ -40,6 +42,11 @@ pub(crate) fn expand(input: TokenStream) -> syn::Result<TokenStream> {
                 #starts
             }
         }
+
+        const _: () = {
+            const fn earnest_is_used<Used>() {}
+            earnest_is_used::<#name>();
+        };
     })
 }
 
@@ -48,6 +55,9 @@ fn start_choices(field: &Field) -> syn::Result<TokenStream> {
     let range = ranged_choices(&field.attrs, ty)?;
     if range.is_none() && is_integer(ty) {
         return Err(syn::Error::new(ty.span(), RANGE_NEEDED));
+    }
+    if let Some(refused) = text_needed(ty).filter(|_| range.is_none()) {
+        return Err(refused);
     }
     let initial = field
         .attrs
@@ -127,5 +137,77 @@ mod tests {
             }
         });
         assert!(generic.contains("generic"), "{generic}");
+    }
+
+    #[test]
+    fn a_listed_number_and_a_listed_text_start_at_each_value_listed() {
+        let expanded = expand(quote! {
+            struct Pick {
+                #[one_of(1, 5, 9)]
+                size: u8,
+                #[one_of("Kim", "Lee")]
+                owner: Option<&'static str>,
+                #[one_of("a", "b")]
+                #[initial("a")]
+                kind: &'static str,
+            }
+        })
+        .expect("a model struct")
+        .to_string();
+        let wanted = [
+            quote! {
+                for earnest_choice_size in ::core::iter::IntoIterator::into_iter([1, 5, 9])
+            },
+            quote! {
+                for earnest_choice_owner in ::core::iter::once(::core::option::Option::None)
+                    .chain((::core::iter::IntoIterator::into_iter(["Kim", "Lee"]))
+                        .map(::core::option::Option::Some))
+            },
+            quote! {
+                for earnest_choice_kind in ::std::vec::Vec::<&'static str>::from(["a"])
+            },
+        ];
+        for piece in wanted {
+            let text = piece.to_string();
+            assert!(expanded.contains(&text), "{text} in {expanded}");
+        }
+    }
+
+    #[test]
+    fn the_model_is_used_where_rustc_looks_for_dead_code() {
+        let expanded = expand(quote! {
+            struct Lamp {
+                power: bool,
+            }
+        })
+        .expect("a model struct")
+        .to_string();
+        let used = quote! { earnest_is_used::<Lamp>(); }.to_string();
+        assert!(expanded.contains(&used), "{used} in {expanded}");
+    }
+
+    #[test]
+    fn a_text_without_a_list_and_a_number_with_both_a_range_and_a_list_are_refused() {
+        let unlisted = refusal(quote! {
+            struct Pick {
+                owner: &'static str,
+            }
+        });
+        assert!(unlisted.contains("#[one_of("), "{unlisted}");
+        let both = refusal(quote! {
+            struct Pick {
+                #[range(0, 3)]
+                #[one_of(1, 2)]
+                size: u8,
+            }
+        });
+        assert!(both.contains("never both"), "{both}");
+        let empty = refusal(quote! {
+            struct Pick {
+                #[one_of()]
+                size: u8,
+            }
+        });
+        assert!(empty.contains("lists the values"), "{empty}");
     }
 }

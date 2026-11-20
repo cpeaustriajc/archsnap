@@ -11,6 +11,7 @@ mod library;
 mod reader;
 mod shapes;
 mod terms;
+mod views;
 
 use earnest_ast::Reading;
 
@@ -29,7 +30,10 @@ pub use library::uses_library;
 /// attribute become the drafts' constants and helpers. A function is a helper of the kind
 /// `Function` and a method one of the kind `Method`, so the two may share a name. An item
 /// marked `#[cfg(test)]` that is not part of a model (a module, a function, a constant, a
-/// plain `impl` block) is skipped.
+/// plain `impl` block) is skipped. An `impl` block marked `#[view(...)]` gives the view of the
+/// model of its type: its `title`, `step` labels and `colors`, and the labels of its `#[state]`
+/// and `#[group]` methods, read from a `format!` or a `.to_string()` or `.to_owned()`. A number
+/// or a `&'static str` marked `#[one_of(a, b)]` is a choice of the listed values.
 ///
 /// Every draft has the language `Rust`. A number's shape carries its integer type, and a
 /// value whose type the file writes out is a `Declared` term: a constant, a `let` with a

@@ -9,8 +9,11 @@ const INTEGER_TYPES: [&str; 12] = [
     "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize",
 ];
 
-pub(crate) const RANGE_NEEDED: &str =
-    "an integer needs `#[range(lo, hi)]`, so that every value it can take is known";
+pub(crate) const RANGE_NEEDED: &str = "an integer needs `#[range(lo, hi)]` or `#[one_of(a, b)]`, so that every value it can take is \
+     known";
+
+const TEXT_NEEDED: &str =
+    "a text needs `#[one_of(\"a\", \"b\")]`, so that every value it can take is known";
 
 pub(crate) struct Slot {
     pub(crate) name: Ident,
@@ -62,7 +65,30 @@ fn range_of(attributes: &[Attribute]) -> syn::Result<Option<TokenStream>> {
     Ok(Some(quote! { (#lowest)..=(#highest) }))
 }
 
-fn optional_integer(ty: &Type) -> bool {
+pub(crate) fn is_text(ty: &Type) -> bool {
+    matches!(ty, Type::Reference(borrowed)
+        if matches!(borrowed.elem.as_ref(), Type::Path(path) if path.path.is_ident("str")))
+}
+
+fn listed_of(attributes: &[Attribute]) -> syn::Result<Option<TokenStream>> {
+    let Some(attribute) = attributes
+        .iter()
+        .find(|attribute| attribute.path().is_ident("one_of"))
+    else {
+        return Ok(None);
+    };
+    let values = attribute.parse_args_with(Punctuated::<Expr, Token![,]>::parse_terminated)?;
+    if values.is_empty() {
+        return Err(syn::Error::new(
+            attribute.span(),
+            "`#[one_of(a, b)]` lists the values the field can take",
+        ));
+    }
+    let listed = values.iter();
+    Ok(Some(quote! { [#(#listed),*] }))
+}
+
+fn optional_listable(ty: &Type) -> bool {
     let Type::Path(path) = ty else {
         return false;
     };
@@ -76,7 +102,7 @@ fn optional_integer(ty: &Type) -> bool {
     last.ident == "Option"
         && matches!(
             (arguments.next(), arguments.next()),
-            (Some(GenericArgument::Type(inner)), None) if is_integer(inner)
+            (Some(GenericArgument::Type(inner)), None) if is_integer(inner) || is_text(inner)
         )
 }
 
@@ -84,19 +110,33 @@ pub(crate) fn ranged_choices(
     attributes: &[Attribute],
     ty: &Type,
 ) -> syn::Result<Option<TokenStream>> {
-    let Some(range) = range_of(attributes)? else {
-        return Ok(None);
+    let (range, listed) = (range_of(attributes)?, listed_of(attributes)?);
+    let choices = match (range, listed) {
+        (Some(_), Some(_)) => {
+            return Err(syn::Error::new(
+                ty.span(),
+                "a number is listed with `#[one_of(...)]` or ranged with `#[range(lo, hi)]`, \
+                 never both",
+            ));
+        }
+        (Some(range), None) => range,
+        (None, Some(listed)) => quote! { ::core::iter::IntoIterator::into_iter(#listed) },
+        (None, None) => return Ok(None),
     };
-    if is_integer(ty) {
-        return Ok(Some(range));
+    if is_integer(ty) || is_text(ty) {
+        return Ok(Some(choices));
     }
-    if optional_integer(ty) {
+    if optional_listable(ty) {
         return Ok(Some(quote! {
             ::core::iter::once(::core::option::Option::None)
-                .chain((#range).map(::core::option::Option::Some))
+                .chain((#choices).map(::core::option::Option::Some))
         }));
     }
     Ok(None)
+}
+
+pub(crate) fn text_needed(ty: &Type) -> Option<syn::Error> {
+    is_text(ty).then(|| syn::Error::new(ty.span(), TEXT_NEEDED))
 }
 
 pub(crate) fn domain_choices(attributes: &[Attribute], ty: &Type) -> syn::Result<TokenStream> {
@@ -105,6 +145,9 @@ pub(crate) fn domain_choices(attributes: &[Attribute], ty: &Type) -> syn::Result
     }
     if is_integer(ty) {
         return Err(syn::Error::new(ty.span(), RANGE_NEEDED));
+    }
+    if is_text(ty) {
+        return Err(syn::Error::new(ty.span(), TEXT_NEEDED));
     }
     Ok(quote! { <#ty as ::earnest::model::Domain>::values() })
 }

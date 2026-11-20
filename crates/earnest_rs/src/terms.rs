@@ -171,6 +171,7 @@ impl Reader<'_> {
     fn literal(&mut self, literal: &ExprLit, sign: Sign, span: Span) -> Term {
         match &literal.lit {
             Lit::Bool(flag) => at(span, TermKind::Bool(flag.value)),
+            Lit::Str(text) => at(span, TermKind::Text(text.value())),
             Lit::Int(number) => {
                 let Some(value) = Self::literal_number(literal, sign) else {
                     let feature = self.short_text(span);
@@ -206,8 +207,7 @@ impl Reader<'_> {
                 self.nothing(
                     span,
                     &feature,
-                    "a model holds booleans, whole numbers and enum variants; write a text \
-                     value as a variant of an enum that derives `Domain`",
+                    "a model holds booleans, whole numbers, texts and enum variants",
                 )
             }
         }
@@ -270,6 +270,9 @@ impl Reader<'_> {
             .iter()
             .map(|argument| self.term(argument))
             .collect();
+        if name == "is_multiple_of" && call.turbofish.is_none() && arguments.len() == 1 {
+            return Self::multiple_of(span, target, arguments);
+        }
         if call.turbofish.is_some()
             || !(PRIMITIVES.contains(&name.as_str()) || OPTION_TESTS.contains(&name.as_str()))
         {
@@ -288,6 +291,33 @@ impl Reader<'_> {
                 method: name,
                 arguments,
             },
+        )
+    }
+
+    fn multiple_of(span: Span, number: Term, mut divisors: Vec<Term>) -> Term {
+        let divisor = divisors.remove(0);
+        let zero = || at(span, TermKind::Int(0));
+        let equals = |left: Term, right: Term| {
+            at(
+                span,
+                TermKind::Binary(Binary::Equal, Box::new(left), Box::new(right)),
+            )
+        };
+        let remainder = at(
+            span,
+            TermKind::Binary(
+                Binary::Remainder,
+                Box::new(number.clone()),
+                Box::new(divisor.clone()),
+            ),
+        );
+        at(
+            span,
+            TermKind::Choose(
+                Box::new(equals(divisor, zero())),
+                Box::new(equals(number, zero())),
+                Box::new(equals(remainder, zero())),
+            ),
         )
     }
 
@@ -589,6 +619,8 @@ impl Reader<'_> {
             .unwrap_or_default();
         let message = if PRINTING.contains(&name.as_str()) {
             "printing is input and output, which is outside the library"
+        } else if name == "format" {
+            "text is built only in the `#[state]` and `#[group]` labels of a `#[view]` block"
         } else if name == "require" {
             "`require!(condition);` is a statement at the top of an action, not a value"
         } else {

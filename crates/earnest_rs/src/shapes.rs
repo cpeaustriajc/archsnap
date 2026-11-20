@@ -4,9 +4,12 @@ use earnest_value::IntType;
 use proc_macro2::Span;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{Attribute, Expr, GenericArgument, PathArguments, Token, Type, TypePath};
+use syn::{Attribute, Expr, ExprLit, GenericArgument, Lit, PathArguments, Token, Type, TypePath};
 
 const NEEDS_ITEM: &str = "name the type of its items between `<` and `>`";
+const LISTED_VALUES: &str = "one_of";
+const NEEDS_LISTED_TEXTS: &str =
+    "a text needs `#[one_of(\"a\", \"b\")]`, so the checker knows every value it can take";
 
 #[derive(Clone, Copy)]
 pub(crate) enum Declares<'a> {
@@ -20,6 +23,36 @@ impl Declares<'_> {
             Self::Values(attributes) => attributes,
             Self::Type => &[],
         }
+    }
+}
+
+fn is_str(ty: &Type) -> bool {
+    matches!(ty, Type::Path(named) if named.qself.is_none() && named.path.is_ident("str"))
+}
+
+fn holds_listable(ty: &Type) -> bool {
+    match ty {
+        Type::Reference(borrowed) => is_str(&borrowed.elem),
+        Type::Paren(inner) => holds_listable(&inner.elem),
+        Type::Group(inner) => holds_listable(&inner.elem),
+        Type::Path(named) if named.qself.is_none() => {
+            if named
+                .path
+                .get_ident()
+                .is_some_and(|name| IntType::named(&name.to_string()).is_some())
+            {
+                return true;
+            }
+            named.path.segments.last().is_some_and(|last| {
+                match &last.arguments {
+                    PathArguments::AngleBracketed(listed) => listed.args.iter().any(|argument| {
+                        matches!(argument, GenericArgument::Type(inner) if holds_listable(inner))
+                    }),
+                    _ => false,
+                }
+            })
+        }
+        _ => false,
     }
 }
 
@@ -37,6 +70,26 @@ fn shaped(span: Span, kind: ShapeKind) -> Shape {
 
 impl Reader<'_> {
     pub(crate) fn shape(&mut self, ty: &Type, attributes: &[Attribute]) -> Shape {
+        if let Some(listed) = attribute(attributes, LISTED_VALUES) {
+            if !holds_listable(ty) {
+                let feature = self.short_text(listed.span());
+                self.refuse(
+                    listed.span(),
+                    &feature,
+                    "`#[one_of(...)]` goes on a whole number or a `&'static str`, or on an \
+                     `Option` or a collection of them",
+                );
+            }
+            if attribute(attributes, "range").is_some() {
+                let feature = self.short_text(listed.span());
+                self.refuse(
+                    listed.span(),
+                    &feature,
+                    "a number is listed with `#[one_of(...)]` or ranged with `#[range(lo, hi)]`, \
+                     never both",
+                );
+            }
+        }
         self.declared_shape(ty, Declares::Values(attributes))
     }
 
@@ -72,6 +125,13 @@ impl Reader<'_> {
         let kind = match ty {
             Type::Paren(inner) => return self.declared_shape(&inner.elem, declares),
             Type::Group(inner) => return self.declared_shape(&inner.elem, declares),
+            Type::Reference(borrowed)
+                if matches!(declares, Declares::Values(_))
+                    && borrowed.mutability.is_none()
+                    && is_str(&borrowed.elem) =>
+            {
+                self.listed_texts(span, declares.attributes())
+            }
             Type::Reference(borrowed)
                 if matches!(declares, Declares::Type) && borrowed.mutability.is_none() =>
             {
@@ -219,12 +279,106 @@ impl Reader<'_> {
         size
     }
 
+    fn listed_texts(&mut self, span: Span, attributes: &[Attribute]) -> Option<ShapeKind> {
+        let Some(listed) = attribute(attributes, LISTED_VALUES) else {
+            let feature = self.short_text(span);
+            self.refuse(span, &feature, NEEDS_LISTED_TEXTS);
+            return None;
+        };
+        let choices = self.listed_values(listed)?;
+        let mut texts = Vec::with_capacity(choices.len());
+        for choice in choices {
+            if let Expr::Lit(ExprLit {
+                lit: Lit::Str(text),
+                ..
+            }) = &choice
+            {
+                texts.push(at(choice.span(), TermKind::Text(text.value())));
+            } else {
+                let feature = self.short_text(choice.span());
+                self.refuse(
+                    choice.span(),
+                    &feature,
+                    "list each text as a string literal: `#[one_of(\"a\", \"b\")]`",
+                );
+                return None;
+            }
+        }
+        Some(ShapeKind::OneOf(texts))
+    }
+
+    fn listed_values(&mut self, listed: &Attribute) -> Option<Vec<Expr>> {
+        let values = listed.parse_args_with(Punctuated::<Expr, Token![,]>::parse_terminated);
+        if let Ok(found) = values
+            && !found.is_empty()
+        {
+            return Some(found.into_iter().collect());
+        }
+        let feature = self.short_text(listed.span());
+        self.refuse(
+            listed.span(),
+            &feature,
+            "list the values the field can take: `#[one_of(1, 5)]` or `#[one_of(\"a\", \"b\")]`",
+        );
+        None
+    }
+
+    fn listed_numbers(&mut self, listed: &Attribute, ty: IntType) -> Option<ShapeKind> {
+        let choices = self.listed_values(listed)?;
+        let mut numbers = Vec::with_capacity(choices.len());
+        for choice in &choices {
+            let Some(number) = self.whole_number(choice) else {
+                let feature = self.short_text(choice.span());
+                self.refuse(
+                    choice.span(),
+                    &feature,
+                    "list each number as a whole number or a constant of this file",
+                );
+                return None;
+            };
+            if !ty.holds(number) {
+                let feature = self.short_text(choice.span());
+                self.refuse(
+                    choice.span(),
+                    &feature,
+                    &format!(
+                        "a `{}` holds {} to {}, so a listed number must lie inside that",
+                        ty.name(),
+                        ty.lowest(),
+                        ty.highest()
+                    ),
+                );
+                return None;
+            }
+            let shape = Shape {
+                place: place_of(choice.span()),
+                kind: ShapeKind::Int {
+                    lo: ty.lowest(),
+                    hi: ty.highest(),
+                    ty: Some(ty),
+                },
+                initial: None,
+            };
+            numbers.push(at(
+                choice.span(),
+                TermKind::Declared {
+                    shape: Box::new(shape),
+                    value: Box::new(at(choice.span(), TermKind::Int(number))),
+                },
+            ));
+        }
+        Some(ShapeKind::OneOf(numbers))
+    }
+
     fn number_shape(
         &mut self,
         span: Span,
         ty: IntType,
         declares: Declares<'_>,
     ) -> Option<ShapeKind> {
+        if let Some(listed) = attribute(declares.attributes(), LISTED_VALUES) {
+            return self.listed_numbers(listed, ty);
+        }
         let Some(range) = attribute(declares.attributes(), "range") else {
             if matches!(declares, Declares::Type) {
                 return Some(ShapeKind::Int {

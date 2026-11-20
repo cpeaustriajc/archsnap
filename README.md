@@ -287,7 +287,10 @@ in Rust, so moving white space is not a change.
 ### Statechart and report
 
 `earnest chart` prints one fenced `mermaid` block holding a `stateDiagram-v2` chart. States and
-arrows carry the labels from the model's view. A state that breaks a rule has the class `broken`.
+arrows carry the labels from the model's view, which a TypeScript model writes with `Model.view`
+and a Rust model with a `#[view]` block (see "Writing a model in Rust"). A Rust model and its
+TypeScript twin with the same view give the same chart, text for text. A state that breaks a
+rule has the class `broken`.
 A chart never has more than 20 arrows: when the model has more, the chart keeps the paths to the
 broken states first and says how many states and arrows it left out. The states are counted
 for what they are: a box of the chart stands for every state with its label, so the note counts
@@ -503,9 +506,49 @@ impl Turnstile {
 - The model is a struct that derives `Model`. A field's declaration is its Rust type: `bool`, an
   integer with `#[range(lo, hi)]`, an enum or struct that derives `Domain`, `Option<T>`, and the
   library's `Set<T>`, `Map<K, V>`, `Seq<T, MAX>`, `Queue<T, CAPACITY>`, `Lock`, `Lock<Owner>`,
-  `Timer`, `Request` and `Retry<MAX>`. `#[initial(value)]` works as in TypeScript.
+  `Timer`, `Request` and `Retry<MAX>`. `#[initial(value)]` works as in TypeScript. A model needs
+  no `pub` and no documentation: `#[derive(Model)]` uses the type where `rustc` looks for dead
+  code, so a model that only `earnest verify` reads draws no warning, and the file passes
+  `clippy` under the lints of this repository.
+- A choice among listed values is `#[one_of(a, b)]`, the Rust form of `m.oneOf([a, b])`, on a
+  field, on an action's parameter or on a field of a record that derives `Domain`:
+
+  ```rust
+  #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Model)]
+  struct Pick {
+      #[one_of(1, 5, 9)]
+      size: u8,
+      #[one_of("Kim", "Lee")]
+      #[initial(None)]
+      buyer: Option<&'static str>,
+  }
+
+  #[model]
+  impl Pick {
+      #[action("a buyer takes the pick")]
+      fn sell(&self, #[one_of("Kim", "Lee")] who: &'static str) -> Option<Self> {
+          require!(self.buyer.is_none());
+          Some(Self { buyer: Some(who), ..self.clone() })
+      }
+  }
+  ```
+
+  A number is any integer type with `#[one_of(...)]` in place of `#[range(...)]`, and every listed
+  number must lie inside the type; it keeps that type, so `self.size + 1` is a fault above its
+  largest value, as for a range. A text is a `&'static str` field or parameter, also inside an
+  `Option`, and it must have `#[one_of(...)]`: a string literal is a text value wherever the
+  model writes one (`self.buyer == Some("Kim")`, `buyer: Some("Lee")`), and `Debug` prints it
+  with its quotes, as the text report does. A field starts at every value listed, in the
+  order listed, unless it has `#[initial(value)]`; an input is tried with each, as `m.oneOf`
+  inputs are. A list holds at least one value, each once and all of one kind, and a number and
+  a text can't share a list; `#[range]` and `#[one_of]` on one field are refused, and so is
+  `#[one_of]` on a type that is not an integer or a `&'static str`. The TLA+ export is the one of
+  `m.oneOf`: `size \in {1, 5, 9}` and `who \in {"Kim", "Lee"}`, and TLC finds the same states.
 - An action is a method in the `#[model]` block that takes `&self` and its inputs and returns
-  `Option<Self>`. Each `require!(condition);` is part of its `when`. The last expression is
+  `Option<Self>`, or `Self` when nothing can stop it: an action with no `require!` that returns
+  `Some(..)` on every path draws `clippy::unnecessary_wraps`, so it may give back the state
+  itself (`Self { changed fields, ..self.clone() }`) and has no `require!` or early return of
+  `None`. Each `require!(condition);` is part of its `when`. The last expression is
   `Some(Self { changed fields, ..self.clone() })`. Before it, `let` bindings and
   `if condition { return Some(Self { .. }); }` are allowed.
 - A rule or an end is a method that returns `bool`. Ids are the method names. An enum value is
@@ -526,9 +569,71 @@ impl Turnstile {
   `#[cfg_attr]`: the checker reads one text for every build. Only an item that is not part of
   a model (a test module, a function, a plain `impl` block) may be `#[cfg(test)]`, and it is
   skipped.
-- A model is ordinary Rust: a test calls `state.pay()` to take one step, which is how a path from
-  the report is replayed with `cargo test`. `Turnstile::starts()` lists every start state, and
-  a rule or an end is called the same way: `state.stays_locked()`.
+- The statechart labels are a second `impl` block with `#[view(...)]`, the Rust form of
+  `Model.view({ ... })`, with the same parts, the same labels and the same refusals:
+
+  ```rust
+  #[view(
+      title = "Add to cart focus",
+      step(press = "press Add"),
+      colors(broken = "#c62828")
+  )]
+  impl Cart {
+      #[state]
+      fn state(&self) -> String {
+          format!("{:?}, focus on {:?}", self.cta, self.focus)
+      }
+
+      #[group]
+      fn group(&self) -> String {
+          self.surface.to_owned()
+      }
+  }
+  ```
+
+  Every part is optional, and a model has one view. `title` is the chart's title. `step(action =
+  "label")` gives an action's arrow its label, where the default is the action's sentence, as
+  `step` does in TypeScript; an action that the model does not have makes the file unreadable.
+  `colors(part = "color")` colors `broken`, `start` or `end` with `#` and 3, 4, 6 or 8
+  hexadecimal digits or a color name of letters; any other part or any other color makes the
+  file unreadable, because the chart would leave it out without a word. The method marked
+  `#[state]` labels a state's box, and states with the same label and group are drawn as one;
+  the method marked `#[group]` names the box a state is drawn in. Each takes `&self` and gives a
+  `String`, and its body is one expression: `format!("text {} text {:?}", value, value)`, or one
+  value followed by `.to_string()` or `.to_owned()`. A value is read as in a rule, so it may be
+  a field, a helper call or an `if`; it must be a boolean, a number, an enum variant or a text,
+  because `Debug` prints anything else (an `Option`, a record, a collection) differently from
+  the chart. A hole is `{}` or `{:?}`, and a `{:?}` of a `&'static str` field is refused,
+  because `Debug` puts the text in quotes and the chart does not: write `{}` for a text and
+  `{:?}` for an enum variant. A width, a name or a number in a hole is refused, and `{{` and
+  `}}` are the braces. The block holds nothing but labels, and `format!` is read in them only.
+  The macro implements `earnest::model::View`, so `state.state_label()` and
+  `state.group_label()` give the labels the chart shows, and `Cart::title()`,
+  `Cart::step_labels()` and `Cart::colors()` the rest. The twins `tasks/conformance/twins/cart.rs`
+  and `dial.rs` give the same chart, text for text, as `tasks/conformance/models/cart.model.ts`
+  and `dial.model.ts`.
+- A model is ordinary Rust: a test calls `state.pay()` to take one step. A path from the report is
+  replayed with `cargo test` by `earnest::model::replay`: pick the start state from
+  `Turnstile::starts()`, give each step of the path as a `Move`, and compare the states it gives
+  back, the start state first, with the `state` of each step of `earnest verify --json`:
+
+  ```rust
+  let start = Mailbox::starts().remove(0);
+  let path = [
+      Move::new("deliver").with("letter", "Bill"),
+      Move::new("deliver").with("letter", "Bill"),
+  ];
+  let states = replay(&start, &path).expect("the path is one the model can take");
+  assert!(!states[2].bills());
+  ```
+
+  A step is found among `state.steps()`, so an action runs only where its `require!` is true.
+  An input is written as the report prints it (`Bill`, `3`, `true`, `Kim`), and every input the
+  action takes must be given. A step that can't happen gives a `Mismatch` with the step's number
+  and the steps that can happen there. `Turnstile::starts()` lists every start state, and a rule
+  or an end is called the same way: `state.stays_locked()`. `n.is_multiple_of(d)` on an unsigned
+  number reads as `n % d == 0`, and `n.is_multiple_of(0)` as `n == 0`, as in Rust, so a model
+  can follow `clippy::manual_is_multiple_of`.
 
 A raw identifier is the same name as its plain spelling everywhere in Rust: `fn r#fn` is the
 rule `fn`, `fn r#loop` the action `loop` and the field `r#type` the field `type`, in the
@@ -576,8 +681,8 @@ operation gives back a new value and changes nothing in place.
 | Group | Declared with | Operations |
 |---|---|---|
 | Boolean | `m.boolean()` / `bool` | `&&`, `\|\|`, `!`, `===` |
-| Number | `m.int(lo, hi)` / an integer type with `#[range(lo, hi)]` | `+`, `-`, `*`, `m.rem(a, b)` / `%`, `<`, `<=`, `>`, `>=`, `===` |
-| Enum | `m.enum([...])`, `m.oneOf([...])` / `enum` | `===`, `!==` |
+| Number | `m.int(lo, hi)` / an integer type with `#[range(lo, hi)]` or `#[one_of(...)]` | `+`, `-`, `*`, `m.rem(a, b)` / `%`, `is_multiple_of(d)`, `<`, `<=`, `>`, `>=`, `===` |
+| Enum | `m.enum([...])`, `m.oneOf([...])` / `enum`, `#[one_of(...)]` | `===`, `!==` |
 | Optional | `.optional()` / `Option<T>` | `=== null`, `!== null` / `is_some()`, `is_none()`, `is_some_and(f)`, `== Some(x)` |
 | Record | `m.record({...})` / `struct` | field read, `{ ...r, field: v }` / `R { field: v, ..r.clone() }` |
 | Set | `m.set(T)` / `Set<T>` | `has(x)`, `add(x)`, `delete(x)`, `union(s)`, `intersect(s)`, `subtract(s)`, `isSubset(s)`, `size`, `isEmpty`, `every(f)`, `some(f)`, `filter(f)` |

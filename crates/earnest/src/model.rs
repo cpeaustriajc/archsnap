@@ -9,22 +9,26 @@
 mod lock;
 mod map;
 mod queue;
+mod replay;
 mod request;
 mod retry;
 mod seq;
 mod set;
 mod timer;
+mod view;
 
 pub use crate::require;
-pub use earnest_macros::{Domain, Model, model};
+pub use earnest_macros::{Domain, Model, model, view};
 pub use lock::{Lock, Unowned};
 pub use map::Map;
 pub use queue::Queue;
+pub use replay::{Mismatch, Move, replay};
 pub use request::Request;
 pub use retry::Retry;
 pub use seq::Seq;
 pub use set::Set;
 pub use timer::Timer;
+pub use view::View;
 
 /// A type whose every value can be listed, so the checker can try each one.
 ///

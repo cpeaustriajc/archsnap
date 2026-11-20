@@ -15,6 +15,10 @@ What it reads:
 | A struct that derives `Domain` | A record |
 | A method with `#[action("...")]` | An action. Parameters after `&self` are its inputs, each `require!(c);` is one part of its guard, and `Some(Self { changed, ..self.clone() })` is its result. `let` bindings and `if c { return Some(Self { .. }); }` may come before it |
 | A method with `#[rule("...")]` or `#[end("...")]` | A rule or an end. A rule's text is the source of its body |
+| An action that returns `Self` | An action with no guard whose result is the `Self { .. }` it gives back |
+| `#[one_of(a, b)]` on a field, a parameter or a record field of an integer type, a `&'static str` or an `Option` of one | A choice of the listed values in the order listed. A number's choices are `Declared` terms of its integer type and must lie inside it; a text's are `Text` terms. A string literal is a `Text` term wherever it is written |
+| An `impl` block with `#[view(title = "...", step(action = "..."), colors(part = "..."))]` | The view of the model of that type: its title, its step labels and its colors, and the methods marked `#[state]` and `#[group]` as `LabelDraft`s. A label is `format!("...{}...{:?}", values)` as a `Template`, or one value followed by `.to_string()` or `.to_owned()` as that value. A step for an action the model does not have, a color that is not one, a part other than `broken`, `start` and `end`, a name given twice, a second view, a `{:?}` of a text field, a hole with a width or a name, and anything else in the block are problems |
+| `n.is_multiple_of(d)` | `n == 0` where `d == 0`, else `n % d == 0` |
 | A method of the block without an attribute | A helper of the kind `Method`, called as `self.name(..)` |
 | A top-level `fn` | A helper of the kind `Function`, called as `name(..)`. It may share its name with a method |
 | A parameter of a helper and its result | The value with its type, as a `Declared` term. A number needs no `#[range]` here: its type is enough. A parameter of the model's own type is the state |
@@ -24,8 +28,8 @@ What it reads:
 
 Anything else is a problem with its 1-based line and column, the construct in backticks and a
 sentence: a loop, `match`, `if let`, a clock, a random number, input or output, `unsafe`, an
-unknown macro or method, a change in place (`let mut`, `=`, `+=`, `&mut self`), a cast, text in
-quotes, an import from outside `earnest`, any other top-level item, an `Option` as the value of a
+unknown macro or method, a change in place (`let mut`, `=`, `+=`, `&mut self`), a cast, a character,
+a byte or a number with a decimal point, `format!` anywhere but in a view's labels, an import from outside `earnest`, any other top-level item, an `Option` as the value of a
 `Map` or the item of a `Seq` or a `Queue` (reading it would give `Some(None)`, which the checker
 can't tell from `None`), a `#[range]` that reaches outside its integer type, an item or a value
 named `forall`, `exists`, `Some`, `None`, `Set`, `Seq` or `Map` that the file calls or uses as the
