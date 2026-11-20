@@ -52,6 +52,29 @@ fn unread_lines(file: &Unreadable<'_>) -> Vec<String> {
     lines
 }
 
+/// The `Skipped files` section for a report: the test files that use the library, which the
+/// checker did not read and which did not change the verdict. `None` when there is none.
+///
+/// Append it to the text of [`report`] after a blank line, so a reader of the report sees that
+/// a file was passed over on purpose, and which.
+#[must_use]
+pub fn skipped_section(skipped: &[String]) -> Option<String> {
+    if skipped.is_empty() {
+        return None;
+    }
+    let (noun, verb) = if skipped.len() == 1 {
+        ("test file that uses", "was")
+    } else {
+        ("test files that use", "were")
+    };
+    let lines: Vec<String> = skipped.iter().map(|path| one_line(path)).collect();
+    Some(format!(
+        "## Skipped files\n\n{} {noun} the library {verb} not read:\n\n{}",
+        skipped.len(),
+        fenced(&lines)
+    ))
+}
+
 fn model(section: &Section<'_>) -> String {
     let mut blocks = vec![format!("## {}", prose(section.name)), result_line(section)];
     blocks.extend(section.outcome.graph.as_ref().map(chart));

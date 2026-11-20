@@ -1,7 +1,7 @@
 use crate::arguments::Verify;
 use crate::cache::{Cache, Key};
 use crate::changes::{Compare, check_base, rule_changes};
-use crate::commands::{Exit, gather, limits_of};
+use crate::commands::{Exit, Gathered, gather, limits_of};
 use crate::print::{Since, Verified, to_stderr, to_stdout};
 use crate::run::{Bounds, Checked, Graphs, Search, checked, explore_each};
 use crate::select::{Target, select_with_removed};
@@ -145,7 +145,7 @@ pub(crate) fn verify(arguments: &Verify) -> Result<Exit, String> {
     if let Some(base) = &arguments.base {
         check_base(base)?;
     }
-    let files = gather(&arguments.selection.models)?;
+    let Gathered { files, skipped } = gather(&arguments.selection.models)?;
     let selected = select_with_removed(
         &files,
         arguments.selection.models.model.as_deref(),
@@ -183,6 +183,7 @@ pub(crate) fn verify(arguments: &Verify) -> Result<Exit, String> {
     }
     let verified = Verified {
         files: &files,
+        skipped: &skipped,
         checked: &checked,
         since: compared.as_ref().map(|(base, compared)| Since {
             base,

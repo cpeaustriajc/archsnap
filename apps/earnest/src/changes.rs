@@ -257,6 +257,7 @@ fn broken_rules(model: Model, rules: Vec<Rule>, bounds: Bounds) -> Vec<String> {
         max_states: bounds.max_states,
         time_limit: bounds.time_limit,
         jobs: bounds.jobs,
+        helpers: None,
         keep_graph: false,
         only_rule: None,
     };
@@ -955,6 +956,7 @@ mod tests {
         let roots = [root.to_path_buf()];
         let files: Vec<ModelFile> = discover(&roots)
             .expect("the root exists")
+            .found
             .into_iter()
             .map(load)
             .collect();
@@ -1126,6 +1128,7 @@ mod tests {
         let roots = [root.to_path_buf()];
         let files: Vec<ModelFile> = discover(&roots)
             .expect("the root exists")
+            .found
             .into_iter()
             .map(load)
             .collect();

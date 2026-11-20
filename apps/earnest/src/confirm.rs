@@ -1,5 +1,5 @@
 use crate::run::Checked;
-use earnest_tla::Files;
+use earnest_tla::{Files, Invariants};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -90,7 +90,28 @@ fn tlc_verdict(rule: &RuleRun) -> &'static str {
     }
 }
 
-pub(crate) fn differences(checked: &Checked, counting: &TlcRun, rules: &[RuleRun]) -> Vec<String> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Tool {
+    Tlc,
+    TlaRs,
+}
+
+impl Tool {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Tlc => "TLC",
+            Self::TlaRs => "tla-rs",
+        }
+    }
+}
+
+pub(crate) fn differences(
+    checked: &Checked,
+    counting: &TlcRun,
+    rules: &[RuleRun],
+    tool: Tool,
+) -> Vec<String> {
+    let name = tool.name();
     let result = &checked.result;
     let mut found = Vec::new();
     if let Some(reason) = &result.reason {
@@ -101,11 +122,11 @@ pub(crate) fn differences(checked: &Checked, counting: &TlcRun, rules: &[RuleRun
     match counting.distinct_states {
         Some(states) if u64::try_from(result.states).is_ok_and(|ours| ours == states) => {}
         Some(states) => found.push(format!(
-            "states: the checker found {}, TLC found {states}",
+            "states: the checker found {}, {name} found {states}",
             result.states
         )),
         None => found.push(format!(
-            "states: the checker found {}, TLC did not finish its count{}",
+            "states: the checker found {}, {name} did not finish its count{}",
             result.states,
             counting
                 .errors
@@ -116,13 +137,13 @@ pub(crate) fn differences(checked: &Checked, counting: &TlcRun, rules: &[RuleRun
     }
     for ours in &result.rules {
         let Some(theirs) = rules.iter().find(|rule| rule.id == ours.id) else {
-            found.push(format!("rule {}: TLC was not run on it", ours.id));
+            found.push(format!("rule {}: {name} was not run on it", ours.id));
             continue;
         };
         let verdict = tlc_verdict(theirs);
         if verdict != ours.verdict {
             found.push(format!(
-                "rule {}: the checker says {}, TLC says {verdict}{}",
+                "rule {}: the checker says {}, {name} says {verdict}{}",
                 ours.id,
                 ours.verdict,
                 theirs
@@ -141,6 +162,7 @@ pub(crate) fn confirm_lines(
     checked: &Checked,
     differences: &[String],
     limits: &[String],
+    tool: Tool,
 ) -> Vec<String> {
     let result = &checked.result;
     let word = if differences.is_empty() {
@@ -150,8 +172,12 @@ pub(crate) fn confirm_lines(
     } else {
         "cannot"
     };
+    let by = match tool {
+        Tool::Tlc => String::new(),
+        Tool::TlaRs => format!("  ({})", tool.name()),
+    };
     let mut lines = vec![format!(
-        "{word:<7}  {}  {} states  {}",
+        "{word:<7}  {}  {} states  {}{by}",
         result.name,
         result.states,
         result.status.word()
@@ -160,7 +186,7 @@ pub(crate) fn confirm_lines(
         lines.extend(
             limits
                 .iter()
-                .map(|why| format!("  TLC can't confirm this model: {why}")),
+                .map(|why| format!("  {} can't confirm this model: {why}", tool.name())),
         );
     }
     lines.extend(differences.iter().map(|each| format!("  {each}")));
@@ -168,42 +194,115 @@ pub(crate) fn confirm_lines(
 }
 
 #[derive(Debug)]
-pub(crate) struct Tlc<'a> {
-    pub(crate) jar: &'a Path,
+pub(crate) struct Checker<'a> {
+    pub(crate) tool: Tool,
+    pub(crate) program: &'a Path,
     pub(crate) folder: PathBuf,
     pub(crate) workers: usize,
 }
 
-impl Tlc<'_> {
+const INVARIANT: &str = "INVARIANT ";
+
+fn merged(runs: Vec<TlcRun>) -> TlcRun {
+    let mut merged = TlcRun {
+        distinct_states: runs.first().and_then(|run| run.distinct_states),
+        ..TlcRun::default()
+    };
+    for run in runs {
+        if run.distinct_states != merged.distinct_states {
+            merged.distinct_states = None;
+        }
+        for name in run.violated {
+            if !merged.violated.contains(&name) {
+                merged.violated.push(name);
+            }
+        }
+        merged.errors.extend(run.errors);
+    }
+    merged
+}
+
+impl Checker<'_> {
+    fn command(&self, files: &Files, config_name: &str) -> Command {
+        let module = format!("{}.tla", files.name);
+        let workers = self.workers.max(1).to_string();
+        match self.tool {
+            Tool::Tlc => {
+                let mut command = Command::new("java");
+                command
+                    .arg("-cp")
+                    .arg(self.program)
+                    .args(["tlc2.TLC", "-continue", "-workers"])
+                    .arg(workers)
+                    .args(["-metadir", "states", "-config", config_name])
+                    .arg(module);
+                command
+            }
+            Tool::TlaRs => {
+                let mut command = Command::new(self.program);
+                command
+                    .arg(module)
+                    .args(["--config", config_name, "--workers"])
+                    .arg(workers);
+                command
+            }
+        }
+    }
+
     fn run(&self, files: &Files, config_name: &str, config: &str) -> Result<TlcRun, String> {
+        let name = self.tool.name();
         let failed = |what: &str, error: std::io::Error| {
             format!("{what} in {}: {error}", self.folder.to_string_lossy())
         };
         fs::write(self.folder.join(config_name), config)
-            .map_err(|error| failed("a TLC configuration can't be written", error))?;
-        let output = Command::new("java")
-            .arg("-cp")
-            .arg(self.jar)
-            .args(["tlc2.TLC", "-continue", "-workers"])
-            .arg(self.workers.max(1).to_string())
-            .args(["-metadir", "states", "-config", config_name])
-            .arg(format!("{}.tla", files.name))
+            .map_err(|error| failed(&format!("a {name} configuration can't be written"), error))?;
+        let output = self
+            .command(files, config_name)
             .current_dir(&self.folder)
             .stdin(Stdio::null())
             .output()
-            .map_err(|error| failed("`java` did not start", error))?;
+            .map_err(|error| failed(&format!("`{}` did not start", self.program_word()), error))?;
         let mut run = read_tlc(&String::from_utf8_lossy(&output.stdout));
         if run.distinct_states.is_none() && run.errors.is_empty() {
             let said = String::from_utf8_lossy(&output.stderr);
             run.errors.push(
                 said.lines()
                     .find(|line| !line.trim().is_empty())
-                    .unwrap_or("TLC printed no state count")
-                    .trim()
-                    .to_owned(),
+                    .map_or_else(
+                        || format!("{name} printed no state count"),
+                        |line| line.trim().to_owned(),
+                    ),
             );
         }
         Ok(run)
+    }
+
+    fn program_word(&self) -> String {
+        match self.tool {
+            Tool::Tlc => "java".to_owned(),
+            Tool::TlaRs => self.program.to_string_lossy().into_owned(),
+        }
+    }
+
+    fn judge(&self, files: &Files, number: usize, rule: &Invariants) -> Result<TlcRun, String> {
+        match self.tool {
+            Tool::Tlc => self.run(
+                files,
+                &format!("rule{number}.cfg"),
+                &files.config_judging(rule),
+            ),
+            Tool::TlaRs => {
+                let mut runs = Vec::new();
+                for (part, invariant) in rule.names().enumerate() {
+                    let mut config = files.config_checking(&[]);
+                    config.push_str(INVARIANT);
+                    config.push_str(invariant);
+                    config.push('\n');
+                    runs.push(self.run(files, &format!("rule{number}-{part}.cfg"), &config)?);
+                }
+                Ok(merged(runs))
+            }
+        }
     }
 
     pub(crate) fn check(&self, files: &Files) -> Result<(TlcRun, Vec<RuleRun>), String> {
@@ -226,11 +325,7 @@ impl Tlc<'_> {
         let counting = self.run(files, "count.cfg", &files.config_checking(&[]))?;
         let mut rules = Vec::new();
         for (number, exported) in files.rules.iter().enumerate() {
-            let run = self.run(
-                files,
-                &format!("rule{number}.cfg"),
-                &files.config_judging(exported),
-            )?;
+            let run = self.judge(files, number, exported)?;
             rules.push(RuleRun {
                 id: exported.rule.clone(),
                 invariant: exported.holds.clone(),
@@ -244,7 +339,7 @@ impl Tlc<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RuleRun, TlcRun, confirm_lines, differences, read_tlc};
+    use super::{RuleRun, TlcRun, Tool, confirm_lines, differences, merged, read_tlc};
     use crate::run::{Checked, ModelResult, RuleResult, Status};
 
     const PASSING: &str = "\
@@ -423,7 +518,7 @@ State 1: <Initial predicate>
         let ours = checked(4, &[("safe", "broken"), ("closed", "holds")]);
         let runs = [rule_run("safe", VIOLATING), rule_run("closed", PASSING)];
         assert_eq!(
-            differences(&ours, &read_tlc(PASSING), &runs),
+            differences(&ours, &read_tlc(PASSING), &runs, Tool::Tlc),
             Vec::<String>::new()
         );
     }
@@ -432,7 +527,7 @@ State 1: <Initial predicate>
     fn another_state_count_is_a_difference() {
         let ours = checked(5, &[]);
         assert_eq!(
-            differences(&ours, &read_tlc(PASSING), &[]),
+            differences(&ours, &read_tlc(PASSING), &[], Tool::Tlc),
             ["states: the checker found 5, TLC found 4"]
         );
     }
@@ -442,7 +537,7 @@ State 1: <Initial predicate>
         let ours = checked(4, &[("safe", "holds"), ("closed", "broken")]);
         let runs = [rule_run("safe", VIOLATING), rule_run("closed", PASSING)];
         assert_eq!(
-            differences(&ours, &read_tlc(PASSING), &runs),
+            differences(&ours, &read_tlc(PASSING), &runs, Tool::Tlc),
             [
                 "rule safe: the checker says holds, TLC says broken",
                 "rule closed: the checker says broken, TLC says holds",
@@ -456,7 +551,7 @@ State 1: <Initial predicate>
         let mut run = rule_run("closed", VIOLATING);
         run.run.violated = vec!["Rule_safe".to_owned()];
         assert!(
-            differences(&ours, &read_tlc(PASSING), &[run]).is_empty(),
+            differences(&ours, &read_tlc(PASSING), &[run], Tool::Tlc).is_empty(),
             "only the rule's own invariant counts"
         );
     }
@@ -466,12 +561,12 @@ State 1: <Initial predicate>
         let unknown = checked(4, &[("capped", "unknown")]);
         let runs = [rule_run("capped", FAILING)];
         assert!(
-            differences(&unknown, &read_tlc(PASSING), &runs).is_empty(),
+            differences(&unknown, &read_tlc(PASSING), &runs, Tool::Tlc).is_empty(),
             "the checker could not judge it everywhere either"
         );
         let holds = checked(4, &[("capped", "holds")]);
         assert_eq!(
-            differences(&holds, &read_tlc(PASSING), &runs),
+            differences(&holds, &read_tlc(PASSING), &runs, Tool::Tlc),
             ["rule capped: the checker says holds, TLC says unknown \
                  (Evaluating invariant Rule_capped failed.)"]
         );
@@ -490,23 +585,29 @@ State 1: <Initial predicate>
         let runs = [judged("capped", &unjudged_somewhere("capped"))];
         let unknown = checked(4, &[("capped", "unknown")]);
         assert!(
-            differences(&unknown, &read_tlc(PASSING), &runs).is_empty(),
+            differences(&unknown, &read_tlc(PASSING), &runs, Tool::Tlc).is_empty(),
             "TLC finished and saw a state where the rule has no value"
         );
         let holds = checked(4, &[("capped", "holds")]);
         assert_eq!(
-            differences(&holds, &read_tlc(PASSING), &runs),
+            differences(&holds, &read_tlc(PASSING), &runs, Tool::Tlc),
             ["rule capped: the checker says holds, TLC says unknown"]
         );
         let everywhere = [judged("capped", PASSING)];
         assert!(
-            differences(&holds, &read_tlc(PASSING), &everywhere).is_empty(),
+            differences(&holds, &read_tlc(PASSING), &everywhere, Tool::Tlc).is_empty(),
             "no state breaks the second invariant, so the rule holds"
         );
         let both = format!("{}{}", unjudged_somewhere("safe"), VIOLATING);
         let broken = checked(4, &[("safe", "broken")]);
         assert!(
-            differences(&broken, &read_tlc(PASSING), &[judged("safe", &both)]).is_empty(),
+            differences(
+                &broken,
+                &read_tlc(PASSING),
+                &[judged("safe", &both)],
+                Tool::Tlc
+            )
+            .is_empty(),
             "a rule broken in one state and without a value in another is broken"
         );
     }
@@ -515,7 +616,7 @@ State 1: <Initial predicate>
     fn a_count_tlc_did_not_finish_and_a_rule_it_was_not_run_on_are_differences() {
         let ours = checked(4, &[("safe", "broken")]);
         assert_eq!(
-            differences(&ours, &read_tlc(FAILING), &[]),
+            differences(&ours, &read_tlc(FAILING), &[], Tool::Tlc),
             [
                 "states: the checker found 4, TLC did not finish its count \
                  (Evaluating invariant Rule_capped failed.)",
@@ -528,7 +629,7 @@ State 1: <Initial predicate>
     fn a_checker_result_that_stopped_at_a_limit_is_a_difference() {
         let mut ours = checked(4, &[]);
         ours.result.reason = Some("state limit of 4".to_owned());
-        let found = differences(&ours, &read_tlc(PASSING), &[]);
+        let found = differences(&ours, &read_tlc(PASSING), &[], Tool::Tlc);
         assert_eq!(found.len(), 1, "one difference: {found:?}");
         assert!(
             found[0].contains("state limit of 4"),
@@ -540,11 +641,11 @@ State 1: <Initial predicate>
     fn the_lines_say_same_or_differs_and_list_each_difference() {
         let ours = checked(4, &[]);
         assert_eq!(
-            confirm_lines(&ours, &[], &[]),
+            confirm_lines(&ours, &[], &[], Tool::Tlc),
             ["same     Oven  4 states  fail"]
         );
         assert_eq!(
-            confirm_lines(&ours, &["states: 4 against 5".to_owned()], &[]),
+            confirm_lines(&ours, &["states: 4 against 5".to_owned()], &[], Tool::Tlc),
             ["differs  Oven  4 states  fail", "  states: 4 against 5"]
         );
     }
@@ -556,7 +657,8 @@ State 1: <Initial predicate>
             confirm_lines(
                 &ours,
                 &["states: 4 against 5".to_owned()],
-                &["a number is too big".to_owned()]
+                &["a number is too big".to_owned()],
+                Tool::Tlc
             ),
             [
                 "cannot   Oven  4 states  fail",
@@ -565,9 +667,69 @@ State 1: <Initial predicate>
             ]
         );
         assert_eq!(
-            confirm_lines(&ours, &[], &["a number is too big".to_owned()]),
+            confirm_lines(&ours, &[], &["a number is too big".to_owned()], Tool::Tlc),
             ["same     Oven  4 states  fail"],
             "TLC agreed, so the model is confirmed"
+        );
+    }
+
+    #[test]
+    fn the_lines_name_tla_rs_when_it_is_the_program() {
+        let ours = checked(4, &[("safe", "holds")]);
+        let runs = [RuleRun {
+            id: "safe".to_owned(),
+            invariant: "Rule_safe".to_owned(),
+            judged: None,
+            run: TlcRun {
+                distinct_states: Some(4),
+                violated: vec!["Rule_safe".to_owned()],
+                errors: Vec::new(),
+            },
+        }];
+        let found = differences(&ours, &read_tlc(FAILING), &runs, Tool::TlaRs);
+        assert_eq!(
+            found,
+            [
+                "states: the checker found 4, tla-rs did not finish its count \
+                 (Evaluating invariant Rule_capped failed.)",
+                "rule safe: the checker says holds, tla-rs says broken",
+            ]
+        );
+        assert_eq!(
+            confirm_lines(&ours, &found, &[], Tool::TlaRs)[0],
+            "differs  Oven  4 states  fail  (tla-rs)",
+            "the first line says which program"
+        );
+        assert_eq!(
+            confirm_lines(&ours, &[], &[], Tool::TlaRs),
+            ["same     Oven  4 states  fail  (tla-rs)"]
+        );
+    }
+
+    #[test]
+    fn the_runs_of_one_rule_are_merged_into_one() {
+        let run = |violated: &[&str], states: Option<u64>, errors: &[&str]| TlcRun {
+            distinct_states: states,
+            violated: violated.iter().map(|name| (*name).to_owned()).collect(),
+            errors: errors.iter().map(|error| (*error).to_owned()).collect(),
+        };
+        assert_eq!(
+            merged(vec![
+                run(&["Rule_a"], Some(4), &[]),
+                run(&["Judged_a", "Rule_a"], Some(4), &["it failed"]),
+            ]),
+            run(&["Rule_a", "Judged_a"], Some(4), &["it failed"]),
+            "violations are joined without repeats and errors are kept"
+        );
+        assert_eq!(
+            merged(vec![run(&[], Some(4), &[]), run(&[], None, &[])]).distinct_states,
+            None,
+            "a run that did not finish its count means the merge did not either"
+        );
+        assert_eq!(
+            merged(Vec::new()),
+            TlcRun::default(),
+            "no run, nothing found"
         );
     }
 }

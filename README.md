@@ -40,6 +40,7 @@ earnest chart src/cart.model.ts --model Cart
 earnest report --base origin/main    # Markdown for a PR body
 earnest tla src/cart.model.ts --out build/tla
 earnest confirm --tlc tla2tools.jar
+earnest confirm --tla-rs ~/.cargo/bin/tla-rs
 ```
 
 | Flag | Default | Meaning |
@@ -57,6 +58,13 @@ earnest confirm --tlc tla2tools.jar
 `earnest verify` runs in one process, needs no network, no Java and no setup, and writes only to
 `.earnest/` in the folder it is run from.
 
+`--jobs` is the number of worker threads for the whole run. Models are checked side by side, and
+the threads a model is not using go to the others: the levels of one large model are spread
+over every thread that is free, and when a model finishes and no model waits to start, its
+threads go to the models still running, also to one that started with a single thread. The
+results, their order and the path of each broken rule are the same for every `--jobs` and on
+every run.
+
 ### Which files are models
 
 A file is a model file when any of these holds, and a model file is read or refused as
@@ -65,7 +73,7 @@ unreadable, never left out:
 - it is named on the command line, whatever it is called and whatever it imports;
 - in TypeScript, its name ends in `.model.ts`, `.model.mts` or `.model.tsx`, whatever it imports;
 - it is a `.ts`, `.mts` or `.tsx` file that imports `@earnest/model` by the plain specifier, or
-  a `.rs` file that names the `earnest` crate.
+  a `.rs` file that names the `earnest` crate, and it is not a test file (below).
 
 The plain specifier is judged by what it means and not by how it is written. In TypeScript the
 specifier is what JavaScript makes of it, so `"@earnest\x2fmodel"`, a Unicode escape or a line
@@ -81,6 +89,27 @@ is only an extension (`.ts`, `.mts`, `.tsx`, `.rs`) is a file of that language, 
 another kind is `unreadable` with a sentence saying the checker does not know how to read it.
 The same file given under two spellings of its path (`a.model.ts` and `./a.model.ts`, or a path
 through `..`) is checked and listed once.
+
+A file found by walking a folder is a test file, not a model file, when it follows the test
+convention of its language, so an app's own tests that import the library (a vitest test, a Node
+script that replays a bug path, a Rust integration test) do not stop a bare `earnest verify`:
+
+| Language | A test file is |
+|---|---|
+| TypeScript | a file named `*.test.ts`, `*.spec.ts` or the `.mts` and `.tsx` forms of those, or any file under a folder named `test`, `tests` or `__tests__` |
+| Rust | any file under a folder named `tests`, `benches` or `examples`, or a file named `build.rs` |
+
+The folders are judged by the names below the folder or file the run was given, so
+`earnest verify tests/models` searches `tests/models` as it is told to. A name ending in
+`.model.ts` (or `.model.mts`, `.model.tsx`) always wins: it is a model file wherever it is, and
+a test file that is one is read. A test file that uses the library is not read and does not
+change the exit code, and the run says so: a line `skipped  3 test files that use the library`
+in the text output of `earnest verify` (on stderr for the other commands), a section `Skipped
+files` that lists the paths in `earnest report`, and the paths in the `skipped` list of the
+JSON. A test file that does not use the library is not a model either way and is not listed.
+A file named on the command line is read or refused whatever it is called and wherever it is,
+so it is never skipped. A Rust `#[cfg(test)]` module inside a model file is not part of the
+model, as before. `--base` applies the same convention to the files of the base commit.
 
 A model file may reach the library only by `import { m } from "@earnest/model"`. Reaching it
 any other way, such as `await import("@ear" + "nest/model")`, a `require`, or an import of a
@@ -162,6 +191,9 @@ unreadable  src/clock.model.ts
   billion combinations) ends as `unfinished` at the limit with bounded memory, never a kill.
 - An `unreadable` file lists each problem as `file:line:column`, the feature in backticks and a
   sentence. No model in that file is checked.
+- A line `skipped  <n> test files that use the library` comes before the summary line when
+  `<n>` is above 0 (`1 test file that uses the library` for one). It is not in the summary
+  counts and does not change the exit code. `--json` lists the paths.
 - The summary line counts each model and each unreadable file once in its total, then lists
   `pass`, `fail` and `unfinished`, and adds `<n> unreadable` only when there are unreadable
   files. In JSON, `summary.models` counts models only and `summary.unreadable` counts files.
@@ -222,12 +254,15 @@ unreadable  src/clock.model.ts
   "unreadable": [
     { "file": "src/clock.model.ts", "line": 12, "column": 17, "feature": "`Date.now`", "message": "..." }
   ],
+  "skipped": ["src/cart.test.ts"],
   "ruleChanges": [],
   "summary": { "models": 1, "pass": 0, "fail": 1, "unfinished": 0, "unreadable": 1 }
 }
 ```
 
-`status` is `pass`, `fail` or `unfinished`. `verdict` is `holds`, `broken` or `unknown` (the rule
+`skipped` lists, in path order, the test files that use the library and were not read (see
+"Which files are models"); it is `[]` when there are none. `status` is `pass`, `fail` or
+`unfinished`. `verdict` is `holds`, `broken` or `unknown` (the rule
 was not seen broken, but the model was unfinished or the rule faulted in a state). `kind` is `stuck`, `out-of-range` or `fault`.
 In JSON a set and a sequence are arrays, a map is an array of `[key, value]` pairs and a record is
 an object. Two runs on the same files give the same JSON apart from `milliseconds` and `cached`.
@@ -302,14 +337,24 @@ shown.`
 
 `earnest report` prints Markdown for a PR body: one section per model with its result line, its
 chart, the path to each broken rule, a section `Unreadable files` that names each file the
-checker could not read and why, and the rule changes when `--base` is given. A file is never
-left out of the report without a word: a report of a run with an unreadable file says so.
+checker could not read and why, a section `Skipped files` that lists the test files that use the
+library and were not read, and the rule changes when `--base` is given. A file is never left out
+of the report without a word: a report of a run with an unreadable or a skipped file says so.
 
 ### TLA+ export
 
 `earnest tla` writes `<Model>.tla` and `<Model>.cfg` for each model. TLC finds the same number of
 distinct states and the same verdict for each rule. `earnest confirm --tlc <jar>` exports every
 model, runs TLC on each with Java, and exits 1 when a state count or a verdict differs.
+`earnest confirm --tla-rs <program>` does the same with [tla-rs](https://github.com/bbcvc/tla-rs)
+(crate `tla-tools`, installed with `cargo install tla-tools`), a TLA+ checker written in Rust
+that takes TLC's options and prints TLC's messages, so it needs no Java. Give both flags to
+check each model with both: each model then has one line per program, and the line of tla-rs
+ends with `(tla-rs)`. tla-rs is run on each module with `--config` and `--workers`; it stops at
+its first broken invariant, so a rule's invariants are each a run of their own, and its
+differences read `tla-rs found`, `tla-rs says`. The 32-bit and text limits below are TLC's: a
+model that tla-rs can't confirm is `differs`, never `cannot`. `--jobs` is the number of workers
+given to each program.
 
 A rule `id` is the invariant `Rule_id`, and the configuration names one invariant for each rule.
 A rule that can't be evaluated in a state is true there in `Rule_id`, as an action that can't be
@@ -329,7 +374,9 @@ seen only by `earnest confirm`. `earnest confirm` prints `cannot` in place of `d
 line `TLC can't confirm this model:` and the reason, before the differences it found. A model
 that TLC confirms anyway is `same`. `cannot` is not `same`, so `earnest confirm` exits 1 for it.
 The tests that need Java and the jar are built only with the cargo feature `tlc`: `cargo test
---locked -p earnest_break_it --features tlc --test tlc`.
+--locked -p earnest_break_it --features tlc --test tlc`. The test that needs tla-rs is built only
+with the cargo feature `tla_rs`: `cargo test --locked -p earnest_break_it --features tla_rs --test
+tla_rs`.
 
 ## Writing a model in TypeScript
 

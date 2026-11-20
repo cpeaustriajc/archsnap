@@ -50,11 +50,12 @@ pub(crate) struct Ran {
 }
 
 pub(crate) fn explore_each(searches: &[Search<'_>], bounds: Bounds, graphs: Graphs) -> Vec<Ran> {
-    run_each(searches, bounds.jobs, |search, threads| {
+    run_each(searches, bounds.jobs, |search, helpers| {
         let limits = Limits {
             max_states: bounds.max_states,
             time_limit: bounds.time_limit,
-            jobs: threads,
+            jobs: 1,
+            helpers: Some(helpers.clone()),
             keep_graph: graphs == Graphs::Kept,
             only_rule: search.only_rule.map(str::to_owned),
         };

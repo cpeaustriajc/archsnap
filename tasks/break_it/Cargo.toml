@@ -6,6 +6,7 @@ publish.workspace = true
 
 [features]
 tlc = []
+tla_rs = []
 
 [[test]]
 name = "break_it"
@@ -15,6 +16,11 @@ path = "tests/break_it/main.rs"
 name = "tlc"
 path = "tests/tlc/main.rs"
 required-features = ["tlc"]
+
+[[test]]
+name = "tla_rs"
+path = "tests/tla_rs/main.rs"
+required-features = ["tla_rs"]
 
 [dev-dependencies]
 serde_json.workspace = true

@@ -18,6 +18,7 @@ pub(crate) struct Since<'a> {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Verified<'a> {
     pub(crate) files: &'a [ModelFile],
+    pub(crate) skipped: &'a [String],
     pub(crate) checked: &'a [Checked],
     pub(crate) since: Option<Since<'a>>,
 }
@@ -41,6 +42,7 @@ impl Summary {
 struct Document<'a> {
     models: Vec<&'a ModelResult>,
     unreadable: Vec<&'a Problem>,
+    skipped: &'a [String],
     #[serde(rename = "ruleChanges")]
     rule_changes: &'a [Difference],
     summary: Summary,
@@ -95,6 +97,7 @@ impl Verified<'_> {
                 changes: &changes,
             }));
         }
+        lines.extend(skipped_line(self.skipped.len()));
         lines.push(summary_line(&self.summary()));
         lines.join("\n")
     }
@@ -103,6 +106,7 @@ impl Verified<'_> {
         let document = Document {
             models: self.checked.iter().map(|checked| &checked.result).collect(),
             unreadable: self.files.iter().flat_map(ModelFile::problems).collect(),
+            skipped: self.skipped,
             rule_changes: self.since.map_or(&[], |since| since.changes),
             summary: self.summary(),
         };
@@ -158,6 +162,20 @@ pub(crate) fn unreadable_lines(file: &ModelFile) -> Vec<String> {
             .map(|line| format!("{INDENT}{line}")),
     );
     lines
+}
+
+pub(crate) fn skipped_line(count: usize) -> Option<String> {
+    let noun = if count == 1 {
+        "test file that uses"
+    } else {
+        "test files that use"
+    };
+    (count > 0).then(|| {
+        format!(
+            "{:<STATUS_WIDTH$}{INDENT}{count} {noun} the library",
+            "skipped"
+        )
+    })
 }
 
 fn summary_line(summary: &Summary) -> String {
@@ -276,6 +294,7 @@ mod tests {
         let (files, checked) = (files(), checked());
         let verified = Verified {
             files: &files,
+            skipped: &[],
             checked: &checked,
             since: None,
         };
@@ -312,6 +331,7 @@ unfinished  Z  1000 states so far  3 ms  (state limit of 1000)  (cached)
         }];
         let verified = Verified {
             files: &files,
+            skipped: &[],
             checked: &checked,
             since: Some(Since {
                 base: "origin/main",
@@ -376,6 +396,7 @@ unfinished  Z  1000 states so far  3 ms  (state limit of 1000)  (cached)
         let (files, checked) = (files(), checked());
         let verified = Verified {
             files: &files,
+            skipped: &[],
             checked: &checked,
             since: None,
         };
@@ -427,6 +448,7 @@ unfinished  Z  1000 states so far  3 ms  (state limit of 1000)  (cached)
         let checked = [named];
         let text = Verified {
             files: &files,
+            skipped: &[],
             checked: &checked,
             since: None,
         }

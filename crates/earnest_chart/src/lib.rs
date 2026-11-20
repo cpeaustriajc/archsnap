@@ -17,6 +17,6 @@ mod text;
 pub use changes::{ChangeKind, RuleChange, RuleChanges, RuleText, rule_change_lines};
 pub use markdown::one_line;
 pub use mermaid::chart;
-pub use report::{Section, Unreadable, report};
+pub use report::{Section, Unreadable, report, skipped_section};
 pub use select::ARROW_LIMIT;
 pub use text::{detail_lines, path_lines};

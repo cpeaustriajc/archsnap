@@ -1,94 +1,66 @@
-use earnest_check::WORKER_STACK;
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use earnest_check::{Helpers, WORKER_STACK};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
-
-#[derive(Debug, Default)]
-struct Desk {
-    next: usize,
-    busy: usize,
-}
 
 #[derive(Debug)]
 struct Pool {
-    threads: usize,
     tasks: usize,
-    desk: Mutex<Desk>,
-    freed: Condvar,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Share {
-    task: usize,
-    threads: usize,
-}
-
-fn threads_for_next(threads: usize, busy: usize, waiting: usize) -> usize {
-    let spare = threads.saturating_sub(busy).saturating_sub(1);
-    let kept_for_others = waiting.min(spare);
-    spare.saturating_sub(kept_for_others).saturating_add(1)
+    crew: usize,
+    next: AtomicUsize,
+    helpers: Helpers,
 }
 
 impl Pool {
-    fn desk(&self) -> MutexGuard<'_, Desk> {
-        self.desk.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn take(&self) -> Option<Share> {
-        let mut desk = self.desk();
-        loop {
-            if desk.next >= self.tasks {
-                return None;
-            }
-            if desk.busy < self.threads {
-                break;
-            }
-            desk = self
-                .freed
-                .wait(desk)
-                .unwrap_or_else(PoisonError::into_inner);
+    fn new(threads: usize, tasks: usize) -> Self {
+        let threads = threads.max(1);
+        let crew = threads.min(tasks);
+        Self {
+            tasks,
+            crew,
+            next: AtomicUsize::new(0),
+            helpers: Helpers::new(threads.saturating_sub(crew)),
         }
-        let task = desk.next;
-        desk.next = task.saturating_add(1);
-        let waiting = self.tasks.saturating_sub(desk.next);
-        let threads = threads_for_next(self.threads, desk.busy, waiting);
-        desk.busy = desk.busy.saturating_add(threads);
-        Some(Share { task, threads })
     }
 
-    fn give_back(&self, share: Share) {
-        let mut desk = self.desk();
-        desk.busy = desk.busy.saturating_sub(share.threads);
-        drop(desk);
-        self.freed.notify_all();
+    fn claim(&self) -> Option<usize> {
+        let task = self.next.fetch_add(1, Ordering::SeqCst);
+        (task < self.tasks).then_some(task)
+    }
+
+    fn retire(&self) {
+        self.helpers.add(1);
     }
 }
 
+/// Runs `work` once on every task, on `threads` threads in all, and returns the results in task
+/// order.
+///
+/// Each thread of the crew runs one task at a time, so no more tasks run side by side than
+/// there are threads. `work` also gets the [`Helpers`] of the run: the threads that no task is
+/// using, which a task can borrow for the next stretch of work it can spread, such as one level
+/// of states. A thread that finds no task left joins them, so the threads a finished task
+/// leaves behind go to the tasks that are still running, also to one that started late. The
+/// results do not depend on `threads`.
 pub(crate) fn run_each<T, R, F>(tasks: &[T], threads: usize, work: F) -> Vec<R>
 where
     T: Sync,
     R: Send,
-    F: Fn(&T, usize) -> R + Sync,
+    F: Fn(&T, &Helpers) -> R + Sync,
 {
-    let pool = Pool {
-        threads: threads.max(1),
-        tasks: tasks.len(),
-        desk: Mutex::new(Desk::default()),
-        freed: Condvar::new(),
-    };
-    let crew = pool.threads.min(tasks.len());
+    let pool = Pool::new(threads, tasks.len());
     let mut done: Vec<(usize, R)> = thread::scope(|scope| {
-        let workers: Vec<_> = (0..crew)
+        let workers: Vec<_> = (0..pool.crew)
             .map(|_| {
                 thread::Builder::new()
                     .stack_size(WORKER_STACK)
                     .spawn_scoped(scope, || {
                         let mut mine = Vec::new();
-                        while let Some(share) = pool.take() {
-                            if let Some(task) = tasks.get(share.task) {
-                                mine.push((share.task, work(task, share.threads)));
+                        while let Some(position) = pool.claim() {
+                            if let Some(task) = tasks.get(position) {
+                                mine.push((position, work(task, &pool.helpers)));
                             }
-                            pool.give_back(share);
                         }
+                        pool.retire();
                         mine
                     })
                     .expect("a worker thread starts")
@@ -108,29 +80,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{run_each, threads_for_next};
+    use super::{Pool, run_each};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread;
     use std::time::Duration;
-
-    #[test]
-    fn one_task_takes_every_thread() {
-        assert_eq!(threads_for_next(4, 0, 0), 4, "nothing else is waiting");
-        assert_eq!(threads_for_next(1, 0, 0), 1, "one thread is one thread");
-    }
-
-    #[test]
-    fn a_task_leaves_one_thread_for_each_task_still_waiting() {
-        assert_eq!(threads_for_next(4, 0, 1), 3, "one waits");
-        assert_eq!(threads_for_next(4, 0, 3), 1, "three wait");
-        assert_eq!(
-            threads_for_next(4, 0, 20),
-            1,
-            "more wait than there are threads"
-        );
-        assert_eq!(threads_for_next(4, 3, 0), 1, "the others are busy");
-        assert_eq!(threads_for_next(8, 2, 1), 5, "two busy, one waits");
-    }
 
     #[test]
     fn results_come_back_in_task_order_for_every_thread_count() {
@@ -153,12 +106,14 @@ mod tests {
     }
 
     #[test]
-    fn the_threads_handed_out_never_exceed_the_limit() {
+    fn the_threads_in_use_never_exceed_the_limit() {
         for (threads, count) in [(4, 1), (4, 2), (4, 3), (4, 9), (3, 7), (1, 5), (8, 3)] {
             let tasks: Vec<usize> = (0..count).collect();
             let in_use = AtomicUsize::new(0);
             let most = AtomicUsize::new(0);
-            let shares = run_each(&tasks, threads, |_, share| {
+            let shares = run_each(&tasks, threads, |_, helpers| {
+                let loan = helpers.borrow(usize::MAX);
+                let share = 1 + loan.threads();
                 let now = in_use.fetch_add(share, Ordering::SeqCst) + share;
                 most.fetch_max(now, Ordering::SeqCst);
                 thread::sleep(Duration::from_millis(2));
@@ -167,7 +122,7 @@ mod tests {
             });
             assert!(
                 shares.iter().all(|share| *share >= 1),
-                "every task gets a thread with {threads} threads and {count} tasks"
+                "every task has a thread with {threads} threads and {count} tasks"
             );
             assert!(
                 most.load(Ordering::SeqCst) <= threads,
@@ -178,12 +133,76 @@ mod tests {
     }
 
     #[test]
-    fn a_lone_task_is_given_every_thread() {
-        let shares = run_each(&[()], 6, |(), share| share);
+    fn a_lone_task_can_borrow_every_other_thread() {
+        let shares = run_each(&[()], 6, |(), helpers| {
+            1 + helpers.borrow(usize::MAX).threads()
+        });
         assert_eq!(
             shares,
             [6],
-            "one model can split its levels over all workers"
+            "one model can spread its levels over all threads"
+        );
+    }
+
+    #[test]
+    fn the_crew_is_as_big_as_the_threads_or_the_tasks_and_the_rest_are_idle() {
+        for (threads, tasks, crew, idle) in [
+            (4, 1, 1, 3),
+            (4, 3, 3, 1),
+            (4, 4, 4, 0),
+            (4, 9, 4, 0),
+            (0, 2, 1, 0),
+            (1, 0, 0, 1),
+        ] {
+            let pool = Pool::new(threads, tasks);
+            assert_eq!(
+                (pool.crew, pool.helpers.idle()),
+                (crew, idle),
+                "{threads} threads and {tasks} tasks"
+            );
+        }
+    }
+
+    #[test]
+    fn tasks_are_claimed_once_each_in_order_and_then_none() {
+        let pool = Pool::new(2, 3);
+        let claimed: Vec<Option<usize>> = (0..5).map(|_| pool.claim()).collect();
+        assert_eq!(
+            claimed,
+            [Some(0), Some(1), Some(2), None, None],
+            "in order, then nothing"
+        );
+    }
+
+    #[test]
+    fn a_task_that_starts_late_can_borrow_the_threads_the_finished_tasks_left() {
+        let pool = Pool::new(4, 3);
+        let claimed: Vec<Option<usize>> = (0..3).map(|_| pool.claim()).collect();
+        assert_eq!(claimed, [Some(0), Some(1), Some(2)], "all three run");
+        assert_eq!(pool.helpers.idle(), 1, "one thread has no task");
+        assert_eq!(
+            pool.claim(),
+            None,
+            "the first thread to finish finds nothing left"
+        );
+        pool.retire();
+        assert_eq!(pool.claim(), None, "and so does the second");
+        pool.retire();
+        let late = pool.helpers.borrow(usize::MAX);
+        assert_eq!(
+            1 + late.threads(),
+            4,
+            "the last task spreads over its own thread and the three that are idle"
+        );
+    }
+
+    #[test]
+    fn while_tasks_wait_no_thread_is_idle() {
+        let pool = Pool::new(4, 13);
+        assert_eq!(
+            pool.helpers.borrow(usize::MAX).threads(),
+            0,
+            "every thread runs a task, so a model that starts early has one thread"
         );
     }
 }

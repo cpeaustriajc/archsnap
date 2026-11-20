@@ -34,6 +34,13 @@ tlc:
     cargo clippy --locked -p earnest_break_it --features tlc --test tlc -- -D warnings
     cargo test --locked -p earnest_break_it --features tlc --test tlc
 
+tla-rs:
+    cargo install tla-tools --locked --version 0.3.0 --root target/tools
+    cargo build --release --locked -p earnest-cli
+    for model in tasks/conformance/models/*.model.ts tasks/conformance/models/*.rs tasks/conformance/twins/*.model.ts tasks/conformance/twins/*.rs; do target/release/earnest confirm --tla-rs target/tools/bin/tla-rs "$model" || exit 1; done
+    cargo clippy --locked -p earnest_break_it --features tla_rs --test tla_rs -- -D warnings
+    cargo test --locked -p earnest_break_it --features tla_rs --test tla_rs
+
 benchmark:
     cargo build --release --locked -p earnest-cli
     cargo run --release --locked -p earnest_benchmark -- --runs 5

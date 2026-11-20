@@ -20,7 +20,10 @@ from a cache and nothing is written to the repository, and prints Markdown:
 - the 12 mixed models, each alone;
 - the two spec lines, marked as a stand-in, with the 12 models checked together in one
   `earnest verify`;
-- the largest model on one worker (`--jobs 1`) and on all cores, with the speed-up.
+- the largest model on one worker (`--jobs 1`) and on all cores, with the speed-up;
+- the R12 comparison: the 12 mixed models and the largest model (`grid_1m`) in one
+  `earnest verify`, against the longest of the 13 alone (`grid_1m` or `wide`, whichever takes
+  longer). R12 asks for about 1x.
 
 Wall time is the time from starting the process to its exit, so it includes reading the files.
 Peak memory is the largest resident set (`VmHWM` in `/proc`) any run reached; it is `n/a` where
@@ -61,60 +64,79 @@ The 12 mixed models that stand in for the app's 12 are the next ten (in `models/
 
 ## Results
 
-Last run: the release build of this commit, `--runs 5`.
+Last run: the release build of this commit, `--runs 7`.
 
 Machine: a shared container with 4 cores visible to the process (`nproc` 4), 16 GB of memory and
 Linux on x86-64, so other work on the same host adds noise to every number below. Rerun on the
 machine whose numbers matter.
 
-Cores: 4. Runs per model: 5 after one unmeasured run. Wall time includes starting the process and reading the files; peak memory is the largest resident set of any run.
+Cores: 4. Runs per model: 7 after one unmeasured run. Wall time includes starting the process and reading the files; peak memory is the largest resident set of any run.
 
 ### Scaled models
 
 | Model | Language | States | Median wall time (s) | States per second | Peak memory (MiB) |
 |---|---|---:|---:|---:|---:|
-| Grid1k | TypeScript | 1,000 | 0.003 | 294,117 | 5.5 |
-| Grid1k | Rust | 1,000 | 0.003 | 292,568 | 5.7 |
-| Ledger | TypeScript | 36,400 | 0.121 | 299,766 | 18.9 |
-| Ledger | Rust | 36,400 | 0.144 | 252,254 | 19.3 |
-| Wide | TypeScript | 10,000 | 2.443 | 4,092 | 39.4 |
-| Wide | Rust | 10,000 | 2.417 | 4,137 | 39.7 |
-| Grid100k | TypeScript | 100,000 | 0.185 | 541,747 | 31.2 |
-| Grid100k | Rust | 100,000 | 0.205 | 488,011 | 32.8 |
-| Grid1m | TypeScript | 1,000,000 | 3.536 | 282,779 | 281.7 |
-| Grid1m | Rust | 1,000,000 | 2.989 | 334,544 | 282.0 |
+| Grid1k | TypeScript | 1,000 | 0.003 | 288,433 | 5.5 |
+| Grid1k | Rust | 1,000 | 0.005 | 216,262 | 5.9 |
+| Ledger | TypeScript | 36,400 | 0.089 | 409,310 | 17.4 |
+| Ledger | Rust | 36,400 | 0.088 | 411,750 | 18.0 |
+| Wide | TypeScript | 10,000 | 1.248 | 8,013 | 34.2 |
+| Wide | Rust | 10,000 | 1.253 | 7,982 | 35.0 |
+| Grid100k | TypeScript | 100,000 | 0.093 | 1,077,307 | 27.5 |
+| Grid100k | Rust | 100,000 | 0.086 | 1,166,044 | 27.9 |
+| Grid1m | TypeScript | 1,000,000 | 1.064 | 939,515 | 334.7 |
+| Grid1m | Rust | 1,000,000 | 1.077 | 928,466 | 334.9 |
 
 ### The 12 mixed models, each alone
 
 | Model | Language | States | Median wall time (s) | States per second | Peak memory (MiB) |
 |---|---|---:|---:|---:|---:|
-| counter100 | TypeScript | 100 | 0.002 | 43,159 | 3.8 |
-| traffic | TypeScript | 30 | 0.002 | 12,925 | 4.4 |
-| plane | TypeScript | 400 | 0.002 | 172,637 | 4.2 |
-| basket | TypeScript | 16 | 0.002 | 6,899 | 4.7 |
-| mailbox4 | TypeScript | 31 | 0.002 | 13,356 | 4.5 |
-| trail3 | TypeScript | 40 | 0.002 | 17,233 | 4.7 |
-| shelf | TypeScript | 64 | 0.002 | 27,234 | 3.7 |
-| seats | TypeScript | 18 | 0.002 | 7,407 | 5.3 |
-| votes | TypeScript | 21 | 0.002 | 8,581 | 5.1 |
-| pairs | TypeScript | 120 | 0.002 | 49,403 | 5.1 |
-| ledger | TypeScript | 36,400 | 0.121 | 299,766 | 18.9 |
-| wide | TypeScript | 10,000 | 2.443 | 4,092 | 39.4 |
+| counter100 | TypeScript | 100 | 0.002 | 43,047 | 4.6 |
+| traffic | TypeScript | 30 | 0.002 | 12,998 | 4.5 |
+| plane | TypeScript | 400 | 0.002 | 173,837 | 4.6 |
+| basket | TypeScript | 16 | 0.002 | 6,968 | 4.4 |
+| mailbox4 | TypeScript | 31 | 0.002 | 13,489 | 4.4 |
+| trail3 | TypeScript | 40 | 0.002 | 17,316 | 4.5 |
+| shelf | TypeScript | 64 | 0.002 | 27,741 | 4.5 |
+| seats | TypeScript | 18 | 0.002 | 7,812 | 4.4 |
+| votes | TypeScript | 21 | 0.002 | 9,126 | 4.5 |
+| pairs | TypeScript | 120 | 0.002 | 51,791 | 4.5 |
+| ledger | TypeScript | 36,400 | 0.089 | 409,310 | 17.4 |
+| wide | TypeScript | 10,000 | 1.248 | 8,013 | 34.2 |
 
 ### Spec targets
 
-- 12 models together: 2.459 s, target under 5 s (a stand-in: these benchmark models, not the first app's 12)
-- slowest model alone: 2.443 s, target under 10 s (a stand-in: these benchmark models, not the first app's)
-- the 12 models in that one run: 47,240 states, peak memory 48.2 MiB
+- 12 models together: 1.333 s, target under 5 s (a stand-in: these benchmark models, not the first app's 12)
+- slowest model alone: 1.248 s, target under 10 s (a stand-in: these benchmark models, not the first app's)
+- the 12 models in that one run: 47,240 states, peak memory 47.7 MiB
 
 ### One large model on one worker and on all cores
 
-- grid_1m: 1 worker 4.761 s, 4 workers (all cores) 3.536 s, speed-up 1.35x
+- grid_1m: 1 worker 2.619 s, 4 workers (all cores) 1.064 s, speed-up 2.46x
 
-The same build measured earlier on the same container gave `Wide` 1.330 s (so the 12 models
-together 2.486 s) and 2.17x for `Grid1m` on all cores against one worker, so on this host the
-times move by a factor of almost two between runs, and the speed-up by more. Read the targets
-with that spread: the 12 stand-in models together took 2.5 s against a target of 5 s, and the
-slowest alone 1.3 s to 2.4 s against 10 s. One state of `Wide` costs 1,000 evaluations of its
-action, so it is the slowest per state by far; the 12 together are dominated by it. Every other
-model of the 12 takes about 2 ms, which is the cost of starting the process.
+### R12: many models and one large model in one run
+
+- the 13 models in one run: 2.226 s; the largest model (grid_1m) alone: 1.064 s; the slowest of the 12 alone (wide): 1.248 s
+- R12 asks for about as long as the largest model alone: the one run took 1.78x the longest of them alone (wide)
+- peak memory 363.9 MiB
+
+### Before and after the thread-sharing change (R12)
+
+Four whole runs of the benchmark on the same container, two of the build before the change and
+two of this one, taken one after the other (`--runs 7` each; the medians of each run):
+
+| | Before (2 runs) | After (2 runs) |
+|---|---|---|
+| grid_1m, 1 worker | 4.1 s and 4.6 s | 2.6 s and 2.6 s |
+| grid_1m, all 4 cores | 2.4 s and 2.9 s | 1.1 s and 1.6 s |
+| the 12 models in one run | 4.5 s and 4.5 s | 1.3 s and 2.0 s |
+| the 12 and grid_1m in one run | 4.6 s and 4.5 s | 2.2 s and 2.3 s |
+| that run over the longest of the 13 alone | 1.6x and 1.9x | 1.8x and 1.3x |
+
+Two earlier before-runs, taken while other work ran on the host, gave 4.9 s to 5.6 s for the 13
+models in one run, up to 2.6x. The spread between runs on this host is up to 2x, so the ratios
+above can only be read as a range. What does not move with the noise: the 13 models hold about
+7 CPU seconds of work (`wide` about 4.5 and `grid_1m` about 2.5), so four cores can't finish them
+in less than about 1.8 s, which is 1.3x to 1.7x the longest of them alone. R12's "about as long
+as the largest model alone" holds for a set in which the others are small next to the largest;
+in this set `wide` is a second large model.

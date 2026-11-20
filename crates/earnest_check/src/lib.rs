@@ -9,11 +9,13 @@ mod cut;
 mod expand;
 mod explore;
 mod graph;
+mod helpers;
 mod outcome;
 mod report;
 
 pub use explore::{Limits, WORKER_STACK, explore};
 pub use graph::{Edge, Graph, Node};
+pub use helpers::{Helpers, Loan};
 pub use outcome::{
     Change, Finding, FindingKind, Named, Outcome, Path, RuleOutcome, Shown, Status, Step, Verdict,
 };

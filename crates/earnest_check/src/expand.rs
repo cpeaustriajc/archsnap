@@ -1,10 +1,68 @@
 use earnest_ir::{Action, Fault, Frame, Model, eval, truth};
 use earnest_value::Value;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Instant;
 
 pub(crate) type State = Arc<[Value]>;
+
+#[derive(Clone, Debug)]
+pub(crate) struct Key {
+    hash: u64,
+    pub(crate) state: State,
+}
+
+impl Key {
+    pub(crate) fn new(state: State) -> Self {
+        let mut hasher = FxHasher::default();
+        state.hash(&mut hasher);
+        Self {
+            hash: hasher.finish(),
+            state,
+        }
+    }
+}
+
+impl Hash for Key {
+    fn hash<H: Hasher>(&self, hasher: &mut H) {
+        hasher.write_u64(self.hash);
+    }
+}
+
+impl PartialEq for Key {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash && self.state == other.state
+    }
+}
+
+impl Eq for Key {}
+
+pub(crate) type Index = FxHashMap<Key, usize>;
+
+#[derive(Debug)]
+pub(crate) struct Known<'a> {
+    pub(crate) index: &'a Index,
+    pub(crate) met: Option<FxHashSet<Key>>,
+}
+
+impl Known<'_> {
+    fn lookup(&mut self, key: &Key) -> Lookup {
+        if let Some(id) = self.index.get(key) {
+            return Lookup::Known(*id);
+        }
+        match self.met.as_mut().map(|met| met.insert(key.clone())) {
+            Some(false) => Lookup::MetBefore,
+            Some(true) | None => Lookup::New,
+        }
+    }
+}
+
+enum Lookup {
+    Known(usize),
+    MetBefore,
+    New,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Whence {
@@ -18,7 +76,8 @@ pub(crate) enum Whence {
 pub(crate) struct Successor {
     pub(crate) action: usize,
     pub(crate) input: usize,
-    pub(crate) next: State,
+    pub(crate) next: Key,
+    pub(crate) known: Option<usize>,
 }
 
 #[derive(Debug, Default)]
@@ -128,9 +187,10 @@ fn expand_action(
     frame: &mut Frame<'_>,
     found: &mut Expanded,
     budget: Budget,
+    known: &mut Known<'_>,
 ) -> Stopping {
     let mut stopping = Stopping::default();
-    let mut seen: FxHashSet<State> = FxHashSet::default();
+    let mut seen: FxHashSet<Key> = FxHashSet::default();
     let combinations = input_count(action);
     let repeats = combinations > 1;
     for input in 0..combinations {
@@ -154,11 +214,18 @@ fn expand_action(
         stopping.enabled = true;
         match next_state(action, state, frame) {
             Ok(next) => {
-                if !repeats || seen.insert(Arc::clone(&next)) {
+                let next = Key::new(next);
+                if !repeats || seen.insert(next.clone()) {
+                    let known = match known.lookup(&next) {
+                        Lookup::Known(id) => Some(id),
+                        Lookup::New => None,
+                        Lookup::MetBefore => continue,
+                    };
                     found.successors.push(Successor {
                         action: position,
                         input,
                         next,
+                        known,
                     });
                 }
             }
@@ -190,6 +257,7 @@ pub(crate) fn expand_state(
     state: &[Value],
     asked: Asked,
     budget: Budget,
+    known: &mut Known<'_>,
 ) -> Expanded {
     let mut found = Expanded {
         outside: model
@@ -222,7 +290,9 @@ pub(crate) fn expand_state(
     }
     let mut moving = Stopping::default();
     for (position, action) in model.actions.iter().enumerate() {
-        let each = expand_action(position, action, state, &mut frame, &mut found, budget);
+        let each = expand_action(
+            position, action, state, &mut frame, &mut found, budget, known,
+        );
         moving.enabled |= each.enabled;
         moving.unsure |= each.unsure;
         if found.clock == Clock::Stopped {

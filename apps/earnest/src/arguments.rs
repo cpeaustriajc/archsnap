@@ -23,7 +23,7 @@ pub(crate) enum Command {
     Report(Report),
     #[command(about = "Write each model as a TLA+ module and its TLC configuration")]
     Tla(Tla),
-    #[command(about = "Run TLC on each exported model and compare it with the checker")]
+    #[command(about = "Run TLC or tla-rs on each exported model and compare it with the checker")]
     Confirm(Confirm),
 }
 
@@ -127,6 +127,18 @@ pub(crate) struct Confirm {
     pub(crate) models: Models,
     #[command(flatten)]
     pub(crate) bounds: Bounds,
-    #[arg(long, value_name = "JAR", help = "The path of tla2tools.jar")]
-    pub(crate) tlc: PathBuf,
+    #[arg(
+        long,
+        value_name = "JAR",
+        required_unless_present = "tla_rs",
+        help = "The path of tla2tools.jar: check each model with TLC, which needs Java"
+    )]
+    pub(crate) tlc: Option<PathBuf>,
+    #[arg(
+        long = "tla-rs",
+        value_name = "PATH",
+        required_unless_present = "tlc",
+        help = "The path of the tla-rs program: check each model with it, which needs no Java"
+    )]
+    pub(crate) tla_rs: Option<PathBuf>,
 }

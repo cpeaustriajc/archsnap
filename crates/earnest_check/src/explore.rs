@@ -1,9 +1,11 @@
 use crate::cut::cut_points;
-use crate::expand::{Asked, Budget, Clock, Expanded, State, Whence, Width, expand_state};
+use crate::expand::{
+    Asked, Budget, Clock, Expanded, Index, Key, Known, State, Whence, Width, expand_state,
+};
+use crate::helpers::Helpers;
 use crate::outcome::Outcome;
 use earnest_ir::{Fault, Field, Model};
 use earnest_value::Value;
-use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -22,6 +24,11 @@ pub struct Limits {
     /// Worker threads for a level of 512 states or more. 0 counts as 1. The outcome is the
     /// same for every number.
     pub jobs: usize,
+    /// Idle threads the search may borrow, on top of `jobs`, for each level it spreads and
+    /// gives back when the level is done. Searches that run side by side share one handle, so
+    /// a thread one of them leaves idle goes to another. The outcome is the same whatever is
+    /// borrowed.
+    pub helpers: Option<Helpers>,
     /// Whether [`Outcome::graph`] is filled. It costs memory for every arrow, so leave it off
     /// unless a chart is wanted.
     pub keep_graph: bool,
@@ -36,6 +43,7 @@ impl Default for Limits {
             max_states: 5_000_000,
             time_limit: None,
             jobs: 1,
+            helpers: None,
             keep_graph: false,
             only_rule: None,
         }
@@ -48,6 +56,7 @@ impl Default for Limits {
 pub const WORKER_STACK: usize = 256 * 1024 * 1024;
 
 const SMALLEST_SHARED_LEVEL: usize = 512;
+const WORTH_SPREADING: Duration = Duration::from_millis(1);
 const STATES_BETWEEN_CLOCK_READS: usize = 64;
 
 #[derive(Clone, Copy, Debug)]
@@ -77,7 +86,7 @@ pub(crate) struct Search<'a> {
     pub(crate) limits: &'a Limits,
     slots: usize,
     pub(crate) states: Vec<State>,
-    index: FxHashMap<State, usize>,
+    index: Index,
     pub(crate) parents: Vec<Option<Parent>>,
     pub(crate) notes: Vec<Note>,
     pub(crate) arrows: Vec<Arrow>,
@@ -94,6 +103,7 @@ pub(crate) struct Search<'a> {
 struct Expansion {
     done: Vec<Expanded>,
     stopped: bool,
+    workers: usize,
 }
 
 /// Visits every state `model` can reach from its start states, breadth first, and says what
@@ -120,7 +130,7 @@ pub fn explore(model: &Model, limits: &Limits) -> Outcome {
         limits,
         slots,
         states: Vec::new(),
-        index: FxHashMap::default(),
+        index: Index::default(),
         parents: Vec::new(),
         notes: Vec::new(),
         arrows: Vec::new(),
@@ -193,9 +203,10 @@ impl Search<'_> {
             .limits
             .time_limit
             .and_then(|limit| began.checked_add(limit));
+        let mut per_state = Duration::ZERO;
         let mut frontier = Vec::new();
         for start in Starts::new(&self.model.fields) {
-            if let Some(id) = self.insert(Arc::from(start), None) {
+            if let Some(id) = self.insert(Key::new(Arc::from(start)), None) {
                 frontier.push(id);
             }
             if self.reason.is_some() {
@@ -203,7 +214,13 @@ impl Search<'_> {
             }
         }
         while !frontier.is_empty() && self.reason.is_none() {
-            let level = self.expand_level(&frontier, deadline, Asked::Everything);
+            let level_began = Instant::now();
+            let level = self.expand_level(&frontier, deadline, Asked::Everything, per_state);
+            per_state = level_began
+                .elapsed()
+                .saturating_mul(u32::try_from(level.workers).unwrap_or(u32::MAX))
+                .checked_div(u32::try_from(frontier.len()).unwrap_or(u32::MAX))
+                .unwrap_or_default();
             if level.stopped {
                 let seconds = self.limits.time_limit.map_or(0, |limit| limit.as_secs());
                 self.reason = Some(format!("time limit of {seconds} s"));
@@ -216,7 +233,7 @@ impl Search<'_> {
 
     fn judge_the_rest(&mut self, deadline: Option<Instant>) {
         let unjudged: Vec<usize> = (self.judged..self.states.len()).collect();
-        let level = self.expand_level(&unjudged, deadline, Asked::RulesOnly);
+        let level = self.expand_level(&unjudged, deadline, Asked::RulesOnly, Duration::ZERO);
         for (id, expanded) in unjudged.into_iter().zip(level.done) {
             self.record(id, &expanded);
         }
@@ -236,8 +253,8 @@ impl Search<'_> {
         }
     }
 
-    fn insert(&mut self, state: State, parent: Option<Parent>) -> Option<usize> {
-        if self.index.contains_key(&state) {
+    fn insert(&mut self, key: Key, parent: Option<Parent>) -> Option<usize> {
+        if self.index.contains_key(&key) {
             return None;
         }
         if self.states.len() >= self.limits.max_states {
@@ -245,8 +262,8 @@ impl Search<'_> {
             return None;
         }
         let id = self.states.len();
-        self.index.insert(Arc::clone(&state), id);
-        self.states.push(state);
+        self.states.push(Arc::clone(&key.state));
+        self.index.insert(key, id);
         self.parents.push(parent);
         Some(id)
     }
@@ -255,6 +272,10 @@ impl Search<'_> {
         let only_rule = self.limits.only_rule.as_deref();
         let budget = self.budget(deadline);
         let mut level = Vec::with_capacity(ids.len());
+        let mut known = Known {
+            index: &self.index,
+            met: (!self.limits.keep_graph).then(Default::default),
+        };
         for (position, id) in ids.iter().enumerate() {
             let clock_due = position.is_multiple_of(STATES_BETWEEN_CLOCK_READS);
             let late = deadline.is_some_and(|limit| Instant::now() >= limit);
@@ -262,16 +283,20 @@ impl Search<'_> {
                 return Expansion {
                     done: level,
                     stopped: true,
+                    workers: 1,
                 };
             }
             let Some(state) = self.states.get(*id) else {
                 break;
             };
-            let expanded = expand_state(self.model, only_rule, self.slots, state, asked, budget);
+            let expanded = expand_state(
+                self.model, only_rule, self.slots, state, asked, budget, &mut known,
+            );
             if expanded.clock == Clock::Stopped {
                 return Expansion {
                     done: level,
                     stopped: true,
+                    workers: 1,
                 };
             }
             level.push(expanded);
@@ -279,6 +304,7 @@ impl Search<'_> {
         Expansion {
             done: level,
             stopped: false,
+            workers: 1,
         }
     }
 
@@ -287,9 +313,22 @@ impl Search<'_> {
         frontier: &[usize],
         deadline: Option<Instant>,
         asked: Asked,
+        per_state: Duration,
     ) -> Expansion {
-        let jobs = self.limits.jobs.max(1);
-        if jobs == 1 || frontier.len() < SMALLEST_SHARED_LEVEL {
+        let states = u32::try_from(frontier.len()).unwrap_or(u32::MAX);
+        let worth_spreading = frontier.len() >= SMALLEST_SHARED_LEVEL
+            || per_state.saturating_mul(states) >= WORTH_SPREADING;
+        if !worth_spreading {
+            return self.expand_ids(frontier, deadline, asked);
+        }
+        let own = self.limits.jobs.max(1);
+        let loan = self
+            .limits
+            .helpers
+            .as_ref()
+            .map(|helpers| helpers.borrow(frontier.len().saturating_sub(own)));
+        let jobs = own.saturating_add(loan.as_ref().map_or(0, crate::helpers::Loan::threads));
+        if jobs == 1 {
             return self.expand_ids(frontier, deadline, asked);
         }
         let share = frontier.len().div_ceil(jobs);
@@ -311,6 +350,7 @@ impl Search<'_> {
             let mut level = Expansion {
                 done: Vec::with_capacity(frontier.len()),
                 stopped: false,
+                workers: jobs,
             };
             for worker in workers {
                 let part = match worker.join() {
@@ -336,8 +376,11 @@ impl Search<'_> {
                     action: successor.action,
                     input: successor.input,
                 };
-                let target = match self.index.get(&successor.next) {
-                    Some(known) => Some(*known),
+                let known = successor
+                    .known
+                    .or_else(|| self.index.get(&successor.next).copied());
+                let target = match known {
+                    Some(known) => Some(known),
                     None => self.insert(successor.next, Some(parent)).inspect(|new| {
                         next.push(*new);
                     }),

@@ -167,6 +167,23 @@ fn benchmark(options: &Options) -> Result<String, String> {
     let all = bench.measure(std::slice::from_ref(&largest), None)?;
     let one = bench.measure(std::slice::from_ref(&largest), Some(1))?;
 
+    let mut with_largest = mixed.clone();
+    with_largest.push(largest.clone());
+    let everything = bench.measure(&with_largest, None)?;
+    let slowest_row = alone.iter().max_by_key(|each| each.median);
+    let r12 = report::r12_lines(
+        everything.median,
+        with_largest.len(),
+        report::Alone {
+            model: LARGEST,
+            median: all.median,
+        },
+        report::Alone {
+            model: slowest_row.map_or("?", |each| each.model.as_str()),
+            median: slowest,
+        },
+    );
+
     let spec = report::spec_lines(together.median, slowest);
     let together_line = format!(
         "the 12 models in that one run: {} states, peak memory {} MiB",
@@ -187,6 +204,13 @@ fn benchmark(options: &Options) -> Result<String, String> {
         format!("- {}\n- {}\n- {together_line}\n", spec[0], spec[1]),
         "## One large model on one worker and on all cores\n".to_owned(),
         format!("- {speedup}\n"),
+        "## R12: many models and one large model in one run\n".to_owned(),
+        format!(
+            "- {}\n- {}\n- peak memory {} MiB\n",
+            r12[0],
+            r12[1],
+            report::memory(everything.peak_kib)
+        ),
     ]
     .join("\n");
     Ok(text)

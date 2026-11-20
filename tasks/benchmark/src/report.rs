@@ -106,6 +106,40 @@ pub(crate) fn speedup_line(model: &str, one: Duration, all: Duration, cores: usi
     )
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Alone<'a> {
+    pub(crate) model: &'a str,
+    pub(crate) median: Duration,
+}
+
+pub(crate) fn r12_lines(
+    together: Duration,
+    models: usize,
+    largest: Alone<'_>,
+    slowest: Alone<'_>,
+) -> [String; 2] {
+    let longest = if slowest.median > largest.median {
+        slowest
+    } else {
+        largest
+    };
+    let ratio = together.as_secs_f64() / longest.median.as_secs_f64().max(f64::EPSILON);
+    [
+        format!(
+            "the {models} models in one run: {} s; the largest model ({}) alone: {} s; the slowest of the 12 alone ({}): {} s",
+            seconds(together),
+            largest.model,
+            seconds(largest.median),
+            slowest.model,
+            seconds(slowest.median)
+        ),
+        format!(
+            "R12 asks for about as long as the largest model alone: the one run took {ratio:.2}x the longest of them alone ({})",
+            longest.model
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,6 +239,32 @@ mod tests {
             speedup_line("Big", millis(8_000), millis(2_000), 4),
             "Big: 1 worker 8.000 s, 4 workers (all cores) 2.000 s, speed-up 4.00x",
             "four times faster"
+        );
+    }
+
+    #[test]
+    fn r12_compares_the_one_run_with_the_longest_model_alone() {
+        let [first, second] = r12_lines(
+            millis(3_000),
+            13,
+            Alone {
+                model: "Big",
+                median: millis(1_000),
+            },
+            Alone {
+                model: "Slow",
+                median: millis(2_000),
+            },
+        );
+        assert!(
+            first.starts_with(
+                "the 13 models in one run: 3.000 s; the largest model (Big) alone: 1.000 s"
+            ),
+            "{first}"
+        );
+        assert!(
+            second.contains("1.50x") && second.contains("(Slow)"),
+            "the longer of the two is the yardstick: {second}"
         );
     }
 }
