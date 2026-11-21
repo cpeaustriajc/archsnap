@@ -207,7 +207,9 @@ fn utf16_text(bytes: &[u8]) -> Option<String> {
         _ => return None,
     };
     let units: Vec<u16> = rest
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .filter_map(|pair| pair.first_chunk::<2>().copied())
         .map(unit)
         .collect();
