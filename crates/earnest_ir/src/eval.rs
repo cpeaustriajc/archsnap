@@ -126,6 +126,8 @@ impl<'a> Frame<'a> {
 
 type Evaluated = Result<Value, Fault>;
 
+type Number = Result<i64, Fault>;
+
 /// The value of `expr` in the state and locals of `frame`.
 ///
 /// # Errors
@@ -136,9 +138,117 @@ pub fn eval(expr: &Expr, frame: &mut Frame<'_>) -> Result<Value, Fault> {
         Expr::Const(value) => Ok(value.clone()),
         Expr::Field(index) => frame.state.get(*index).cloned().ok_or(Fault::WrongKind),
         Expr::Local(slot) => frame.locals.get(*slot).cloned().ok_or(Fault::WrongKind),
-        Expr::Apply(op, arguments) => apply(*op, arguments, frame),
-        Expr::And(left, right) => Ok(Value::Bool(truth(left, frame)? && truth(right, frame)?)),
-        Expr::Or(left, right) => Ok(Value::Bool(truth(left, frame)? || truth(right, frame)?)),
+        Expr::Apply(op, arguments) => match (op, arguments.as_slice()) {
+            (Op::Math(math), [left, right]) => computed(*math, left, right, frame).map(Value::Int),
+            (Op::Safe, [inner]) => safe(inner, frame).map(Value::Int),
+            (Op::Fit(ty), [inner]) => fitted(*ty, inner, frame).map(Value::Int),
+            (Op::Order(order), [left, right]) => {
+                ordered(*order, left, right, frame).map(Value::Bool)
+            }
+            (Op::Equal, [left, right]) => same(left, right, frame).map(Value::Bool),
+            (Op::Differ, [left, right]) => {
+                same(left, right, frame).map(|equal| Value::Bool(!equal))
+            }
+            (Op::Not, [inner]) => truth(inner, frame).map(|flag| Value::Bool(!flag)),
+            _ => apply(*op, arguments, frame),
+        },
+        Expr::And(..) | Expr::Or(..) => truth(expr, frame).map(Value::Bool),
+        _ => compound(expr, frame),
+    }
+}
+
+/// Whether `expr` is true in the state and locals of `frame`, for a guard or a rule.
+///
+/// # Errors
+///
+/// A [`Fault`] when the expression has no value in this state, and [`Fault::NullRead`] or
+/// [`Fault::WrongKind`] when its value is not a boolean.
+pub fn truth(expr: &Expr, frame: &mut Frame<'_>) -> Result<bool, Fault> {
+    match expr {
+        Expr::And(left, right) => Ok(truth(left, frame)? && truth(right, frame)?),
+        Expr::Or(left, right) => Ok(truth(left, frame)? || truth(right, frame)?),
+        Expr::Apply(op, arguments) => match (op, arguments.as_slice()) {
+            (Op::Order(order), [left, right]) => ordered(*order, left, right, frame),
+            (Op::Equal, [left, right]) => same(left, right, frame),
+            (Op::Differ, [left, right]) => same(left, right, frame).map(|equal| !equal),
+            (Op::Not, [inner]) => truth(inner, frame).map(|flag| !flag),
+            _ => as_bool(&apply(*op, arguments, frame)?),
+        },
+        Expr::Choose(test, yes, no) => {
+            if truth(test, frame)? {
+                truth(yes, frame)
+            } else {
+                truth(no, frame)
+            }
+        }
+        _ => as_bool(&eval(expr, frame)?),
+    }
+}
+
+fn operand(expr: &Expr, frame: &mut Frame<'_>) -> Result<Number, Fault> {
+    match expr {
+        Expr::Const(value) => Ok(as_int(value)),
+        Expr::Field(index) => frame.state.get(*index).map(as_int).ok_or(Fault::WrongKind),
+        Expr::Local(slot) => frame.locals.get(*slot).map(as_int).ok_or(Fault::WrongKind),
+        Expr::Apply(op, arguments) => match (op, arguments.as_slice()) {
+            (Op::Math(math), [left, right]) => computed(*math, left, right, frame).map(Ok),
+            (Op::Safe, [inner]) => safe(inner, frame).map(Ok),
+            (Op::Fit(ty), [inner]) => fitted(*ty, inner, frame).map(Ok),
+            _ => Ok(as_int(&apply(*op, arguments, frame)?)),
+        },
+        _ => Ok(as_int(&eval(expr, frame)?)),
+    }
+}
+
+fn computed(math: Math, left: &Expr, right: &Expr, frame: &mut Frame<'_>) -> Number {
+    let first = operand(left, frame)?;
+    let second = operand(right, frame)?;
+    let answer = arithmetic(math, first?, second?);
+    frame.beyond_32_bits |= match answer {
+        Ok(number) => i32::try_from(number).is_err(),
+        Err(fault) => fault == Fault::Overflow,
+    };
+    answer
+}
+
+fn safe(inner: &Expr, frame: &mut Frame<'_>) -> Number {
+    let number = operand(inner, frame)??;
+    if number.unsigned_abs() <= MOST_SAFE_INTEGER.unsigned_abs() {
+        Ok(number)
+    } else {
+        Err(Fault::Overflow)
+    }
+}
+
+fn fitted(ty: IntType, inner: &Expr, frame: &mut Frame<'_>) -> Number {
+    let number = operand(inner, frame)??;
+    if ty.holds(number) {
+        Ok(number)
+    } else {
+        Err(Fault::Outside(ty))
+    }
+}
+
+fn ordered(order: Order, left: &Expr, right: &Expr, frame: &mut Frame<'_>) -> Result<bool, Fault> {
+    let first = operand(left, frame)?;
+    let second = operand(right, frame)?;
+    Ok(compare(order, first?, second?))
+}
+
+fn same(left: &Expr, right: &Expr, frame: &mut Frame<'_>) -> Result<bool, Fault> {
+    match (left, right) {
+        (_, Expr::Const(Value::Int(number))) => Ok(operand(left, frame)? == Ok(*number)),
+        (Expr::Const(Value::Int(number)), _) => Ok(operand(right, frame)? == Ok(*number)),
+        (Expr::Field(index), Expr::Const(value)) => {
+            Ok(frame.state.get(*index).ok_or(Fault::WrongKind)? == value)
+        }
+        _ => Ok(eval(left, frame)? == eval(right, frame)?),
+    }
+}
+
+#[inline(never)]
+fn compound(expr: &Expr, frame: &mut Frame<'_>) -> Evaluated {
+    match expr {
         Expr::Choose(test, yes, no) => {
             if truth(test, frame)? {
                 eval(yes, frame)
@@ -179,17 +289,13 @@ pub fn eval(expr: &Expr, frame: &mut Frame<'_>) -> Result<Value, Fault> {
             let items = members(eval(source, frame)?)?;
             sweep_over(*sweep, *shelf, *slot, items, body, frame)
         }
+        Expr::Const(_)
+        | Expr::Field(_)
+        | Expr::Local(_)
+        | Expr::Apply(..)
+        | Expr::And(..)
+        | Expr::Or(..) => eval(expr, frame),
     }
-}
-
-/// Whether `expr` is true in the state and locals of `frame`, for a guard or a rule.
-///
-/// # Errors
-///
-/// A [`Fault`] when the expression has no value in this state, and [`Fault::NullRead`] or
-/// [`Fault::WrongKind`] when its value is not a boolean.
-pub fn truth(expr: &Expr, frame: &mut Frame<'_>) -> Result<bool, Fault> {
-    as_bool(&eval(expr, frame)?)
 }
 
 fn each(items: &[Expr], frame: &mut Frame<'_>) -> Result<Vec<Value>, Fault> {
@@ -261,6 +367,7 @@ fn sweep_over(
     })
 }
 
+#[inline(never)]
 fn apply(op: Op, arguments: &[Expr], frame: &mut Frame<'_>) -> Evaluated {
     let mut remaining = arguments.iter();
     let first = match remaining.next() {
@@ -292,16 +399,18 @@ fn apply(op: Op, arguments: &[Expr], frame: &mut Frame<'_>) -> Evaluated {
         Op::Fit(ty) => Err(Fault::Outside(ty)),
         Op::Equal => Ok(Value::Bool(first == second.ok_or(Fault::WrongKind)?)),
         Op::Differ => Ok(Value::Bool(first != second.ok_or(Fault::WrongKind)?)),
-        Op::Order(order) => compare(order, &first, second.as_ref()),
+        Op::Order(order) => {
+            let (left, right) = int_pair(&first, second.as_ref())?;
+            Ok(Value::Bool(compare(order, left, right)))
+        }
         Op::Math(math) => {
-            let answer = arithmetic(math, &first, second.as_ref());
-            let wide = match &answer {
-                Ok(Value::Int(number)) => i32::try_from(*number).is_err(),
-                Err(Fault::Overflow) => true,
-                _ => false,
+            let answer = int_pair(&first, second.as_ref())
+                .and_then(|(left, right)| arithmetic(math, left, right));
+            frame.beyond_32_bits |= match answer {
+                Ok(number) => i32::try_from(number).is_err(),
+                Err(fault) => fault == Fault::Overflow,
             };
-            frame.beyond_32_bits |= wide;
-            answer
+            answer.map(Value::Int)
         }
         Op::Set(set_op) => on_set(set_op, first, second),
         Op::Map(map_op) => on_map(map_op, first, second, third),
@@ -356,18 +465,16 @@ fn int_pair(first: &Value, second: Option<&Value>) -> Result<(i64, i64), Fault> 
     Ok((as_int(first)?, as_int(second.ok_or(Fault::WrongKind)?)?))
 }
 
-fn compare(order: Order, first: &Value, second: Option<&Value>) -> Evaluated {
-    let (left, right) = int_pair(first, second)?;
-    Ok(Value::Bool(match order {
+fn compare(order: Order, left: i64, right: i64) -> bool {
+    match order {
         Order::Less => left < right,
         Order::LessOrEqual => left <= right,
         Order::Greater => left > right,
         Order::GreaterOrEqual => left >= right,
-    }))
+    }
 }
 
-fn arithmetic(math: Math, first: &Value, second: Option<&Value>) -> Evaluated {
-    let (left, right) = int_pair(first, second)?;
+fn arithmetic(math: Math, left: i64, right: i64) -> Number {
     let answer = match math {
         Math::Add => left.checked_add(right),
         Math::Subtract => left.checked_sub(right),
@@ -385,7 +492,7 @@ fn arithmetic(math: Math, first: &Value, second: Option<&Value>) -> Evaluated {
             left.checked_div(right)
         }
     };
-    answer.map(Value::Int).ok_or(Fault::Overflow)
+    answer.ok_or(Fault::Overflow)
 }
 
 fn size_of(count: usize) -> Evaluated {
