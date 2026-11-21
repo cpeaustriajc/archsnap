@@ -46,14 +46,14 @@ pub(super) struct Binding<T> {
 }
 
 impl<T> Binding<T> {
-    pub(super) fn of(slot: usize, value: &Expr, body: T, shared: &Shared) -> Box<Self> {
-        Box::new(Self {
+    pub(super) fn of(slot: usize, value: &Expr, body: T, shared: &Shared) -> Self {
+        Self {
             slot,
             unit: shared.unit(),
             keeps: shared.keeps(slot),
             value: Val::of(value, shared),
             body,
-        })
+        }
     }
 
     pub(super) fn enter(&self, frame: &mut Frame<'_>) -> Result<(), Fault> {
@@ -126,7 +126,8 @@ impl Val {
                 Self::of(no, shared),
             ))),
             Expr::Bind { slot, value, body } => {
-                Self::Bind(Binding::of(*slot, value, Self::of(body, shared), shared))
+                let binding = Binding::of(*slot, value, Self::of(body, shared), shared);
+                Self::Bind(Box::new(binding))
             }
             Expr::Record(fields) => Self::Record(all_named(fields, shared)),
             Expr::With(base, changes) => {

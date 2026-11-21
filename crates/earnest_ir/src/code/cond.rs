@@ -96,12 +96,10 @@ impl Cond {
                 any_part(expr, &mut parts, shared);
                 Some(Self::Any(parts.into_boxed_slice()))
             }
-            Expr::Bind { slot, value, body } => Some(Self::Bind(Binding::of(
-                *slot,
-                value,
-                Self::of(body, shared),
-                shared,
-            ))),
+            Expr::Bind { slot, value, body } => {
+                let binding = Binding::of(*slot, value, Self::of(body, shared), shared);
+                Some(Self::Bind(Box::new(binding)))
+            }
             Expr::Apply(op, arguments) => match (op, arguments.as_slice()) {
                 (Op::Order(order), [Expr::Field(field), Expr::Const(Value::Int(number))]) => {
                     Some(Self::FieldOrder {
