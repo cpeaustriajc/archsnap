@@ -132,10 +132,14 @@ fn a_limit_above_four_billion_states_changes_nothing() {
 }
 
 fn cube_with_corners(corners: &[[i64; 3]]) -> Model {
+    cube_on_axes_up_to(29, corners)
+}
+
+fn cube_on_axes_up_to(highest: i64, corners: &[[i64; 3]]) -> Model {
     let mut sketch = Sketch::new();
     let axes: Vec<Expr> = ["x", "y", "z"]
         .iter()
-        .map(|name| sketch.number(name, 0, 29, &[0]))
+        .map(|name| sketch.number(name, 0, highest, &[0]))
         .collect();
     for (name, axis) in ["X", "Y", "Z"].iter().zip(&axes) {
         sketch.action(
@@ -232,6 +236,26 @@ fn workers_keep_the_order_of_states_with_and_without_a_code() {
         };
         let alone = explore(&model, &limits(1));
         for jobs in [2, 4] {
+            assert_eq!(
+                explore(&model, &limits(jobs)),
+                alone,
+                "{jobs} jobs, {max_states} states"
+            );
+        }
+    }
+}
+
+#[test]
+fn workers_keep_rows_too_wide_for_one_word_the_same_as_one_thread() {
+    let model = cube_on_axes_up_to(1 << 30, &[[29, 29, 29]]);
+    for max_states in [600, 27_000] {
+        let limits = |jobs| Limits {
+            max_states,
+            ..with_jobs(jobs)
+        };
+        let alone = explore(&model, &limits(1));
+        assert_eq!(alone.states, max_states, "the walk stays in the cube");
+        for jobs in [2, 4, 10] {
             assert_eq!(
                 explore(&model, &limits(jobs)),
                 alone,
