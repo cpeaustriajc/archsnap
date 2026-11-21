@@ -31,7 +31,8 @@ pub(super) struct Part {
     pub(super) rows: Vec<u64>,
     pub(super) hashes: Vec<u64>,
     pub(super) froms: Vec<usize>,
-    pub(super) shards: Vec<Vec<usize>>,
+    pub(super) by_shard: Vec<usize>,
+    pub(super) shard_starts: Vec<usize>,
     pub(super) raws: Vec<Box<[Value]>>,
     pub(super) stopped: bool,
     pub(super) crowded: bool,
@@ -40,6 +41,7 @@ pub(super) struct Part {
 #[derive(Default)]
 pub(super) struct Kit {
     rows: RowKit,
+    fresh_per_state: (usize, usize),
     scratch: Scratch,
     state: Vec<Value>,
 }
@@ -77,13 +79,7 @@ impl PartSink<'_> {
     }
 
     fn add_fresh(&mut self, action: usize, hash: u64) {
-        self.part.rows.extend_from_slice(&self.kit.row);
-        if self.part.shards.is_empty() {
-            self.part.shards.resize_with(SHARD_COUNT, Vec::new);
-        }
-        if let Some(shard) = self.part.shards.get_mut(shard_of(hash)) {
-            shard.push(self.part.hashes.len());
-        }
+        append_row(&mut self.part.rows, &self.kit.row);
         self.part.hashes.push(hash);
         self.part.froms.push(self.from);
         if self.graph {
@@ -186,6 +182,42 @@ impl PartSink<'_> {
     }
 }
 
+impl Part {
+    fn file_by_shard(&mut self) {
+        let mut starts = vec![0; SHARD_COUNT + 1];
+        for hash in &self.hashes {
+            if let Some(count) = starts.get_mut(shard_of(*hash) + 1) {
+                *count += 1;
+            }
+        }
+        for shard in 0..SHARD_COUNT {
+            let before = starts.get(shard).copied().unwrap_or(0);
+            if let Some(start) = starts.get_mut(shard + 1) {
+                *start += before;
+            }
+        }
+        let mut next = starts.clone();
+        self.by_shard = vec![0; self.hashes.len()];
+        for (ordinal, hash) in self.hashes.iter().enumerate() {
+            if let Some(at) = next.get_mut(shard_of(*hash))
+                && let Some(slot) = self.by_shard.get_mut(*at)
+            {
+                *slot = ordinal;
+                *at += 1;
+            }
+        }
+        self.shard_starts = starts;
+    }
+}
+
+fn append_row(rows: &mut Vec<u64>, row: &[u64]) {
+    if let [word] = row {
+        rows.push(*word);
+    } else {
+        rows.extend_from_slice(row);
+    }
+}
+
 pub(super) fn row_at(rows: &[u64], words: usize, at: usize) -> &[u64] {
     let start = at.saturating_mul(words);
     rows.get(start..start.saturating_add(words)).unwrap_or(&[])
@@ -202,6 +234,20 @@ impl Search<'_> {
         let expand = self.expand(deadline, asked);
         kit.rows.met.clear();
         kit.rows.met_raw.clear();
+        let (fresh_before, states_before) = kit.fresh_per_state;
+        let expected = (ids.len() * fresh_before)
+            .checked_div(states_before)
+            .unwrap_or(0);
+        let words = self.store.layout().words();
+        let mut part = Part {
+            first: ids.start,
+            ..Part::default()
+        };
+        if !self.limits.keep_graph {
+            part.rows.reserve(expected * words);
+            part.hashes.reserve(expected);
+            part.froms.reserve(expected);
+        }
         let mut sink = PartSink {
             store: &self.store,
             graph: self.limits.keep_graph,
@@ -210,10 +256,7 @@ impl Search<'_> {
             from: 0,
             counted: 0,
             kit: &mut kit.rows,
-            part: Part {
-                first: ids.start,
-                ..Part::default()
-            },
+            part,
         };
         for (position, id) in ids.enumerate() {
             let clock_due = position.is_multiple_of(STATES_BETWEEN_CLOCK_READS);
@@ -242,6 +285,8 @@ impl Search<'_> {
             }
             sink.part.expanded = sink.part.expanded.saturating_add(1);
         }
+        sink.part.file_by_shard();
+        kit.fresh_per_state = (sink.part.hashes.len(), sink.part.expanded);
         sink.part
     }
 }

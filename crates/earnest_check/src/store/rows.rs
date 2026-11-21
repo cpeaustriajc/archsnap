@@ -45,7 +45,12 @@ impl Rows {
 
     pub(super) fn unpack(&self, id: usize, row: &mut Vec<u64>, words: usize) {
         row.clear();
-        row.extend(self.bytes_of(id).chunks(WORD_BYTES).map(word_of));
+        let bytes = self.bytes_of(id);
+        if words == 1 {
+            row.push(word_of(bytes));
+            return;
+        }
+        row.extend(bytes.chunks(WORD_BYTES).map(word_of));
         row.resize(words, 0);
     }
 

@@ -14,7 +14,8 @@ pub(crate) struct Fresh<'a> {
     pub(crate) rows: &'a [u64],
     pub(crate) hashes: &'a [u64],
     pub(crate) froms: &'a [usize],
-    pub(crate) shards: &'a [Vec<usize>],
+    pub(crate) by_shard: &'a [usize],
+    pub(crate) shard_starts: &'a [usize],
 }
 
 #[derive(Clone, Copy)]
@@ -46,8 +47,12 @@ impl Level<'_> {
     fn in_shard(&self, part: usize, shard: usize) -> &[usize] {
         self.parts
             .get(part)
-            .and_then(|fresh| fresh.shards.get(shard))
-            .map_or(&[][..], Vec::as_slice)
+            .and_then(|fresh| {
+                let start = *fresh.shard_starts.get(shard)?;
+                let end = *fresh.shard_starts.get(shard + 1)?;
+                fresh.by_shard.get(start..end)
+            })
+            .unwrap_or(&[])
     }
 }
 

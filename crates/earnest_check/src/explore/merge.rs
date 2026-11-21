@@ -18,7 +18,8 @@ impl Search<'_> {
                 rows: &part.rows,
                 hashes: &part.hashes,
                 froms: &part.froms,
-                shards: &part.shards,
+                by_shard: &part.by_shard,
+                shard_starts: &part.shard_starts,
             })
             .collect();
         let crew = Crew {

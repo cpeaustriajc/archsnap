@@ -20,8 +20,12 @@ pub(super) fn encode_next(
 ) -> bool {
     match base {
         Some(base) => {
-            row.clear();
-            row.extend_from_slice(base);
+            if let ([into], [word]) = (row.as_mut_slice(), base) {
+                *into = *word;
+            } else {
+                row.clear();
+                row.extend_from_slice(base);
+            }
             updates
                 .iter()
                 .all(|(position, value)| store.encode_update(row, *position, value))
