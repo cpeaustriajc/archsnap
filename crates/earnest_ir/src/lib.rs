@@ -2,7 +2,8 @@
 //!
 //! A [`Model`] is what `earnest_semantic` makes of a draft: fields with finite domains, and
 //! actions, rules and ends whose conditions are [`Expr`]s. An expression reads state fields by
-//! position and local values by slot, and [`eval`] gives its value in one state.
+//! position and local values by slot, and [`eval`] gives its value in one state. The model
+//! keeps each expression the search evaluates as a [`Code`], which gives the same answers faster.
 
 mod code;
 mod eval;
@@ -169,7 +170,8 @@ pub enum Shelf {
 /// An expression over one state.
 ///
 /// Evaluate it with [`eval`] in a [`Frame`] that holds the state and enough local slots for
-/// every `slot` the expression names.
+/// every `slot` the expression names. To evaluate it in many states, prepare it once as a
+/// [`Code`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Expr {

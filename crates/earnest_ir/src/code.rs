@@ -509,6 +509,7 @@ fn any_part(expr: &Expr, parts: &mut Vec<Cond>) {
 impl Val {
     fn of(expr: &Expr) -> Self {
         match expr {
+            Expr::Const(Value::Bool(flag)) => Self::Cond(Cond::Const(*flag)),
             Expr::Const(value) => Self::Const(value.clone()),
             Expr::Field(index) => Self::Field(*index),
             Expr::Local(slot) => Self::Local(*slot),
