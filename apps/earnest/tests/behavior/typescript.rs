@@ -37,14 +37,15 @@ fn r01_every_typescript_model_passes_the_strict_type_checker() {
     });
     sandbox.write("tsconfig.json", &configuration.to_string());
 
-    let output = Command::new("tsc")
+    let type_checker = repository().join("packages/model/node_modules/.bin/tsrs");
+    let output = Command::new(&type_checker)
         .args(["--project", "tsconfig.json", "--pretty", "false"])
         .current_dir(sandbox.path())
         .output()
-        .expect("`tsc` is on the `PATH`");
+        .expect("`bun install` has put `tsrs` in `packages/model/node_modules/.bin`");
     assert!(
         output.status.success(),
-        "`tsc --noEmit` with `strict` rejects a model file:\n{}{}",
+        "`tsrs --noEmit` with `strict` rejects a model file:\n{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

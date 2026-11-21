@@ -1260,7 +1260,8 @@ check`, `cargo machete`, the tests and the Verus proofs (`cargo verus focus`). I
 version of each. The lint table in `Cargo.toml` and the settings in `clippy.toml` are
 [BeautifulRust](https://github.com/morganlinton/BeautifulRust)'s `lints/lints.toml` and
 `lints/clippy.toml`, taken whole; update them from there, never by hand. The tests also need Node
-22.18 or newer, bun and `tsc` on your `PATH`. `just fix` formats the code and applies clippy's fixes.
+22.18 or newer and bun on your `PATH`, and the `tsrs` that `bun install` puts in
+`packages/model/node_modules`. `just fix` formats the code and applies clippy's fixes.
 
 The JavaScript side is one bun workspace: the root `package.json` lists `packages/*` and the
 platform packages in `packages/cli/platforms/*`, and `bun.lock` is its one lockfile. After
