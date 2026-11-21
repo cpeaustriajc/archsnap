@@ -318,6 +318,28 @@ impl PartSink<'_> {
         }
     }
 
+    fn offer_new_with_graph(&mut self, action: usize, hash: u64) -> bool {
+        let stride = self.store.stride();
+        let (rows, hashes, row) = (&self.part.rows, &self.part.hashes, &self.packed);
+        let met = self.met.entry(
+            hash,
+            |at| same_row(row_at(rows, stride, *at), row),
+            |at| hashes.get(*at).copied().unwrap_or(0),
+        );
+        match met {
+            hashbrown::hash_table::Entry::Occupied(earlier) => {
+                let at = *earlier.get();
+                self.push(action, Target::Fresh(at));
+                false
+            }
+            hashbrown::hash_table::Entry::Vacant(vacant) => {
+                vacant.insert(hashes.len());
+                self.add_fresh(action, hash);
+                true
+            }
+        }
+    }
+
     fn offer_unseen(&mut self, action: usize, hash: u64) -> bool {
         let stride = self.store.stride();
         let (rows, hashes, row) = (&self.part.rows, &self.part.hashes, &self.packed);
@@ -330,7 +352,7 @@ impl PartSink<'_> {
             return false;
         };
         if self.store.find(row, hash).is_some() {
-            return true;
+            return false;
         }
         vacant.insert(hashes.len());
         self.add_fresh(action, hash);
@@ -353,15 +375,16 @@ impl Successors for PartSink<'_> {
                 if self.graph {
                     self.push(action, Target::Known(to));
                 }
-                return true;
+                return false;
             }
-            if !self.graph && !self.met_raw.insert(next.clone()) {
+            let first = self.met_raw.insert(next.clone());
+            if !self.graph && !first {
                 return false;
             }
             self.part.raws.push(next);
             let fresh_before = self.part.hashes.len();
             self.push(action, Target::Raw { fresh_before });
-            return true;
+            return first;
         }
         self.store.pack(&self.row, &mut self.packed);
         let hash = hash_row(&self.packed);
@@ -370,10 +393,9 @@ impl Successors for PartSink<'_> {
         }
         if let Some(to) = self.store.find(&self.packed, hash) {
             self.push(action, Target::Known(to));
-            return true;
+            return false;
         }
-        self.add_fresh(action, hash);
-        true
+        self.offer_new_with_graph(action, hash)
     }
 }
 
@@ -384,25 +406,11 @@ struct HereSink<'a> {
     base: Vec<u64>,
     base_is_row: bool,
     from: usize,
-    level_start: usize,
     most: usize,
     full: bool,
     row: Vec<u64>,
     packed: Vec<u8>,
     after_full: FxHashSet<Box<[Value]>>,
-}
-
-impl HereSink<'_> {
-    fn counts(&self, known: usize) -> bool {
-        self.graph || known < self.level_start
-    }
-
-    fn after_the_limit(&mut self, known: Option<usize>, next: Box<[Value]>) -> bool {
-        match known {
-            Some(to) => self.counts(to),
-            None => self.graph || self.after_full.insert(next),
-        }
-    }
 }
 
 impl Successors for HereSink<'_> {
@@ -425,7 +433,7 @@ impl Successors for HereSink<'_> {
             } else {
                 self.store.find_values(&next)
             };
-            return self.after_the_limit(known, next);
+            return known.is_none() && self.after_full.insert(next);
         }
         let parent = Some(self.from);
         let placed = if encoded {
@@ -436,7 +444,7 @@ impl Successors for HereSink<'_> {
                 .place_values(with_updates(state, updates), parent, self.most)
         };
         let (to, counted) = match placed {
-            Placed::Known(to) => (to, self.counts(to)),
+            Placed::Known(to) => (to, false),
             Placed::New(to) => (to, true),
             Placed::Full => {
                 self.full = true;
@@ -697,7 +705,6 @@ impl Search<'_> {
             base: Vec::new(),
             base_is_row: false,
             from: 0,
-            level_start: frontier.end,
             most: self.limits.max_states,
             full: false,
             row: Vec::new(),

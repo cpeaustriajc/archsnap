@@ -484,3 +484,90 @@ fn a_state_out_of_range_is_counted_judged_by_no_rule_and_not_searched_from() {
         "with the path to it"
     );
 }
+
+fn three_stays_then_a_move() -> Model {
+    let mut sketch = Sketch::new();
+    let a = sketch.number("a", 0, 1, &[0]);
+    for name in ["stayOne", "stayTwo", "stayThree"] {
+        sketch.action(name, is(&a, 0), &[(&a, a.clone())]);
+    }
+    sketch.action("go", is(&a, 0), &[(&a, int(1))]);
+    sketch.rule("neverMoves", is(&a, 0));
+    sketch.end("moved", is(&a, 1));
+    sketch.model()
+}
+
+fn jumps_from(starts: &[i64]) -> Model {
+    let mut sketch = Sketch::new();
+    let x = sketch.number("x", 0, 1023, starts);
+    let y = sketch.number("y", 0, 1, &[0]);
+    let z = sketch.number("z", 0, 1, &[0]);
+    let every_k: Vec<Value> = (0..1024).map(Value::Int).collect();
+    let at_top = both(is(&x, 1023), is(&z, 0));
+    sketch.action("bump", is(&y, 0), &[(&y, int(1))]);
+    for (name, lands) in [("jumpOne", 0), ("jumpTwo", 0), ("lift", 1)] {
+        sketch.action_with(
+            name,
+            &[("k", every_k.clone())],
+            at_top.clone(),
+            &[(&x, Expr::Local(0)), (&y, int(lands))],
+        );
+    }
+    sketch.action("last", at_top, &[(&z, int(1))]);
+    sketch.rule("flat", is(&z, 0));
+    sketch.end("rest", yes());
+    sketch.model()
+}
+
+#[test]
+fn successors_already_known_never_use_up_the_state_limit() {
+    let every_start: Vec<i64> = (0..1024).collect();
+    let cases = [
+        (three_stays_then_a_move(), 2),
+        (jumps_from(&every_start), 2050),
+    ];
+    for (model, states) in &cases {
+        for keep_graph in [false, true] {
+            for jobs in [1, 2, 4, 10] {
+                let limits = Limits {
+                    max_states: *states,
+                    jobs,
+                    keep_graph,
+                    ..Limits::default()
+                };
+                let outcome = explore(model, &limits);
+                assert_eq!(
+                    outcome.status,
+                    Status::Fail,
+                    "{jobs} jobs, graph {keep_graph}"
+                );
+                assert_eq!(outcome.states, *states, "{jobs} jobs, graph {keep_graph}");
+                assert_eq!(outcome.reason, None, "{jobs} jobs, graph {keep_graph}");
+                assert_eq!(outcome.rules[0].verdict, Verdict::Broken);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_state_with_more_new_successors_than_the_limit_leaves_the_search_unfinished() {
+    let model = jumps_from(&[1023]);
+    for keep_graph in [false, true] {
+        for jobs in [1, 2, 4, 10] {
+            let limits = Limits {
+                max_states: 100,
+                jobs,
+                keep_graph,
+                ..Limits::default()
+            };
+            let outcome = explore(&model, &limits);
+            assert_eq!(
+                outcome.status,
+                Status::Unfinished,
+                "{jobs} jobs, graph {keep_graph}"
+            );
+            assert_eq!(outcome.reason.as_deref(), Some("state limit of 100"));
+            assert_eq!(outcome.rules[0].verdict, Verdict::Unknown);
+        }
+    }
+}
