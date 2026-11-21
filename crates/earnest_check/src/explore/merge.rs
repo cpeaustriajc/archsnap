@@ -1,7 +1,7 @@
-use super::part::{Entry, Part, Target};
+use super::part::{Entry, Part, Target, row_at};
 use super::workers::Crew;
 use super::{Arrow, Search};
-use crate::store::{Fresh, Placed, row_at};
+use crate::store::{Found, Fresh, Placed};
 
 impl Search<'_> {
     pub(super) fn merge_any(&mut self, parts: Vec<Part>) {
@@ -40,7 +40,7 @@ impl Search<'_> {
 
     fn merge(&mut self, parts: Vec<Part>) {
         let most = self.limits.max_states;
-        let stride = self.store.stride();
+        let words = self.store.layout().words();
         let graph = self.limits.keep_graph;
         for part in parts {
             let mut marks = part.marks.into_iter().peekable();
@@ -69,11 +69,11 @@ impl Search<'_> {
                 self.judged = self.judged.max(entry.from.saturating_add(1));
                 let parent = Some(entry.from);
                 let placed = match entry.target {
-                    Target::Known(to) => Placed::Known(to),
+                    Target::Known(to) => Placed::Known(Found { id: Some(to) }),
                     Target::Fresh(at) => {
                         let hash = part.hashes.get(at).copied().unwrap_or(0);
                         self.store
-                            .place(row_at(&part.rows, stride, at), hash, parent, most)
+                            .place(row_at(&part.rows, words, at), hash, parent, most)
                     }
                     Target::Raw { .. } => {
                         let Some(values) = raws.next() else {
@@ -82,11 +82,15 @@ impl Search<'_> {
                         self.store.place_values(values, parent, most)
                     }
                 };
-                let (Placed::Known(to) | Placed::New(to)) = placed else {
-                    self.reason = Some(self.limit_reason());
-                    return;
+                let to = match placed {
+                    Placed::Known(found) => found.id,
+                    Placed::New(to) => Some(to),
+                    Placed::Full => {
+                        self.reason = Some(self.limit_reason());
+                        return;
+                    }
                 };
-                if graph {
+                if graph && let Some(to) = to {
                     self.arrows.push(Arrow {
                         from: entry.from,
                         to,

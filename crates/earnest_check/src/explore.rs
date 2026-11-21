@@ -9,7 +9,7 @@ mod workers;
 use crate::expand::{Asked, Budget, Expand, Mark, Whence, Width};
 use crate::limits::{Limits, TIME_LIMIT_REASON};
 use crate::outcome::Outcome;
-use crate::store::{Placed, Store};
+use crate::store::{Lookup, Placed, Store};
 use earnest_ir::{Fault, Model};
 use starts::Starts;
 use std::ops::Range;
@@ -73,7 +73,15 @@ pub fn explore(model: &Model, limits: &Limits) -> Outcome {
         model,
         limits,
         slots,
-        store: Store::new(&model.fields, limits.max_states),
+        store: Store::new(
+            &model.fields,
+            limits.max_states,
+            if limits.keep_graph {
+                Lookup::Id
+            } else {
+                Lookup::Presence
+            },
+        ),
         notes: Vec::new(),
         arrows: Vec::new(),
         first_broken: vec![None; model.rules.len()],

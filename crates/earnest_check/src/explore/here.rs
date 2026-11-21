@@ -2,7 +2,7 @@ use super::encode::{encode_next, with_updates};
 use super::{Arrow, STATES_BETWEEN_CLOCK_READS, Search};
 use crate::expand::{Asked, Budget, Clock, Expand, Mark, Scratch, Successors};
 use crate::helpers::Helpers;
-use crate::store::{Placed, Store, hash_row};
+use crate::store::{Placed, Store};
 use earnest_value::Value;
 use rustc_hash::FxHashSet;
 use std::ops::Range;
@@ -18,7 +18,6 @@ struct HereSink<'a> {
     most: usize,
     full: bool,
     row: Vec<u64>,
-    packed: Vec<u8>,
     after_full: FxHashSet<Box<[Value]>>,
 }
 
@@ -32,36 +31,36 @@ impl Successors for HereSink<'_> {
     ) -> bool {
         let base = self.base_is_row.then_some(self.base.as_slice());
         let encoded = encode_next(self.store, base, &mut self.row, state, updates);
-        if encoded {
-            self.store.pack(&self.row, &mut self.packed);
-        }
         if self.full {
             let next = with_updates(state, updates);
             let known = if encoded {
-                self.store.find(&self.packed, hash_row(&self.packed))
+                let hash = self.store.layout().hash(&self.row);
+                self.store.find(&self.row, hash).is_some()
             } else {
-                self.store.find_values(&next)
+                self.store.find_values(&next).is_some()
             };
-            return known.is_none() && self.after_full.insert(next);
+            return !known && self.after_full.insert(next);
         }
         let parent = Some(self.from);
         let placed = if encoded {
-            let hash = hash_row(&self.packed);
-            self.store.place(&self.packed, hash, parent, self.most)
+            let hash = self.store.layout().hash(&self.row);
+            self.store.place(&self.row, hash, parent, self.most)
         } else {
             self.store
                 .place_values(with_updates(state, updates), parent, self.most)
         };
         let (to, counted) = match placed {
-            Placed::Known(to) => (to, false),
-            Placed::New(to) => (to, true),
+            Placed::Known(found) => (found.id, false),
+            Placed::New(to) => (Some(to), true),
             Placed::Full => {
                 self.full = true;
                 self.after_full.insert(with_updates(state, updates));
                 return true;
             }
         };
-        if self.graph {
+        if self.graph
+            && let Some(to) = to
+        {
             self.arrows.push(Arrow {
                 from: self.from,
                 to,
@@ -115,7 +114,6 @@ impl Search<'_> {
             most: self.limits.max_states,
             full: false,
             row: Vec::new(),
-            packed: Vec::new(),
             after_full: FxHashSet::default(),
         };
         let mut scratch = Scratch::default();

@@ -1,7 +1,7 @@
 use super::encode::{encode_next, with_updates};
 use super::{STATES_BETWEEN_CLOCK_READS, Search};
 use crate::expand::{Asked, Clock, Mark, Scratch, Successors};
-use crate::store::{SHARD_COUNT, Store, hash_row, row_at, same_row, shard_of};
+use crate::store::{SHARD_COUNT, Store, shard_of};
 use earnest_value::Value;
 use hashbrown::HashTable;
 use rustc_hash::FxHashSet;
@@ -28,7 +28,7 @@ pub(super) struct Part {
     pub(super) expanded: usize,
     pub(super) marks: Vec<(usize, Mark)>,
     pub(super) entries: Vec<Entry>,
-    pub(super) rows: Vec<u8>,
+    pub(super) rows: Vec<u64>,
     pub(super) hashes: Vec<u64>,
     pub(super) froms: Vec<usize>,
     pub(super) shards: Vec<Vec<usize>>,
@@ -44,7 +44,6 @@ struct PartSink<'a> {
     base_is_row: bool,
     from: usize,
     row: Vec<u64>,
-    packed: Vec<u8>,
     met: HashTable<usize>,
     met_raw: FxHashSet<Box<[Value]>>,
     counted: usize,
@@ -61,7 +60,7 @@ impl PartSink<'_> {
     }
 
     fn add_fresh(&mut self, action: usize, hash: u64) {
-        self.part.rows.extend_from_slice(&self.packed);
+        self.part.rows.extend_from_slice(&self.row);
         if self.part.shards.is_empty() {
             self.part.shards.resize_with(SHARD_COUNT, Vec::new);
         }
@@ -76,11 +75,11 @@ impl PartSink<'_> {
     }
 
     fn offer_new_with_graph(&mut self, action: usize, hash: u64) -> bool {
-        let stride = self.store.stride();
-        let (rows, hashes, row) = (&self.part.rows, &self.part.hashes, &self.packed);
+        let words = self.store.layout().words();
+        let (rows, hashes, row) = (&self.part.rows, &self.part.hashes, &self.row);
         let met = self.met.entry(
             hash,
-            |at| same_row(row_at(rows, stride, *at), row),
+            |at| row_at(rows, words, *at) == row.as_slice(),
             |at| hashes.get(*at).copied().unwrap_or(0),
         );
         match met {
@@ -98,11 +97,11 @@ impl PartSink<'_> {
     }
 
     fn offer_unseen(&mut self, action: usize, hash: u64) -> bool {
-        let stride = self.store.stride();
-        let (rows, hashes, row) = (&self.part.rows, &self.part.hashes, &self.packed);
+        let words = self.store.layout().words();
+        let (rows, hashes, row) = (&self.part.rows, &self.part.hashes, &self.row);
         let met = self.met.entry(
             hash,
-            |at| same_row(row_at(rows, stride, *at), row),
+            |at| row_at(rows, words, *at) == row.as_slice(),
             |at| hashes.get(*at).copied().unwrap_or(0),
         );
         let hashbrown::hash_table::Entry::Vacant(vacant) = met else {
@@ -156,17 +155,23 @@ impl PartSink<'_> {
             self.push(action, Target::Raw { fresh_before });
             return first;
         }
-        self.store.pack(&self.row, &mut self.packed);
-        let hash = hash_row(&self.packed);
+        let hash = self.store.layout().hash(&self.row);
         if !self.graph {
             return self.offer_unseen(action, hash);
         }
-        if let Some(to) = self.store.find(&self.packed, hash) {
-            self.push(action, Target::Known(to));
+        if let Some(found) = self.store.find(&self.row, hash) {
+            if let Some(to) = found.id {
+                self.push(action, Target::Known(to));
+            }
             return false;
         }
         self.offer_new_with_graph(action, hash)
     }
+}
+
+pub(super) fn row_at(rows: &[u64], words: usize, at: usize) -> &[u64] {
+    let start = at.saturating_mul(words);
+    rows.get(start..start.saturating_add(words)).unwrap_or(&[])
 }
 
 impl Search<'_> {
@@ -184,7 +189,6 @@ impl Search<'_> {
             base_is_row: false,
             from: 0,
             row: Vec::new(),
-            packed: Vec::new(),
             met: HashTable::new(),
             met_raw: FxHashSet::default(),
             counted: 0,

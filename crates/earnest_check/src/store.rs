@@ -1,77 +1,59 @@
 mod codec;
 mod index;
+mod layout;
 mod level;
+mod rows;
 
-use codec::{Codec, Kind, mask_of};
+use codec::{Codec, Kind};
 use earnest_ir::Field;
-use earnest_value::Value;
-use index::{Id, Links, Place};
-pub(crate) use index::{SHARD_COUNT, hash_row, row_at, same_row, shard_of};
+use earnest_value::{Domain, Value};
+use index::{Claim, Index};
+pub(crate) use index::{Found, Lookup, SHARD_COUNT, shard_of};
+pub use layout::{NumberSlot, RowLayout};
 use level::Level;
 pub(crate) use level::{Fresh, Spread};
+use rows::{Parents, Rows};
 use rustc_hash::FxHashMap;
-
-const WORD_BITS: u32 = u64::BITS;
-const WORD_BYTES: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Placed {
-    Known(usize),
+    Known(Found),
     New(usize),
     Full,
 }
 
 #[derive(Debug)]
-enum Ids {
-    Narrow(Links<u32>),
-    Wide(Links<usize>),
-}
-
-#[derive(Debug)]
 pub(crate) struct Store {
     codecs: Vec<Codec>,
-    words: usize,
-    stride: usize,
-    rows: Vec<u8>,
+    layout: RowLayout,
+    rows: Rows,
+    parents: Parents,
     count: usize,
-    ids: Ids,
+    index: Index,
     grown: Vec<usize>,
     wide: FxHashMap<usize, Box<[Value]>>,
     wide_ids: FxHashMap<Box<[Value]>, usize>,
 }
 
-fn word_of(chunk: &[u8]) -> u64 {
-    if let Ok(whole) = <[u8; WORD_BYTES]>::try_from(chunk) {
-        return u64::from_le_bytes(whole);
-    }
-    chunk
-        .iter()
-        .rev()
-        .fold(0, |word, byte| (word << u8::BITS) | u64::from(*byte))
-}
-
 impl Store {
-    pub(crate) fn new(fields: &[Field], most: usize) -> Self {
-        let mut codecs = Vec::with_capacity(fields.len());
-        let mut word = 0;
-        let mut used = 0;
-        for field in fields {
-            let (kind, bits) = Codec::kind_of(&field.domain);
-            if used > 0 && used + bits > WORD_BITS {
-                word += 1;
-                used = 0;
-            }
-            codecs.push(Codec {
-                word,
-                shift: used,
-                mask: mask_of(bits),
-                kind,
-            });
-            used += bits;
-        }
-        let words = if used > 0 { word + 1 } else { word };
-        let stride =
-            word * WORD_BYTES + usize::try_from(used.div_ceil(u8::BITS)).unwrap_or(WORD_BYTES);
+    pub(crate) fn new(fields: &[Field], most: usize, lookup: Lookup) -> Self {
+        let domains: Vec<&Domain> = fields.iter().map(|field| &field.domain).collect();
+        let kinds: Vec<(Kind, u32)> = domains
+            .iter()
+            .map(|domain| Codec::kind_of(domain))
+            .collect();
+        let widths: Vec<u32> = kinds.iter().map(|(_, width)| *width).collect();
+        let layout = RowLayout::of(&domains, &widths);
+        let codecs: Vec<Codec> = kinds
+            .into_iter()
+            .enumerate()
+            .filter_map(|(position, (kind, _))| {
+                Some(Codec {
+                    place: layout.place(position)?,
+                    kind,
+                })
+            })
+            .collect();
         let grown = codecs
             .iter()
             .enumerate()
@@ -81,15 +63,11 @@ impl Store {
         Self {
             grown,
             codecs,
-            words,
-            stride,
-            rows: Vec::new(),
+            rows: Rows::new(layout.stride()),
+            index: Index::new(layout.stride(), most, lookup),
+            layout,
+            parents: Parents::for_up_to(most),
             count: 0,
-            ids: if u32::from_index(most).is_some() {
-                Ids::Narrow(Links::new())
-            } else {
-                Ids::Wide(Links::new())
-            },
             wide: FxHashMap::default(),
             wide_ids: FxHashMap::default(),
         }
@@ -99,27 +77,8 @@ impl Store {
         self.count
     }
 
-    pub(crate) fn stride(&self) -> usize {
-        self.stride
-    }
-
-    fn unpack(&self, id: usize, words: &mut Vec<u64>) -> bool {
-        words.clear();
-        if id >= self.count || self.wide_state(id).is_some() {
-            return false;
-        }
-        let packed = row_at(&self.rows, self.stride, id);
-        words.extend(packed.chunks(WORD_BYTES).map(word_of));
-        words.resize(self.words, 0);
-        true
-    }
-
-    pub(crate) fn pack(&self, words: &[u64], packed: &mut Vec<u8>) {
-        packed.clear();
-        for word in words {
-            packed.extend_from_slice(&word.to_le_bytes());
-        }
-        packed.truncate(self.stride);
+    pub(crate) fn layout(&self) -> &RowLayout {
+        &self.layout
     }
 
     fn wide_state(&self, id: usize) -> Option<&[Value]> {
@@ -130,10 +89,7 @@ impl Store {
     }
 
     pub(crate) fn parent(&self, id: usize) -> Option<usize> {
-        match &self.ids {
-            Ids::Narrow(links) => links.parent(id),
-            Ids::Wide(links) => links.parent(id),
-        }
+        self.parents.get(id)
     }
 
     pub(crate) fn state(&self, id: usize) -> Vec<Value> {
@@ -149,14 +105,17 @@ impl Store {
         values: &mut Vec<Value>,
     ) -> bool {
         values.clear();
-        if self.unpack(id, row) {
-            values.extend(self.codecs.iter().map(|codec| codec.value(codec.read(row))));
-            return true;
+        row.clear();
+        if id >= self.count {
+            return false;
         }
         if let Some(full) = self.wide_state(id) {
             values.extend(full.iter().cloned());
+            return false;
         }
-        false
+        self.rows.unpack(id, row, self.layout.words());
+        values.extend(self.codecs.iter().map(|codec| codec.value(codec.read(row))));
+        true
     }
 
     pub(crate) fn outside(&self, id: usize, row: &[u64], fields: &[Field]) -> Option<usize> {
@@ -174,6 +133,9 @@ impl Store {
     }
 
     pub(crate) fn encode_update(&self, row: &mut [u64], position: usize, value: &Value) -> bool {
+        if let (Some(slot), Value::Int(number)) = (self.layout.number(position), value) {
+            return slot.write(row, *number);
+        }
         let Some(codec) = self.codecs.get(position) else {
             return false;
         };
@@ -186,7 +148,7 @@ impl Store {
 
     pub(crate) fn encode(&self, values: &[Value], row: &mut Vec<u64>) -> bool {
         row.clear();
-        row.resize(self.words, 0);
+        row.resize(self.layout.words(), 0);
         values.len() == self.codecs.len()
             && values
                 .iter()
@@ -196,7 +158,7 @@ impl Store {
 
     fn encode_or_add(&mut self, values: &[Value], row: &mut Vec<u64>) -> bool {
         row.clear();
-        row.resize(self.words, 0);
+        row.resize(self.layout.words(), 0);
         values.len() == self.codecs.len()
             && self.codecs.iter_mut().zip(values).all(|(codec, value)| {
                 let Some(code) = codec.code_or_add(value) else {
@@ -211,36 +173,28 @@ impl Store {
         self.wide_ids.get(values).copied()
     }
 
-    pub(crate) fn find(&self, row: &[u8], hash: u64) -> Option<usize> {
-        match &self.ids {
-            Ids::Narrow(links) => links.find(&self.rows, self.stride, row, hash),
-            Ids::Wide(links) => links.find(&self.rows, self.stride, row, hash),
-        }
+    pub(crate) fn find(&self, row: &[u64], hash: u64) -> Option<Found> {
+        self.index.find(&self.rows, row, hash)
     }
 
     pub(crate) fn place(
         &mut self,
-        row: &[u8],
+        row: &[u64],
         hash: u64,
         parent: Option<usize>,
         most: usize,
     ) -> Placed {
-        let at = Place {
-            row,
-            hash,
-            stride: self.stride,
-            count: self.count,
-            most,
-            parent,
-        };
-        let placed = match &mut self.ids {
-            Ids::Narrow(links) => links.place(&mut self.rows, at),
-            Ids::Wide(links) => links.place(&mut self.rows, at),
-        };
-        if matches!(placed, Placed::New(_)) {
-            self.count += 1;
+        let id = Some(self.count).filter(|count| *count < most);
+        match self.index.claim(&self.rows, row, hash, id) {
+            Claim::Known(found) => Placed::Known(found),
+            Claim::Full => Placed::Full,
+            Claim::New => {
+                self.rows.push(row);
+                self.parents.push(parent);
+                self.count += 1;
+                Placed::New(self.count - 1)
+            }
         }
-        placed
     }
 
     pub(crate) fn place_level(
@@ -252,13 +206,16 @@ impl Store {
         let at = Level {
             parts,
             spread,
-            stride: self.stride,
+            words: self.layout.words(),
             count: self.count,
             most,
         };
-        let placed = match &mut self.ids {
-            Ids::Narrow(links) => links.place_level(&mut self.rows, at),
-            Ids::Wide(links) => links.place_level(&mut self.rows, at),
+        let (rows, parents) = (&mut self.rows, &mut self.parents);
+        let placed = match &mut self.index {
+            Index::NarrowKeys(shards) => shards.place_level(rows, parents, at),
+            Index::Keys(shards) => shards.place_level(rows, parents, at),
+            Index::NarrowIds(shards) => shards.place_level(rows, parents, at),
+            Index::WideIds(shards) => shards.place_level(rows, parents, at),
         }?;
         self.count += placed;
         Some(placed)
@@ -270,26 +227,20 @@ impl Store {
         parent: Option<usize>,
         most: usize,
     ) -> Placed {
-        let mut row = Vec::with_capacity(self.words);
+        let mut row = Vec::with_capacity(self.layout.words());
         if self.encode_or_add(&values, &mut row) {
-            let mut packed = Vec::with_capacity(self.stride);
-            self.pack(&row, &mut packed);
-            let hash = hash_row(&packed);
-            return self.place(&packed, hash, parent, most);
+            let hash = self.layout.hash(&row);
+            return self.place(&row, hash, parent, most);
         }
         if let Some(id) = self.wide_ids.get(&values) {
-            return Placed::Known(*id);
+            return Placed::Known(Found { id: Some(*id) });
         }
         if self.count >= most {
             return Placed::Full;
         }
         let id = self.count;
-        self.rows
-            .resize(self.rows.len().saturating_add(self.stride), 0);
-        match &mut self.ids {
-            Ids::Narrow(links) => links.push_parent(parent),
-            Ids::Wide(links) => links.push_parent(parent),
-        }
+        self.rows.grow(1);
+        self.parents.push(parent);
         self.wide.insert(id, values.clone());
         self.wide_ids.insert(values, id);
         self.count += 1;
@@ -300,12 +251,14 @@ impl Store {
         if kept >= self.count {
             return;
         }
+        let filed: Vec<usize> = (kept..self.count)
+            .filter(|id| !self.wide.contains_key(id))
+            .collect();
+        self.index
+            .forget(&self.rows, kept, &filed, self.layout.words());
         self.count = kept;
-        self.rows.truncate(kept.saturating_mul(self.stride));
-        match &mut self.ids {
-            Ids::Narrow(links) => links.truncate(kept),
-            Ids::Wide(links) => links.truncate(kept),
-        }
+        self.rows.truncate(kept);
+        self.parents.truncate(kept);
         self.wide.retain(|id, _| *id < kept);
         self.wide_ids.retain(|_, id| *id < kept);
     }

@@ -1,13 +1,70 @@
-use super::index::{Id, Links, SHARD_COUNT, hash_row, row_at, same_row};
+use super::index::{Filed, SHARD_COUNT, Shards};
+use super::rows::{Parents, ParentsTail, Rows, pack};
 use hashbrown::HashTable;
+use hashbrown::hash_table::Entry as Slot;
 use std::sync::{Mutex, PoisonError};
 
-impl<T: Id> Links<T> {
-    pub(super) fn place_level(&mut self, rows: &mut Vec<u8>, at: Level<'_>) -> Option<usize>
-    where
-        T: Send + Sync,
-    {
-        let wins = winners(&at);
+const BITS_PER_WORD: usize = 64;
+
+pub(crate) trait Spread: Sync {
+    fn run(&self, tasks: usize, job: &(dyn Fn(usize) + Sync));
+}
+
+pub(crate) struct Fresh<'a> {
+    pub(crate) rows: &'a [u64],
+    pub(crate) hashes: &'a [u64],
+    pub(crate) froms: &'a [usize],
+    pub(crate) shards: &'a [Vec<usize>],
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct Level<'a> {
+    pub(super) parts: &'a [Fresh<'a>],
+    pub(super) spread: &'a dyn Spread,
+    pub(super) words: usize,
+    pub(super) count: usize,
+    pub(super) most: usize,
+}
+
+impl Level<'_> {
+    fn row_of(&self, part: usize, ordinal: usize) -> &[u64] {
+        let start = ordinal.saturating_mul(self.words);
+        self.parts
+            .get(part)
+            .and_then(|fresh| fresh.rows.get(start..start.saturating_add(self.words)))
+            .unwrap_or(&[])
+    }
+
+    fn hash_of(&self, part: usize, ordinal: usize) -> u64 {
+        self.parts
+            .get(part)
+            .and_then(|fresh| fresh.hashes.get(ordinal))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn in_shard(&self, part: usize, shard: usize) -> &[usize] {
+        self.parts
+            .get(part)
+            .and_then(|fresh| fresh.shards.get(shard))
+            .map_or(&[][..], Vec::as_slice)
+    }
+}
+
+type Won = Vec<Vec<usize>>;
+
+impl<F: Filed> Shards<F> {
+    pub(super) fn place_level(
+        &mut self,
+        rows: &mut Rows,
+        parents: &mut Parents,
+        at: Level<'_>,
+    ) -> Option<usize> {
+        let wins = if F::HOLDS_ROW {
+            self.claim_level(rows, &at)
+        } else {
+            first_in_level(&at)
+        };
         let maps: Vec<Winners> = gather(at.spread, at.parts.len(), |part| {
             Winners::of(
                 &wins,
@@ -22,95 +79,160 @@ impl<T: Id> Links<T> {
             total += map.count;
         }
         if at.count + total > at.most {
+            if F::HOLDS_ROW {
+                self.unclaim_level(rows, &at, &wins);
+            }
             return None;
         }
-        let first_new = rows.len();
-        rows.resize(first_new + total * at.stride, 0);
-        let first_parent = self.parents.len();
-        self.parents.resize(first_parent + total, T::NONE);
-        {
-            let row_parts = split_by(
-                rows.get_mut(first_new..).unwrap_or_default(),
-                &maps,
-                at.stride,
-            );
-            let parent_parts = split_by(
-                self.parents.get_mut(first_parent..).unwrap_or_default(),
-                &maps,
-                1,
-            );
-            at.spread.run(maps.len(), &|part| {
-                let (Some(map), Some(fresh), Some(row_part), Some(parent_part)) = (
-                    maps.get(part),
-                    at.parts.get(part),
-                    row_parts.get(part),
-                    parent_parts.get(part),
-                ) else {
-                    return;
-                };
-                let mut row_part = row_part.lock().unwrap_or_else(PoisonError::into_inner);
-                let mut parent_part = parent_part.lock().unwrap_or_else(PoisonError::into_inner);
-                for (place, won) in map.ordinals().enumerate() {
-                    let start = place * at.stride;
-                    if let Some(row) = row_part.get_mut(start..start + at.stride) {
-                        row.copy_from_slice(row_at(fresh.rows, at.stride, won));
-                    }
-                    if let Some(parent) = parent_part.get_mut(place) {
-                        *parent = fresh
-                            .froms
-                            .get(won)
-                            .and_then(|from| T::from_index(*from))
-                            .unwrap_or(T::NONE);
+        write_level(rows, parents, &at, &maps, total);
+        if !F::HOLDS_ROW {
+            self.file_level(rows, &at, &wins, &maps, &bases);
+        }
+        Some(total)
+    }
+
+    fn claim_level(&mut self, rows: &Rows, at: &Level<'_>) -> Vec<Won> {
+        let tables: Vec<Mutex<&mut HashTable<F>>> =
+            self.tables.iter_mut().map(Mutex::new).collect();
+        gather(at.spread, SHARD_COUNT, |shard| {
+            let mut won = Vec::with_capacity(at.parts.len());
+            let Some(table) = tables.get(shard) else {
+                return won;
+            };
+            let mut table = table.lock().unwrap_or_else(PoisonError::into_inner);
+            for part in 0..at.parts.len() {
+                let mut mine = Vec::new();
+                for ordinal in at.in_shard(part, shard) {
+                    let row = at.row_of(part, *ordinal);
+                    let slot = table.entry(
+                        at.hash_of(part, *ordinal),
+                        |filed| filed.holds(rows, row),
+                        |filed| filed.hash(rows),
+                    );
+                    if let (Slot::Vacant(vacant), Some(filed)) = (slot, F::new(row, 0)) {
+                        vacant.insert(filed);
+                        mine.push(*ordinal);
                     }
                 }
-            });
-        }
-        let arena: &[u8] = rows;
-        let stride = at.stride;
-        let tables: Vec<Mutex<&mut HashTable<T>>> =
-            self.shards.iter_mut().map(Mutex::new).collect();
+                won.push(mine);
+            }
+            won
+        })
+    }
+
+    fn unclaim_level(&mut self, rows: &Rows, at: &Level<'_>, wins: &[Won]) {
+        let tables: Vec<Mutex<&mut HashTable<F>>> =
+            self.tables.iter_mut().map(Mutex::new).collect();
         at.spread.run(tables.len(), &|shard| {
             let (Some(table), Some(won)) = (tables.get(shard), wins.get(shard)) else {
                 return;
             };
             let mut table = table.lock().unwrap_or_else(PoisonError::into_inner);
-            let hasher = |id: &T| hash_row(row_at(arena, stride, id.index()));
+            for (part, ordinals) in won.iter().enumerate() {
+                for ordinal in ordinals {
+                    let row = at.row_of(part, *ordinal);
+                    let hash = at.hash_of(part, *ordinal);
+                    if let Ok(found) = table.find_entry(hash, |filed| filed.holds(rows, row)) {
+                        found.remove();
+                    }
+                }
+            }
+        });
+    }
+
+    fn file_level(
+        &mut self,
+        rows: &Rows,
+        at: &Level<'_>,
+        wins: &[Won],
+        maps: &[Winners],
+        bases: &[usize],
+    ) {
+        let tables: Vec<Mutex<&mut HashTable<F>>> =
+            self.tables.iter_mut().map(Mutex::new).collect();
+        at.spread.run(tables.len(), &|shard| {
+            let (Some(table), Some(won)) = (tables.get(shard), wins.get(shard)) else {
+                return;
+            };
+            let mut table = table.lock().unwrap_or_else(PoisonError::into_inner);
+            let hasher = |filed: &F| filed.hash(rows);
             table.reserve(won.iter().map(Vec::len).sum(), hasher);
             for (part, ordinals) in won.iter().enumerate() {
-                let (Some(map), Some(base), Some(fresh)) =
-                    (maps.get(part), bases.get(part), at.parts.get(part))
-                else {
+                let (Some(map), Some(base)) = (maps.get(part), bases.get(part)) else {
                     continue;
                 };
                 for ordinal in ordinals {
                     let id = at.count + base + map.rank(*ordinal);
-                    let hash = fresh.hashes.get(*ordinal).copied().unwrap_or(0);
-                    table.insert_unique(hash, T::from_index(id).unwrap_or(T::NONE), hasher);
+                    let row = at.row_of(part, *ordinal);
+                    if let Some(filed) = F::new(row, id) {
+                        table.insert_unique(at.hash_of(part, *ordinal), filed, hasher);
+                    }
                 }
             }
         });
-        Some(total)
     }
 }
 
-pub(crate) trait Spread: Sync {
-    fn run(&self, tasks: usize, job: &(dyn Fn(usize) + Sync));
+fn first_in_level(at: &Level<'_>) -> Vec<Won> {
+    gather(at.spread, SHARD_COUNT, |shard| {
+        let mut seen: HashTable<(usize, usize)> = HashTable::new();
+        let mut won = Vec::with_capacity(at.parts.len());
+        for part in 0..at.parts.len() {
+            let mut mine = Vec::new();
+            for ordinal in at.in_shard(part, shard) {
+                let row = at.row_of(part, *ordinal);
+                if let Slot::Vacant(vacant) = seen.entry(
+                    at.hash_of(part, *ordinal),
+                    |(other, earlier)| at.row_of(*other, *earlier) == row,
+                    |(other, earlier)| at.hash_of(*other, *earlier),
+                ) {
+                    vacant.insert((part, *ordinal));
+                    mine.push(*ordinal);
+                }
+            }
+            won.push(mine);
+        }
+        won
+    })
 }
 
-pub(crate) struct Fresh<'a> {
-    pub(crate) rows: &'a [u8],
-    pub(crate) hashes: &'a [u64],
-    pub(crate) froms: &'a [usize],
-    pub(crate) shards: &'a [Vec<usize>],
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct Level<'a> {
-    pub(super) parts: &'a [Fresh<'a>],
-    pub(super) spread: &'a dyn Spread,
-    pub(super) stride: usize,
-    pub(super) count: usize,
-    pub(super) most: usize,
+fn write_level(
+    rows: &mut Rows,
+    parents: &mut Parents,
+    at: &Level<'_>,
+    maps: &[Winners],
+    total: usize,
+) {
+    let stride = rows.stride();
+    let mut row_rest = rows.grow(total);
+    let mut parent_rest = parents.grow(total);
+    let mut slices = Vec::with_capacity(maps.len());
+    for map in maps {
+        let row_count = (map.count * stride).min(row_rest.len());
+        let (row_part, row_after) = std::mem::take(&mut row_rest).split_at_mut(row_count);
+        row_rest = row_after;
+        let (parent_part, parent_after) = parent_rest.split_at(map.count);
+        parent_rest = parent_after;
+        slices.push(Mutex::new((row_part, parent_part)));
+    }
+    at.spread.run(maps.len(), &|part| {
+        let (Some(map), Some(fresh), Some(slice)) =
+            (maps.get(part), at.parts.get(part), slices.get(part))
+        else {
+            return;
+        };
+        let mut slice = slice.lock().unwrap_or_else(PoisonError::into_inner);
+        let (row_part, parent_part): &mut (&mut [u8], ParentsTail<'_>) = &mut slice;
+        for (place, won) in map.ordinals().enumerate() {
+            let start = place * stride;
+            if let Some(into) = row_part.get_mut(start..start + stride) {
+                pack(at.row_of(part, won), stride, into);
+            }
+            if let Some(from) = fresh.froms.get(won) {
+                parent_part.set(place, *from);
+            }
+        }
+    });
 }
 
 #[derive(Default)]
@@ -120,10 +242,8 @@ struct Winners {
     count: usize,
 }
 
-const BITS_PER_WORD: usize = 64;
-
 impl Winners {
-    fn of(wins: &[Vec<Vec<usize>>], part: usize, found: usize) -> Self {
+    fn of(wins: &[Won], part: usize, found: usize) -> Self {
         let mut bits = vec![0_u64; found.div_ceil(BITS_PER_WORD)];
         for shard in wins {
             for ordinal in shard.get(part).map_or(&[][..], Vec::as_slice) {
@@ -169,43 +289,6 @@ impl Winners {
     }
 }
 
-fn winners(at: &Level<'_>) -> Vec<Vec<Vec<usize>>> {
-    let stride = at.stride;
-    let parts = at.parts;
-    let row_of = |part: usize, ordinal: usize| {
-        parts
-            .get(part)
-            .map_or(&[][..], |fresh| row_at(fresh.rows, stride, ordinal))
-    };
-    let hash_of = |part: usize, ordinal: usize| {
-        parts
-            .get(part)
-            .and_then(|fresh| fresh.hashes.get(ordinal))
-            .copied()
-            .unwrap_or(0)
-    };
-    gather(at.spread, SHARD_COUNT, |shard| {
-        let mut seen: HashTable<(usize, usize)> = HashTable::new();
-        let mut won = Vec::with_capacity(parts.len());
-        for (part, fresh) in parts.iter().enumerate() {
-            let mut mine = Vec::new();
-            for ordinal in fresh.shards.get(shard).map_or(&[][..], Vec::as_slice) {
-                let (hash, row) = (hash_of(part, *ordinal), row_of(part, *ordinal));
-                if let hashbrown::hash_table::Entry::Vacant(vacant) = seen.entry(
-                    hash,
-                    |(other, at)| same_row(row_of(*other, *at), row),
-                    |(other, at)| hash_of(*other, *at),
-                ) {
-                    vacant.insert((part, *ordinal));
-                    mine.push(*ordinal);
-                }
-            }
-            won.push(mine);
-        }
-        won
-    })
-}
-
 fn gather<R: Send + Default>(
     spread: &dyn Spread,
     tasks: usize,
@@ -221,18 +304,4 @@ fn gather<R: Send + Default>(
         .into_iter()
         .map(|slot| slot.into_inner().unwrap_or_else(PoisonError::into_inner))
         .collect()
-}
-
-fn split_by<'a, U>(
-    mut rest: &'a mut [U],
-    maps: &[Winners],
-    width: usize,
-) -> Vec<Mutex<&'a mut [U]>> {
-    let mut parts = Vec::with_capacity(maps.len());
-    for map in maps {
-        let (part, after) = rest.split_at_mut((map.count * width).min(rest.len()));
-        parts.push(Mutex::new(part));
-        rest = after;
-    }
-    parts
 }

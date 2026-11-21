@@ -1,4 +1,4 @@
-use super::WORD_BITS;
+use super::layout::Place;
 use earnest_value::{Domain, Value};
 use rustc_hash::FxHashMap;
 
@@ -37,9 +37,7 @@ pub(super) enum Kind {
 
 #[derive(Debug)]
 pub(super) struct Codec {
-    pub(super) word: usize,
-    pub(super) shift: u32,
-    pub(super) mask: u64,
+    pub(super) place: Place,
     pub(super) kind: Kind,
 }
 
@@ -48,14 +46,6 @@ fn bits_for(count: u128) -> u32 {
         0
     } else {
         (count - 1).bit_width()
-    }
-}
-
-pub(super) fn mask_of(bits: u32) -> u64 {
-    if bits >= WORD_BITS {
-        u64::MAX
-    } else {
-        (1_u64 << bits) - 1
     }
 }
 
@@ -133,15 +123,10 @@ impl Codec {
     }
 
     pub(super) fn read(&self, row: &[u64]) -> u64 {
-        row.get(self.word).map_or(0, |word| {
-            word.checked_shr(self.shift).unwrap_or(0) & self.mask
-        })
+        self.place.read(row)
     }
 
     pub(super) fn write(&self, row: &mut [u64], code: u64) {
-        if let Some(word) = row.get_mut(self.word) {
-            let placed = self.mask.checked_shl(self.shift).unwrap_or(0);
-            *word = (*word & !placed) | (code.checked_shl(self.shift).unwrap_or(0) & placed);
-        }
+        self.place.write(row, code);
     }
 }
