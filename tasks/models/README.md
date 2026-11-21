@@ -500,7 +500,7 @@ The model has 394 states, up from 330: the results that were never stored are st
 `stop[First, Exhausted]`, `report`: `word_first: Fail`, `verdict_first: Holds`. `Search::outcome`
 gave `Holds` when there was no `reason` and the rule was never unjudged, so a state out of
 range, which is counted and in which no rule is judged, left every rule `holds`; the same for a
-fault in a `when`, a `then` or an end, which leaves the states beyond it unreached. With the
+fault in a condition, a change or an end, which leaves the states beyond it unreached. With the
 binary: a `Climb` model whose action takes `n` from 0 to 3 in a `#[range(0, 2)]` field and the
 rule `n < 3` printed `fail` with an `out-of-range` finding and the rule `"verdict": "holds"`.
 Now the verdict is `unknown` there, in `earnest_check` (`Search::cut_short`, set by a state out

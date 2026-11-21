@@ -199,13 +199,13 @@ const known = <F extends Fields>(model: Model<F>, state: Row): StateOf<F> => {
 const changed = (model: AnyModel, state: Row, changes: unknown, sentence: string): Row => {
   if (!isRecord(changes)) {
     throw new Error(
-      `${model.name}: the then of "${sentence}" must give back an object holding the fields that change`,
+      `${model.name}: the change of "${sentence}" must give back an object holding the fields that change`,
     );
   }
   const stray = Object.keys(changes).find((name) => !Object.hasOwn(model.fields, name));
   if (stray !== undefined) {
     throw new Error(
-      `${model.name}: the then of "${sentence}" gives \`${stray}\`, which is not a field of the model`,
+      `${model.name}: the change of "${sentence}" gives \`${stray}\`, which is not a field of the model`,
     );
   }
   return frozen({ ...state, ...changes });

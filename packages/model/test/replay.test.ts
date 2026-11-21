@@ -211,7 +211,7 @@ test("a step whose when is false is refused", () => {
     ],
   };
   expect(() => replay(Hops, path, { exports })).toThrow(
-    /Hops: step 3 \(two\): the `when` of the action is false in this state/,
+    /Hops: step 3 \(two\): the condition of the action is false in this state/,
   );
 });
 
@@ -260,7 +260,7 @@ test("a step whose action can't be evaluated is refused", () => {
   const nobody: Named[] = [{ name: "who", value: null }];
   const path = { start: nobody, steps: [{ action: "age", state: nobody }] };
   expect(() => replay(People, path, { exports: { age } })).toThrow(
-    /People: step 1 \(age\): the `then` of the action reads a value that is null in this state/,
+    /People: step 1 \(age\): the change of the action reads a value that is null in this state/,
   );
 });
 

@@ -261,9 +261,9 @@ unreadable  src/clock.model.ts
   state, and a rule that was not seen broken is `unknown`. `explore` in the TypeScript library
   does the same.
 - Anything the model asks that can't be evaluated in a state is a `fault` in that state: a rule,
-  the `when` or the `then` of an action, or the `when` of an end, for example because it reads a
-  field of `null`. A state is `stuck` only when the `when` of every action is false and every
-  end is false. A state where a `when` or an end can't be evaluated is a fault and is not stuck.
+  the condition or the change of an action, or the `when` of an end, for example because it reads a
+  field of `null`. A state is `stuck` only when the condition of every action is false and every
+  end is false. A state where a condition or an end can't be evaluated is a fault and is not stuck.
   An end is asked only in a state where no action can happen. `explore` in the TypeScript
   library follows the same rule.
 - A model that stops at `--max-states` or `--time-limit` with nothing broken found is

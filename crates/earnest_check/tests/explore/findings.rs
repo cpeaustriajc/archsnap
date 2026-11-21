@@ -200,7 +200,7 @@ fn a_guard_that_reads_null_is_a_fault_and_the_state_is_not_called_stuck() {
     assert_eq!(finding.kind, FindingKind::Fault);
     assert_eq!(
         finding.message,
-        "the `when` of the action `go` reads a value that is null in this state"
+        "the condition of the action `go` reads a value that is null in this state"
     );
 }
 
@@ -247,7 +247,7 @@ fn a_result_too_large_to_hold_is_a_fault() {
     assert_eq!(finding.kind, FindingKind::Fault);
     assert_eq!(
         finding.message,
-        "the `then` of the action `inc` computes a number too large to hold in this state"
+        "the change of the action `inc` computes a number too large to hold in this state"
     );
 }
 

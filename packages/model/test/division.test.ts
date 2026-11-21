@@ -38,7 +38,7 @@ test("a division by zero in a change is a fault, as the checker reports it", () 
   const found = explore(Split, { exports: { cut } });
   expect(found.states).toBe(3);
   expect(found.status).toBe("fail");
-  expect(messages(found)).toStrictEqual([`the \`then\` of the action \`cut\` ${FAULT}`]);
+  expect(messages(found)).toStrictEqual([`the change of the action \`cut\` ${FAULT}`]);
 });
 
 test("a division of a negative number in a rule, an end and a when is a fault", () => {
@@ -51,7 +51,7 @@ test("a division of a negative number in a rule, an end and a when is a fault", 
   const When = m.model("When", { n: m.int(-1, 1).initial(-1) });
   const inWhen = m.action(When, "when", { when: (s) => m.div(s.n, 1) === 0, changes: () => ({}) });
   expect(messages(explore(When, { exports: { inWhen } }))).toStrictEqual([
-    `the \`when\` of the action \`inWhen\` ${FAULT}`,
+    `the condition of the action \`inWhen\` ${FAULT}`,
   ]);
   const Ended = m.model("Ended", { n: m.int(-1, 1).initial(-1) });
   const over = m.end(Ended, "Over", (s) => m.div(s.n, 1) === 0);

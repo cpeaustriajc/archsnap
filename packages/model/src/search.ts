@@ -58,9 +58,9 @@ export interface RuleResult {
 }
 
 /**
- * `stuck`: the `when` of every action is false and so is every end. `out-of-range`: an action
- * gave a field a value outside its declaration. `fault`: a rule, the `when` or the `then` of an
- * action, or an end can't be evaluated in the state. A state where a `when` or an end can't be
+ * `stuck`: the condition of every action is false and so is every end. `out-of-range`: an action
+ * gave a field a value outside its declaration. `fault`: a rule, the condition or the change of an
+ * action, or an end can't be evaluated in the state. A state where a condition or an end can't be
  * evaluated is not stuck: nothing says that it should stop there or go on.
  */
 export type FindingKind = "stuck" | "out-of-range" | "fault";
@@ -358,7 +358,7 @@ class Search {
     for (const input of this.#inputs.get(action) ?? []) {
       const can = attempt(() => action.when(state, input));
       if (can.fault !== null) {
-        found.trouble ??= `the \`when\` of the action \`${id}\` ${can.fault}`;
+        found.trouble ??= `the condition of the action \`${id}\` ${can.fault}`;
         found.isCutShort = true;
         canTell = false;
         continue;
@@ -371,7 +371,7 @@ class Search {
       if (next.fault === null) {
         found.successors.push({ action, input, next: next.value });
       } else {
-        found.trouble ??= `the \`then\` of the action \`${id}\` ${next.fault}`;
+        found.trouble ??= `the change of the action \`${id}\` ${next.fault}`;
         found.isCutShort = true;
       }
     }

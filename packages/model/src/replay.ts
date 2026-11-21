@@ -103,14 +103,14 @@ const applied = (where: string, fields: Declared, action: ActionRunner, state: R
   }
   const can = attempt(() => action.when(state, input));
   if (can.fault !== null) {
-    throw new Error(`${where}: the \`when\` of the action ${can.fault} in this state`);
+    throw new Error(`${where}: the condition of the action ${can.fault} in this state`);
   }
   if (!can.value) {
-    throw new Error(`${where}: the \`when\` of the action is false in this state`);
+    throw new Error(`${where}: the condition of the action is false in this state`);
   }
   const next = nextState(action, state, input);
   if (next.fault !== null) {
-    throw new Error(`${where}: the \`then\` of the action ${next.fault} in this state`);
+    throw new Error(`${where}: the change of the action ${next.fault} in this state`);
   }
   return next.value;
 };

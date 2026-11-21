@@ -372,12 +372,12 @@ export const Pick = m.model(\"Pick\", {
 export const pick = m.action(Pick, \"a guest picks an item\", {
 \tinput: { g: Guest },
 \twhen: (s) => s.chosen === null,
-\tchanges: (_, { g }) => THEN,
+\tchanges: (_, { g }) => CHANGES,
 });
 ";
 
-    fn exported_update(then: &str) -> String {
-        let source = ITEMS.replace("THEN", then);
+    fn exported_update(changes: &str) -> String {
+        let source = ITEMS.replace("CHANGES", changes);
         let file = loaded("pick.model.ts", Language::TypeScript, &source);
         assert!(
             file.problems().is_empty(),

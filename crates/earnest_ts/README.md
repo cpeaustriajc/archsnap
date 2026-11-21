@@ -10,7 +10,7 @@ and a value of the wrong kind are found by `earnest_semantic`.
 
 A top-level `const` is exactly one of the forms the root `README.md` lists, or a problem,
 whether or not anything reads it; the name of a model is a problem anywhere but in a direct call
-at the top level. In an action, `when` and `then` each bring their own names into scope, and the
+at the top level. In an action, `when` and `changes` each bring their own names into scope, and the
 tree says which inputs each one takes. A rule's text is stored with each run of white space as
 one space.
 

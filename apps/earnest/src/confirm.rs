@@ -603,7 +603,7 @@ State 1: <Initial predicate>
             ),
             (
                 "fault",
-                "the `then` of the action `price` reads a value that is null in this state",
+                "the change of the action `price` reads a value that is null in this state",
             ),
         ] {
             let mut ours = checked(4, &[("bounded", "unknown")]);

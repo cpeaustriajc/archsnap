@@ -134,8 +134,8 @@ one of each kind. `reason` is `null`, or why the search is unfinished.
   field order with the first field varying slowest, actions in declaration order, inputs with
   the first input varying fastest, and states judged in the order they were found.
 - Anything the model asks that can't be evaluated in a state is a `fault` there: a rule, the
-  `when` or the `then` of an action, or the `when` of an end. A state is `stuck` only when the
-  `when` of every action is false and every end is false, so a state where a `when` or an end
+  condition or the change of an action, or the `when` of an end. A state is `stuck` only when the
+  condition of every action is false and every end is false, so a state where a condition or an end
   faults is not stuck. An end is asked only in a state where no action can happen.
 - A state that is out of range is counted, is not checked against the rules and is not searched
   from.
@@ -151,7 +151,7 @@ by its `label`, the action's sentence.
 
 - Arithmetic past 2^53 - 1 is a fault in the checker, "computes a number too large to hold",
   wherever a model computes it. In Node the library sees only the numbers it is given back: a
-  next state that holds one is the same fault in the `then` of its action. A number computed
+  next state that holds one is the same fault in the change of its action. A number computed
   inside a rule, an end or a `when`, or by a helper on the way to a value that is not a number,
   is the rounded value JavaScript computes, so `s.n + 9007199254740992 - 9007199254740992 ===
   s.n` is judged by what JavaScript makes of it. `m.int` throws on a bound outside the safe

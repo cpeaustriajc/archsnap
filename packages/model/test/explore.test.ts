@@ -425,7 +425,7 @@ test("a when that faults is a fault, and the state is not stuck", () => {
   expect(found.states).toBe(1);
   expect(kinds(found)).toStrictEqual(["fault"]);
   expect(only(found).message).toBe(
-    "the `when` of the action `age` reads a value that is null in this state",
+    "the condition of the action `age` reads a value that is null in this state",
   );
 });
 
@@ -481,7 +481,7 @@ test("a change that faults gives no next state, and the state is not stuck", () 
   expect(found.states).toBe(1);
   expect(kinds(found)).toStrictEqual(["fault"]);
   expect(only(found).message).toBe(
-    "the `then` of the action `age` reads a value that is null in this state",
+    "the change of the action `age` reads a value that is null in this state",
   );
 });
 
@@ -498,7 +498,7 @@ test("a remainder by zero is a fault", () => {
   expect(found.status).toBe("fail");
   expect(kinds(found)).toStrictEqual(["fault"]);
   expect(only(found).message).toBe(
-    "the `then` of the action `share` takes a remainder with a negative number or a divisor below 1 in this state",
+    "the change of the action `share` takes a remainder with a negative number or a divisor below 1 in this state",
   );
 });
 
@@ -520,7 +520,7 @@ test("a next state with a number past what JavaScript holds exactly is a fault",
   expect(found.status).toBe("fail");
   expect(kinds(found)).toStrictEqual(["fault"]);
   expect(only(found).message).toBe(
-    "the `then` of the action `grow` computes a number too large to hold in this state",
+    "the change of the action `grow` computes a number too large to hold in this state",
   );
 });
 
@@ -727,7 +727,7 @@ test("m.rem faults in a when, an end and a change, as the checker does", () => {
   });
   const messages = (found: Exploration) => found.findings.map((finding) => finding.message);
   expect(messages(explore(Rem, { exports: { inWhen } }))).toStrictEqual([
-    `the \`when\` of the action \`inWhen\` ${FAULT}`,
+    `the condition of the action \`inWhen\` ${FAULT}`,
   ]);
   const Ended = m.model("Ended", { n: m.int(0, 1).initial(0) });
   const over = m.end(Ended, "Over", (s) => m.rem(s.n - 1, 2) === 0);
@@ -737,7 +737,7 @@ test("m.rem faults in a when, an end and a change, as the checker does", () => {
   const Then = m.model("Then", { n: m.int(0, 2).initial(0), d: m.int(0, 1).initial(0) });
   const share = m.action(Then, "share", { changes: (s) => ({ n: m.rem(s.n, s.d) }) });
   expect(messages(explore(Then, { exports: { share } }))).toStrictEqual([
-    `the \`then\` of the action \`share\` ${FAULT}`,
+    `the change of the action \`share\` ${FAULT}`,
   ]);
 });
 
@@ -788,7 +788,7 @@ test("m.some faults in a when, an end, a change and a helper, as the checker doe
   const first = optional().Opt;
   const inWhen = m.action(first, "when", { when: (s) => m.some(s.o) > 0, changes: () => ({}) });
   expect(messages(explore(first, { exports: { inWhen } }))).toStrictEqual([
-    `the \`when\` of the action \`inWhen\` ${NULL_FAULT}`,
+    `the condition of the action \`inWhen\` ${NULL_FAULT}`,
   ]);
   const second = optional().Opt;
   const over = m.end(second, "Over", (s) => m.some(s.o) === 0);
@@ -798,7 +798,7 @@ test("m.some faults in a when, an end, a change and a helper, as the checker doe
   const third = optional().Opt;
   const bump = m.action(third, "bump", { changes: (s) => ({ n: m.some(s.o) + 1 }) });
   expect(messages(explore(third, { exports: { bump } }))).toStrictEqual([
-    `the \`then\` of the action \`bump\` ${NULL_FAULT}`,
+    `the change of the action \`bump\` ${NULL_FAULT}`,
   ]);
   const read = (s: { readonly o: number | null }) => m.some(s.o) + 1;
   const fourth = optional().Opt;
