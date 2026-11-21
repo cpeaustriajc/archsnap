@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 5aac56e59ee89b9f24173d13d21053de5658816734e40b2be3ba7814e1b7aacf # shrinks to expr = Apply(Order(Less), [Const(Seq([])), Apply(Order(Less), [Const(Null)])]), state = [Int(0), Int(0), Int(0)], locals = [Int(0), Int(0), Int(0), Int(0)]
+cc 6bae5ea0d3b534ec9bc04830899b7155ebb67acc504703a8c94bc96789fb2ab4 # shrinks to first_values = [Record([(Sym(0), Int(0))]), Record([(Sym(2), Int(0))])], second_values = [Record([(Sym(0), Int(0))]), Record([(Sym(0), Int(0))])], exprs = [Apply(Math(Add), [Field(2), Get(Local(0), Sym(2))])], state = [Int(0), Int(0), Int(9223372036854775807)], left_over = [Int(0), Int(0), Int(0), Int(0)]

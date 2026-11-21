@@ -5,13 +5,16 @@ use std::sync::Arc;
 use std::time::Instant;
 
 const TICKS_BETWEEN_CLOCK_READS: u32 = 1024;
+const NO_ROUND: u64 = 0;
+const FIRST_ROUND: u64 = 1;
+pub(crate) const NO_UNIT: u64 = 0;
 
 /// Why an expression has no value in a state.
 ///
 /// The search reports a fault as a finding with the path to the state. All but the last can
 /// happen in a well-typed model. [`Fault::WrongKind`] means the expression itself is malformed,
 /// which a model lowered by `earnest_semantic` never is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Fault {
     /// A value that must be present is `null`.
@@ -63,12 +66,15 @@ impl Fault {
 /// and updates.
 #[derive(Debug)]
 pub struct Frame<'a> {
-    state: &'a [Value],
-    locals: Vec<Value>,
+    pub(crate) state: &'a [Value],
+    pub(crate) locals: Vec<Value>,
     deadline: Option<Instant>,
     ticks: u32,
     expired: bool,
     beyond_32_bits: bool,
+    round: u64,
+    writer: u64,
+    kept_in: Vec<u64>,
 }
 
 impl<'a> Frame<'a> {
@@ -79,11 +85,14 @@ impl<'a> Frame<'a> {
     pub fn new(state: &'a [Value], slots: usize) -> Self {
         Self {
             state,
-            locals: vec![Value::Null; slots],
+            locals: std::iter::repeat_with(|| Value::Null).take(slots).collect(),
             deadline: None,
             ticks: 0,
             expired: false,
             beyond_32_bits: false,
+            round: FIRST_ROUND,
+            writer: NO_UNIT,
+            kept_in: Vec::new(),
         }
     }
 
@@ -115,9 +124,50 @@ impl<'a> Frame<'a> {
         self.beyond_32_bits
     }
 
+    pub(crate) fn note(&mut self, answer: &Result<i64, Fault>) {
+        self.beyond_32_bits |= match answer {
+            Ok(number) => i32::try_from(*number).is_err(),
+            Err(fault) => *fault == Fault::Overflow,
+        };
+    }
+
     /// Puts `value` in `slot`, as the search does with an action's inputs. A slot the frame
     /// does not have is left out, and reading it later is [`Fault::WrongKind`].
     pub fn put(&mut self, slot: usize, value: Value) {
+        self.writer = NO_UNIT;
+        self.fill(slot, value);
+    }
+
+    pub(crate) fn write(&mut self, unit: u64, slot: usize, value: Value) {
+        self.enter(unit);
+        self.fill(slot, value);
+    }
+
+    pub(crate) fn kept(&mut self, unit: u64, slot: usize) -> bool {
+        self.enter(unit);
+        self.kept_in.get(slot) == Some(&self.round)
+    }
+
+    pub(crate) fn keep(&mut self, slot: usize) {
+        if slot >= self.locals.len() {
+            return;
+        }
+        if self.kept_in.len() < self.locals.len() {
+            self.kept_in.resize(self.locals.len(), NO_ROUND);
+        }
+        if let Some(round) = self.kept_in.get_mut(slot) {
+            *round = self.round;
+        }
+    }
+
+    fn enter(&mut self, unit: u64) {
+        if self.writer != unit {
+            self.writer = unit;
+            self.round = self.round.wrapping_add(1);
+        }
+    }
+
+    fn fill(&mut self, slot: usize, value: Value) {
         if let Some(place) = self.locals.get_mut(slot) {
             *place = value;
         }
@@ -136,7 +186,7 @@ pub fn eval(expr: &Expr, frame: &mut Frame<'_>) -> Result<Value, Fault> {
         Expr::Const(value) => Ok(value.clone()),
         Expr::Field(index) => frame.state.get(*index).cloned().ok_or(Fault::WrongKind),
         Expr::Local(slot) => frame.locals.get(*slot).cloned().ok_or(Fault::WrongKind),
-        Expr::Apply(op, arguments) => apply(*op, arguments, frame),
+        Expr::Apply(op, arguments) => applied(*op, arguments, frame, eval),
         Expr::And(left, right) => Ok(Value::Bool(truth(left, frame)? && truth(right, frame)?)),
         Expr::Or(left, right) => Ok(Value::Bool(truth(left, frame)? || truth(right, frame)?)),
         Expr::Choose(test, yes, no) => {
@@ -151,24 +201,15 @@ pub fn eval(expr: &Expr, frame: &mut Frame<'_>) -> Result<Value, Fault> {
             frame.put(*slot, bound);
             eval(body, frame)
         }
-        Expr::Record(fields) => Ok(Value::record(named(fields, frame)?)),
-        Expr::Get(inner, name) => {
-            let record = eval(inner, frame)?;
-            record
-                .field(*name)
-                .cloned()
-                .ok_or_else(|| wrong_or_null(&record))
+        Expr::Record(fields) => Ok(Value::record(named(fields, frame, eval)?)),
+        Expr::Get(inner, name) => field_of(&eval(inner, frame)?, *name),
+        Expr::With(base, changes) => {
+            let fields = fields_of(eval(base, frame)?)?;
+            Ok(changed(fields, named(changes, frame, eval)?))
         }
-        Expr::With(base, changes) => with_fields(base, changes, frame),
-        Expr::SetOf(items) => Ok(Value::set(each(items, frame)?.into_iter().collect())),
-        Expr::SeqOf(items) => Ok(Value::seq(each(items, frame)?)),
-        Expr::MapOf(entries) => {
-            let mut built = BTreeMap::new();
-            for (key, value) in entries {
-                built.insert(eval(key, frame)?, eval(value, frame)?);
-            }
-            Ok(Value::map(built))
-        }
+        Expr::SetOf(items) => Ok(Value::set(each(items, frame, eval)?.into_iter().collect())),
+        Expr::SeqOf(items) => Ok(Value::seq(each(items, frame, eval)?)),
+        Expr::MapOf(entries) => mapped(entries, frame, eval),
         Expr::Sweep {
             sweep,
             shelf,
@@ -176,8 +217,14 @@ pub fn eval(expr: &Expr, frame: &mut Frame<'_>) -> Result<Value, Fault> {
             source,
             body,
         } => {
-            let items = members(eval(source, frame)?)?;
-            sweep_over(*sweep, *shelf, *slot, items, body, frame)
+            let test = Test {
+                sweep: *sweep,
+                shelf: *shelf,
+                slot: *slot,
+                body: &**body,
+                unit: NO_UNIT,
+            };
+            test.over(&eval(source, frame)?, frame, truth)
         }
     }
 }
@@ -192,80 +239,143 @@ pub fn truth(expr: &Expr, frame: &mut Frame<'_>) -> Result<bool, Fault> {
     as_bool(&eval(expr, frame)?)
 }
 
-fn each(items: &[Expr], frame: &mut Frame<'_>) -> Result<Vec<Value>, Fault> {
+pub(crate) fn each<T>(
+    items: &[T],
+    frame: &mut Frame<'_>,
+    evaluate: impl Fn(&T, &mut Frame<'_>) -> Evaluated,
+) -> Result<Vec<Value>, Fault> {
     let mut built = Vec::with_capacity(items.len());
     for item in items {
-        built.push(eval(item, frame)?);
+        built.push(evaluate(item, frame)?);
     }
     Ok(built)
 }
 
-fn named(fields: &[(Sym, Expr)], frame: &mut Frame<'_>) -> Result<Vec<(Sym, Value)>, Fault> {
+pub(crate) fn named<T>(
+    fields: &[(Sym, T)],
+    frame: &mut Frame<'_>,
+    evaluate: impl Fn(&T, &mut Frame<'_>) -> Evaluated,
+) -> Result<Vec<(Sym, Value)>, Fault> {
     let mut built = Vec::with_capacity(fields.len());
     for (name, inner) in fields {
-        built.push((*name, eval(inner, frame)?));
+        built.push((*name, evaluate(inner, frame)?));
     }
     Ok(built)
 }
 
-fn with_fields(base: &Expr, changes: &[(Sym, Expr)], frame: &mut Frame<'_>) -> Evaluated {
-    let old = match eval(base, frame)? {
-        Value::Record(old) => old,
-        other => return Err(wrong_or_null(&other)),
-    };
-    let mut fields = Arc::unwrap_or_clone(old);
-    for (name, value) in named(changes, frame)? {
+pub(crate) fn mapped<T>(
+    entries: &[(T, T)],
+    frame: &mut Frame<'_>,
+    evaluate: impl Fn(&T, &mut Frame<'_>) -> Evaluated,
+) -> Evaluated {
+    let mut built = BTreeMap::new();
+    for (key, value) in entries {
+        built.insert(evaluate(key, frame)?, evaluate(value, frame)?);
+    }
+    Ok(Value::map(built))
+}
+
+pub(crate) fn field_of(record: &Value, name: Sym) -> Evaluated {
+    record
+        .field(name)
+        .cloned()
+        .ok_or_else(|| wrong_or_null(record))
+}
+
+pub(crate) fn fields_of(record: Value) -> Result<Vec<(Sym, Value)>, Fault> {
+    match record {
+        Value::Record(fields) => Ok(Arc::unwrap_or_clone(fields)),
+        other => Err(wrong_or_null(&other)),
+    }
+}
+
+pub(crate) fn changed(mut fields: Vec<(Sym, Value)>, changes: Vec<(Sym, Value)>) -> Value {
+    for (name, value) in changes {
         match fields.iter_mut().find(|(key, _)| *key == name) {
             Some((_, place)) => *place = value,
             None => fields.push((name, value)),
         }
     }
-    Ok(Value::record(fields))
+    Value::record(fields)
 }
 
-fn members(source: Value) -> Result<Vec<Value>, Fault> {
-    match source {
-        Value::Set(items) => Ok(items.iter().cloned().collect()),
-        Value::Seq(items) => Ok(Arc::unwrap_or_clone(items)),
-        other => Err(wrong_or_null(&other)),
+pub(crate) struct Test<'b, B> {
+    pub(crate) sweep: Sweep,
+    pub(crate) shelf: Shelf,
+    pub(crate) slot: usize,
+    pub(crate) body: &'b B,
+    pub(crate) unit: u64,
+}
+
+impl<B> Test<'_, B> {
+    pub(crate) fn over(
+        &self,
+        collection: &Value,
+        frame: &mut Frame<'_>,
+        judge: impl Fn(&B, &mut Frame<'_>) -> Result<bool, Fault>,
+    ) -> Evaluated {
+        match collection {
+            Value::Set(items) => self.through(items.iter(), frame, judge),
+            Value::Seq(items) => self.through(items.iter(), frame, judge),
+            other => Err(wrong_or_null(other)),
+        }
+    }
+
+    fn through<'v>(
+        &self,
+        items: impl Iterator<Item = &'v Value>,
+        frame: &mut Frame<'_>,
+        judge: impl Fn(&B, &mut Frame<'_>) -> Result<bool, Fault>,
+    ) -> Evaluated {
+        let mut kept = Vec::new();
+        for item in items {
+            if frame.out_of_time() {
+                return Err(Fault::Stopped);
+            }
+            frame.write(self.unit, self.slot, item.clone());
+            let passed = judge(self.body, frame)?;
+            match self.sweep {
+                Sweep::Every if !passed => return Ok(Value::Bool(false)),
+                Sweep::Some if passed => return Ok(Value::Bool(true)),
+                Sweep::Filter if passed => kept.push(item.clone()),
+                Sweep::Every | Sweep::Some | Sweep::Filter => {}
+            }
+        }
+        Ok(self.gathered(kept))
+    }
+
+    fn gathered(&self, kept: Vec<Value>) -> Value {
+        match (self.sweep, self.shelf) {
+            (Sweep::Every, _) => Value::Bool(true),
+            (Sweep::Some, _) => Value::Bool(false),
+            (Sweep::Filter, Shelf::Set) => Value::set(kept.into_iter().collect()),
+            (Sweep::Filter, Shelf::Seq) => Value::seq(kept),
+        }
     }
 }
 
-fn sweep_over(
-    sweep: Sweep,
-    shelf: Shelf,
-    slot: usize,
-    items: Vec<Value>,
-    body: &Expr,
+pub(crate) fn applied<T>(
+    op: Op,
+    arguments: &[T],
     frame: &mut Frame<'_>,
+    evaluate: impl Fn(&T, &mut Frame<'_>) -> Evaluated,
 ) -> Evaluated {
-    let mut kept = Vec::new();
-    for item in items {
-        if frame.out_of_time() {
-            return Err(Fault::Stopped);
-        }
-        frame.put(slot, item.clone());
-        let passed = truth(body, frame)?;
-        match sweep {
-            Sweep::Every if !passed => return Ok(Value::Bool(false)),
-            Sweep::Some if passed => return Ok(Value::Bool(true)),
-            Sweep::Filter if passed => kept.push(item),
-            Sweep::Every | Sweep::Some | Sweep::Filter => {}
-        }
+    let mut remaining = arguments.iter();
+    let first = match remaining.next() {
+        Some(argument) => evaluate(argument, frame)?,
+        None => return Err(Fault::WrongKind),
+    };
+    let second = remaining
+        .next()
+        .map(|argument| evaluate(argument, frame))
+        .transpose()?;
+    let third = remaining
+        .next()
+        .map(|argument| evaluate(argument, frame))
+        .transpose()?;
+    for argument in remaining {
+        evaluate(argument, frame)?;
     }
-    Ok(match (sweep, shelf) {
-        (Sweep::Every, _) => Value::Bool(true),
-        (Sweep::Some, _) => Value::Bool(false),
-        (Sweep::Filter, Shelf::Set) => Value::set(kept.into_iter().collect()),
-        (Sweep::Filter, Shelf::Seq) => Value::seq(kept),
-    })
-}
-
-fn apply(op: Op, arguments: &[Expr], frame: &mut Frame<'_>) -> Evaluated {
-    let mut values = each(arguments, frame)?.into_iter();
-    let first = values.next().ok_or(Fault::WrongKind)?;
-    let second = values.next();
-    let third = values.next();
     match op {
         Op::Not => Ok(Value::Bool(!as_bool(&first)?)),
         Op::Negate => as_int(&first)?
@@ -274,22 +384,21 @@ fn apply(op: Op, arguments: &[Expr], frame: &mut Frame<'_>) -> Evaluated {
             .ok_or(Fault::Overflow),
         Op::Unwrap if first == Value::Null => Err(Fault::NullRead),
         Op::SomeOf | Op::Unwrap => Ok(first),
-        Op::Safe if as_int(&first)?.unsigned_abs() <= MOST_SAFE_INTEGER.unsigned_abs() => Ok(first),
+        Op::Safe if is_safe(as_int(&first)?) => Ok(first),
         Op::Safe => Err(Fault::Overflow),
         Op::Fit(ty) if ty.holds(as_int(&first)?) => Ok(first),
         Op::Fit(ty) => Err(Fault::Outside(ty)),
         Op::Equal => Ok(Value::Bool(first == second.ok_or(Fault::WrongKind)?)),
         Op::Differ => Ok(Value::Bool(first != second.ok_or(Fault::WrongKind)?)),
-        Op::Order(order) => compare(order, &first, second.as_ref()),
+        Op::Order(order) => {
+            let (left, right) = int_pair(&first, second.as_ref())?;
+            Ok(Value::Bool(compare(order, left, right)))
+        }
         Op::Math(math) => {
-            let answer = arithmetic(math, &first, second.as_ref());
-            let wide = match &answer {
-                Ok(Value::Int(number)) => i32::try_from(*number).is_err(),
-                Err(Fault::Overflow) => true,
-                _ => false,
-            };
-            frame.beyond_32_bits |= wide;
-            answer
+            let answer = int_pair(&first, second.as_ref())
+                .and_then(|(left, right)| arithmetic(math, left, right));
+            frame.note(&answer);
+            answer.map(Value::Int)
         }
         Op::Set(set_op) => on_set(set_op, first, second),
         Op::Map(map_op) => on_map(map_op, first, second, third),
@@ -297,7 +406,7 @@ fn apply(op: Op, arguments: &[Expr], frame: &mut Frame<'_>) -> Evaluated {
     }
 }
 
-fn wrong_or_null(value: &Value) -> Fault {
+pub(crate) fn wrong_or_null(value: &Value) -> Fault {
     if *value == Value::Null {
         Fault::NullRead
     } else {
@@ -305,7 +414,7 @@ fn wrong_or_null(value: &Value) -> Fault {
     }
 }
 
-fn as_bool(value: &Value) -> Result<bool, Fault> {
+pub(crate) fn as_bool(value: &Value) -> Result<bool, Fault> {
     let Value::Bool(flag) = value else {
         return Err(wrong_or_null(value));
     };
@@ -317,6 +426,27 @@ fn as_int(value: &Value) -> Result<i64, Fault> {
         return Err(wrong_or_null(value));
     };
     Ok(*number)
+}
+
+fn set_in(value: &Value) -> Result<&BTreeSet<Value>, Fault> {
+    let Value::Set(shared) = value else {
+        return Err(wrong_or_null(value));
+    };
+    Ok(shared)
+}
+
+fn map_in(value: &Value) -> Result<&BTreeMap<Value, Value>, Fault> {
+    let Value::Map(shared) = value else {
+        return Err(wrong_or_null(value));
+    };
+    Ok(shared)
+}
+
+fn seq_in(value: &Value) -> Result<&[Value], Fault> {
+    let Value::Seq(shared) = value else {
+        return Err(wrong_or_null(value));
+    };
+    Ok(shared)
 }
 
 fn as_set(value: Value) -> Result<BTreeSet<Value>, Fault> {
@@ -344,18 +474,20 @@ fn int_pair(first: &Value, second: Option<&Value>) -> Result<(i64, i64), Fault> 
     Ok((as_int(first)?, as_int(second.ok_or(Fault::WrongKind)?)?))
 }
 
-fn compare(order: Order, first: &Value, second: Option<&Value>) -> Evaluated {
-    let (left, right) = int_pair(first, second)?;
-    Ok(Value::Bool(match order {
+pub(crate) fn compare(order: Order, left: i64, right: i64) -> bool {
+    match order {
         Order::Less => left < right,
         Order::LessOrEqual => left <= right,
         Order::Greater => left > right,
         Order::GreaterOrEqual => left >= right,
-    }))
+    }
 }
 
-fn arithmetic(math: Math, first: &Value, second: Option<&Value>) -> Evaluated {
-    let (left, right) = int_pair(first, second)?;
+pub(crate) fn is_safe(number: i64) -> bool {
+    number.unsigned_abs() <= MOST_SAFE_INTEGER.unsigned_abs()
+}
+
+pub(crate) fn arithmetic(math: Math, left: i64, right: i64) -> Result<i64, Fault> {
     let answer = match math {
         Math::Add => left.checked_add(right),
         Math::Subtract => left.checked_sub(right),
@@ -373,7 +505,7 @@ fn arithmetic(math: Math, first: &Value, second: Option<&Value>) -> Evaluated {
             left.checked_div(right)
         }
     };
-    answer.map(Value::Int).ok_or(Fault::Overflow)
+    answer.ok_or(Fault::Overflow)
 }
 
 fn size_of(count: usize) -> Evaluated {
@@ -387,36 +519,47 @@ fn needed(argument: Option<Value>) -> Evaluated {
 }
 
 fn on_set(op: SetOp, first: Value, second: Option<Value>) -> Evaluated {
-    let mut items = as_set(first)?;
+    let items = set_in(&first)?;
     match op {
         SetOp::Size => size_of(items.len()),
         SetOp::Has => Ok(Value::Bool(items.contains(&needed(second)?))),
         SetOp::Add => {
-            items.insert(needed(second)?);
+            let item = needed(second)?;
+            let mut items = as_set(first)?;
+            items.insert(item);
             Ok(Value::set(items))
         }
         SetOp::Delete => {
-            items.remove(&needed(second)?);
+            let item = needed(second)?;
+            let mut items = as_set(first)?;
+            items.remove(&item);
             Ok(Value::set(items))
         }
         SetOp::Union => {
-            let other = as_set(needed(second)?)?;
-            Ok(Value::set(items.union(&other).cloned().collect()))
+            let other = needed(second)?;
+            Ok(Value::set(items.union(set_in(&other)?).cloned().collect()))
         }
         SetOp::Intersect => {
-            let other = as_set(needed(second)?)?;
-            Ok(Value::set(items.intersection(&other).cloned().collect()))
+            let other = needed(second)?;
+            Ok(Value::set(
+                items.intersection(set_in(&other)?).cloned().collect(),
+            ))
         }
         SetOp::Subtract => {
-            let other = as_set(needed(second)?)?;
-            Ok(Value::set(items.difference(&other).cloned().collect()))
+            let other = needed(second)?;
+            Ok(Value::set(
+                items.difference(set_in(&other)?).cloned().collect(),
+            ))
         }
-        SetOp::IsSubset => Ok(Value::Bool(items.is_subset(&as_set(needed(second)?)?))),
+        SetOp::IsSubset => {
+            let other = needed(second)?;
+            Ok(Value::Bool(items.is_subset(set_in(&other)?)))
+        }
     }
 }
 
 fn on_map(op: MapOp, first: Value, second: Option<Value>, third: Option<Value>) -> Evaluated {
-    let mut entries = as_map(first)?;
+    let entries = map_in(&first)?;
     match op {
         MapOp::Size => size_of(entries.len()),
         MapOp::Keys => Ok(Value::set(entries.keys().cloned().collect())),
@@ -426,24 +569,30 @@ fn on_map(op: MapOp, first: Value, second: Option<Value>, third: Option<Value>) 
             .cloned()
             .unwrap_or(Value::Null)),
         MapOp::Delete => {
-            entries.remove(&needed(second)?);
+            let key = needed(second)?;
+            let mut entries = as_map(first)?;
+            entries.remove(&key);
             Ok(Value::map(entries))
         }
         MapOp::Set => {
-            entries.insert(needed(second)?, needed(third)?);
+            let key = needed(second)?;
+            let value = needed(third)?;
+            let mut entries = as_map(first)?;
+            entries.insert(key, value);
             Ok(Value::map(entries))
         }
     }
 }
 
 fn on_seq(op: SeqOp, first: Value, second: Option<Value>) -> Evaluated {
-    let mut items = as_seq(first)?;
+    let items = seq_in(&first)?;
     match op {
         SeqOp::Size => size_of(items.len()),
         SeqOp::First => Ok(items.first().cloned().unwrap_or(Value::Null)),
         SeqOp::Last => Ok(items.last().cloned().unwrap_or(Value::Null)),
-        SeqOp::Shift => Ok(Value::seq(items.into_iter().skip(1).collect())),
+        SeqOp::Shift => Ok(Value::seq(items.iter().skip(1).cloned().collect())),
         SeqOp::Pop => {
+            let mut items = as_seq(first)?;
             items.pop();
             Ok(Value::seq(items))
         }
@@ -455,7 +604,9 @@ fn on_seq(op: SeqOp, first: Value, second: Option<Value>) -> Evaluated {
             Ok(found.cloned().unwrap_or(Value::Null))
         }
         SeqOp::Push => {
-            items.push(needed(second)?);
+            let item = needed(second)?;
+            let mut items = as_seq(first)?;
+            items.push(item);
             Ok(Value::seq(items))
         }
         SeqOp::Includes => Ok(Value::Bool(items.contains(&needed(second)?))),

@@ -1,5 +1,5 @@
 use earnest_check::{Limits, Named, Outcome, Path, explore};
-use earnest_ir::{Action, End, Expr, Field, Input, Math, Model, Op, Order, Rule, View};
+use earnest_ir::{Action, Code, End, Expr, Field, Input, Math, Model, Op, Order, Rule, View};
 use earnest_value::{Domain, Symbols, Value};
 
 pub(crate) struct Sketch {
@@ -81,8 +81,11 @@ impl Sketch {
             line: 1,
             slots: inputs.len(),
             inputs,
-            guard,
-            updates: changed,
+            guard: guard.into(),
+            updates: changed
+                .into_iter()
+                .map(|update| update.map(Code::new))
+                .collect(),
         });
     }
 
@@ -92,7 +95,7 @@ impl Sketch {
             says: format!("{id} always"),
             line: 1,
             text: String::new(),
-            holds,
+            holds: holds.into(),
             slots: 0,
         });
     }
@@ -101,7 +104,7 @@ impl Sketch {
         self.ends.push(End {
             id: id.to_owned(),
             says: format!("{id} is reached"),
-            when,
+            when: when.into(),
             slots: 0,
         });
     }

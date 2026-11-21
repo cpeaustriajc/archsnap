@@ -1,7 +1,7 @@
 use crate::wellformed::assert_well_formed;
 use earnest_ir::{
-    Action, End, Expr, Field, Input, MapOp, Math, Model, Op, Order, Rule, SeqOp, SetOp, Shelf,
-    Sweep, View,
+    Action, Code, End, Expr, Field, Input, MapOp, Math, Model, Op, Order, Rule, SeqOp, SetOp,
+    Shelf, Sweep, View,
 };
 use earnest_tla::write;
 use earnest_value::{Domain, Sym, Symbols, Value};
@@ -252,8 +252,11 @@ fn action() -> BoxedStrategy<Action> {
             label: String::new(),
             line: 1,
             inputs,
-            guard,
-            updates,
+            guard: guard.into(),
+            updates: updates
+                .into_iter()
+                .map(|update| update.map(Code::new))
+                .collect(),
             slots: 5,
         })
         .boxed()
@@ -281,7 +284,7 @@ fn model() -> BoxedStrategy<Model> {
                     says: String::new(),
                     line: 1,
                     text: String::new(),
-                    holds,
+                    holds: holds.into(),
                     slots: 5,
                 })
                 .collect(),
@@ -290,7 +293,7 @@ fn model() -> BoxedStrategy<Model> {
                 .map(|(id, when)| End {
                     id,
                     says: String::new(),
-                    when,
+                    when: when.into(),
                     slots: 5,
                 })
                 .collect(),

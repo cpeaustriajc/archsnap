@@ -384,7 +384,7 @@ Action_set ==
 #[test]
 fn an_update_past_the_last_field_is_left_out_as_the_engine_ignores_it() {
     let mut model = counter().model();
-    model.actions[0].updates.push(Some(int(9)));
+    model.actions[0].updates.push(Some(int(9).into()));
     let module = earnest_tla::write(&model).module;
     assert!(
         module.contains("    THEN /\\ count' = (count + 1)\n    ELSE FALSE\n"),

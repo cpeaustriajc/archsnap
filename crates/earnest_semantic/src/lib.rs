@@ -19,7 +19,9 @@ use earnest_ast::{
     RuleDraft, Shape, ShapeKind, TOO_DEEP, TemplatePiece, Term, TermKind,
 };
 use earnest_diagnostics::{Place, Problem};
-use earnest_ir::{Action, End, Expr, Field, Frame, Input, Label, Model, Piece, Rule, View, eval};
+use earnest_ir::{
+    Action, Code, End, Expr, Field, Frame, Input, Label, Model, Piece, Rule, View, eval,
+};
 use earnest_value::{Domain, MOST_VALUES_LISTED, Symbols, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use types::{Binding, Scope, Type, Typed};
@@ -306,13 +308,22 @@ impl Lowerer<'_> {
         };
         self.enter(&draft.change, &mut scope)?;
         let updates = self.changes(&draft.change.term, &mut scope)?;
+        let changed: Vec<bool> = updates.iter().map(Option::is_some).collect();
+        let mut prepared =
+            Code::together(std::iter::once(guard).chain(updates.into_iter().flatten())).into_iter();
+        let guard = prepared
+            .next()
+            .expect("the guard is prepared first, before the updates");
         Ok(Action {
             id: draft.id.clone(),
             label: draft.label.clone(),
             line: draft.place.line,
             inputs,
             guard,
-            updates,
+            updates: changed
+                .into_iter()
+                .map(|present| if present { prepared.next() } else { None })
+                .collect(),
             slots: scope.slots,
         })
     }
@@ -486,7 +497,7 @@ impl Lowerer<'_> {
             says: draft.says.clone(),
             line: draft.place.line,
             text: draft.text.clone(),
-            holds,
+            holds: Code::new(holds),
             slots: scope.slots,
         })
     }
@@ -498,7 +509,7 @@ impl Lowerer<'_> {
         Ok(End {
             id: draft.id.clone(),
             says: draft.says.clone(),
-            when,
+            when: Code::new(when),
             slots: scope.slots,
         })
     }
@@ -528,7 +539,9 @@ impl Lowerer<'_> {
             let (feature, why) = match (&typed.ty, how) {
                 (Type::Bool | Type::Int(_), Shown::Display | Shown::Debug)
                 | (Type::Text, Shown::Display | Shown::Owned)
-                | (Type::Variant(_), Shown::Debug) => return Ok(Piece::Shown(typed.expr)),
+                | (Type::Variant(_), Shown::Debug) => {
+                    return Ok(Piece::Shown(Code::new(typed.expr)));
+                }
                 (Type::Bool | Type::Int(_), Shown::Owned) => (
                     "`.to_owned()`",
                     "`.to_owned()` of a boolean or a number is that boolean or number, not a \
@@ -556,7 +569,7 @@ impl Lowerer<'_> {
             };
             return Err(self.stop(term.place, feature, why));
         }
-        Ok(Piece::Shown(typed.expr))
+        Ok(Piece::Shown(Code::new(typed.expr)))
     }
 
     fn piece(&mut self, part: &TemplatePiece, place: Place, scope: &mut Scope) -> Lowering<Piece> {

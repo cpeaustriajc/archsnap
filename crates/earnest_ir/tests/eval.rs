@@ -1,16 +1,77 @@
 //! Every operation of the expression language gives the value its definition says, and every
-//! fault is reported as a fault.
+//! fault is reported as a fault. Each case is evaluated by the reference walk and by the
+//! prepared [`Code`], which must agree on the value, the fault and the effects on the frame.
 
 use earnest_ir::{
-    Expr, Fault, Frame, MapOp, Math, Op, Order, SeqOp, SetOp, Shelf, Sweep, eval, truth,
+    Action, Code, Expr, Fault, Frame, Input, MapOp, Math, Op, Order, SeqOp, SetOp, Shelf, Sweep,
+    eval, truth,
 };
-use earnest_value::{IntType, MOST_SAFE_INTEGER, Symbols, Value};
+use earnest_value::{Domain, IntType, MOST_SAFE_INTEGER, Sym, Symbols, Value};
+use proptest::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 const SLOTS: usize = 4;
 
+struct Ran<T> {
+    answer: Result<T, Fault>,
+    beyond_32_bits: bool,
+    locals: Vec<Result<Value, Fault>>,
+}
+
+fn ran<T>(
+    state: &[Value],
+    locals: &[Value],
+    evaluate: impl FnOnce(&mut Frame<'_>) -> Result<T, Fault>,
+) -> Ran<T> {
+    let mut frame = Frame::new(state, SLOTS);
+    for (slot, value) in locals.iter().enumerate() {
+        frame.put(slot, value.clone());
+    }
+    let answer = evaluate(&mut frame);
+    Ran {
+        answer,
+        beyond_32_bits: frame.computed_beyond_32_bits(),
+        locals: (0..SLOTS)
+            .map(|slot| eval(&Expr::Local(slot), &mut frame))
+            .collect(),
+    }
+}
+
+fn agreed<T: PartialEq + std::fmt::Debug>(reference: Ran<T>, prepared: &Ran<T>) -> Ran<T> {
+    assert_eq!(reference.answer, prepared.answer, "the same value or fault");
+    assert_eq!(
+        reference.beyond_32_bits, prepared.beyond_32_bits,
+        "the same mark for numbers beyond 32 bits"
+    );
+    assert_eq!(
+        reference.locals, prepared.locals,
+        "the same slots afterwards"
+    );
+    reference
+}
+
+fn both_values(state: &[Value], locals: &[Value], expr: &Expr) -> Ran<Value> {
+    let code = Code::new(expr.clone());
+    agreed(
+        ran(state, locals, |frame| eval(expr, frame)),
+        &ran(state, locals, |frame| code.eval(frame)),
+    )
+}
+
+fn both_truths(state: &[Value], locals: &[Value], expr: &Expr) -> Ran<bool> {
+    let code = Code::new(expr.clone());
+    agreed(
+        ran(state, locals, |frame| truth(expr, frame)),
+        &ran(state, locals, |frame| code.truth(frame)),
+    )
+}
+
 fn value_in(state: &[Value], expr: &Expr) -> Result<Value, Fault> {
-    eval(expr, &mut Frame::new(state, SLOTS))
+    both_values(state, &[], expr).answer
+}
+
+fn condition(expr: &Expr) -> Result<bool, Fault> {
+    both_truths(&[], &[], expr).answer
 }
 
 fn value_of(expr: &Expr) -> Result<Value, Fault> {
@@ -707,12 +768,11 @@ fn a_test_that_does_not_give_a_boolean_is_a_fault() {
 
 #[test]
 fn a_condition_is_true_or_false_and_anything_else_is_a_fault() {
-    let mut frame = Frame::new(&[], SLOTS);
-    assert_eq!(truth(&yes(), &mut frame), Ok(true));
-    assert_eq!(truth(&no(), &mut frame), Ok(false));
-    assert_eq!(truth(&int(1), &mut frame), Err(Fault::WrongKind));
-    assert_eq!(truth(&null(), &mut frame), Err(Fault::NullRead));
-    assert_eq!(truth(&faulting(), &mut frame), Err(Fault::NullRead));
+    assert_eq!(condition(&yes()), Ok(true));
+    assert_eq!(condition(&no()), Ok(false));
+    assert_eq!(condition(&int(1)), Err(Fault::WrongKind));
+    assert_eq!(condition(&null()), Err(Fault::NullRead));
+    assert_eq!(condition(&faulting()), Err(Fault::NullRead));
 }
 
 #[test]
@@ -821,4 +881,605 @@ fn a_number_past_the_safe_integers_is_an_overflow_when_it_must_be_safe() {
         Err(Fault::WrongKind),
         "only a number can be safe"
     );
+}
+
+fn overflowing() -> Expr {
+    apply(Op::Math(Math::Add), &[int(i64::MAX), int(1)])
+}
+
+#[test]
+fn every_argument_is_evaluated_before_the_kind_of_any_is_checked() {
+    let compared = apply(Op::Order(Order::Less), &[null(), overflowing()]);
+    assert_eq!(value_of(&compared), Err(Fault::Overflow));
+    let summed = apply(Op::Math(Math::Add), &[yes(), overflowing()]);
+    assert_eq!(value_of(&summed), Err(Fault::Overflow));
+    let made_safe = apply(Op::Safe, &[apply(Op::Unwrap, &[null()])]);
+    assert_eq!(value_of(&made_safe), Err(Fault::NullRead));
+}
+
+#[test]
+fn the_kind_of_the_first_argument_is_checked_before_the_second() {
+    let null_first = apply(Op::Order(Order::Less), &[null(), yes()]);
+    assert_eq!(value_of(&null_first), Err(Fault::NullRead));
+    let wrong_first = apply(Op::Math(Math::Subtract), &[yes(), null()]);
+    assert_eq!(value_of(&wrong_first), Err(Fault::WrongKind));
+    let wrong_second = apply(Op::Math(Math::Remainder), &[int(-1), null()]);
+    assert_eq!(value_of(&wrong_second), Err(Fault::NullRead));
+}
+
+#[test]
+fn an_argument_past_those_an_operation_takes_is_still_evaluated() {
+    let extra = |op: Op, arguments: &[Expr]| value_of(&apply(op, arguments));
+    assert_eq!(extra(Op::Safe, &[int(1), faulting()]), Err(Fault::NullRead));
+    assert_eq!(
+        extra(Op::Math(Math::Add), &[int(1), int(2), faulting()]),
+        Err(Fault::NullRead)
+    );
+    assert_eq!(
+        extra(Op::Order(Order::Less), &[int(1), int(2), faulting()]),
+        Err(Fault::NullRead)
+    );
+    assert_eq!(extra(Op::Not, &[yes(), faulting()]), Err(Fault::NullRead));
+    assert_eq!(extra(Op::Equal, &[int(1), int(1), int(2)]), YES);
+    assert_eq!(
+        extra(Op::Math(Math::Add), &[int(1), int(2), int(3)]),
+        Ok(Value::Int(3))
+    );
+}
+
+#[test]
+fn a_missing_field_is_malformed_before_any_later_argument_is_evaluated() {
+    let compared = apply(Op::Order(Order::Less), &[Expr::Field(9), overflowing()]);
+    assert_eq!(value_in(&ints(&[1]), &compared), Err(Fault::WrongKind));
+    let equal = apply(Op::Equal, &[Expr::Local(9), overflowing()]);
+    assert_eq!(value_in(&ints(&[1]), &equal), Err(Fault::WrongKind));
+}
+
+#[test]
+fn values_of_different_kinds_are_unequal_and_never_a_fault() {
+    let state = vec![Value::Null, Value::Bool(true), Value::Int(4)];
+    let equal = |left: Expr, right: Expr| value_in(&state, &apply(Op::Equal, &[left, right]));
+    assert_eq!(equal(Expr::Field(0), int(0)), NO);
+    assert_eq!(equal(int(1), Expr::Field(1)), NO);
+    assert_eq!(equal(Expr::Field(2), int(4)), YES);
+    assert_eq!(equal(int(4), Expr::Field(2)), YES);
+    assert_eq!(equal(Expr::Field(0), null()), YES);
+    assert_eq!(equal(Expr::Field(1), yes()), YES);
+    assert_eq!(equal(Expr::Field(1), overflowing()), Err(Fault::Overflow));
+    let differ = apply(Op::Differ, &[Expr::Field(0), int(0)]);
+    assert_eq!(value_in(&state, &differ), YES);
+}
+
+fn wide_after(expr: &Expr) -> (Result<Value, Fault>, bool) {
+    let ran = both_values(&[], &[], expr);
+    (ran.answer, ran.beyond_32_bits)
+}
+
+#[test]
+fn only_arithmetic_beyond_32_bits_or_too_large_to_hold_is_marked() {
+    let above_32_bits = i64::from(i32::MAX) + 1;
+    let sum = |left: i64, right: i64| apply(Op::Math(Math::Add), &[int(left), int(right)]);
+    assert_eq!(
+        wide_after(&sum(i64::from(i32::MAX), 0)),
+        (Ok(Value::Int(i64::from(i32::MAX))), false)
+    );
+    assert_eq!(
+        wide_after(&sum(i64::from(i32::MAX), 1)),
+        (Ok(Value::Int(above_32_bits)), true)
+    );
+    assert_eq!(wide_after(&overflowing()), (Err(Fault::Overflow), true));
+    let unsafe_sum = apply(Op::Safe, &[sum(MOST_SAFE_INTEGER, 1)]);
+    assert_eq!(wide_after(&unsafe_sum), (Err(Fault::Overflow), true));
+    let unfit = apply(Op::Fit(IntType::U8), &[sum(above_32_bits, 0)]);
+    assert_eq!(wide_after(&unfit), (Err(Fault::Outside(IntType::U8)), true));
+    let remainder = apply(Op::Math(Math::Remainder), &[int(above_32_bits), int(0)]);
+    assert_eq!(wide_after(&remainder), (Err(Fault::Remainder), false));
+    let kind = apply(Op::Math(Math::Add), &[null(), int(above_32_bits)]);
+    assert_eq!(wide_after(&kind), (Err(Fault::NullRead), false));
+    let negated = apply(Op::Negate, &[int(above_32_bits)]);
+    assert_eq!(
+        wide_after(&negated),
+        (Ok(Value::Int(-above_32_bits)), false)
+    );
+    let compared = apply(Op::Order(Order::Less), &[int(above_32_bits), int(0)]);
+    assert_eq!(wide_after(&compared), (NO, false));
+}
+
+#[test]
+fn a_condition_that_chooses_a_value_that_is_not_a_boolean_is_a_fault() {
+    let chosen = Expr::Choose(Box::new(yes()), Box::new(int(1)), Box::new(no()));
+    assert_eq!(condition(&chosen), Err(Fault::WrongKind));
+    let negated = apply(Op::Not, &[null()]);
+    assert_eq!(condition(&negated), Err(Fault::NullRead));
+    let and = Expr::And(Box::new(int(1)), Box::new(faulting()));
+    assert_eq!(condition(&and), Err(Fault::WrongKind));
+}
+
+const FIELDS: usize = 3;
+
+fn edge_number() -> impl Strategy<Value = i64> {
+    prop_oneof![
+        -3_i64..12,
+        Just(i64::MAX),
+        Just(i64::MIN),
+        Just(MOST_SAFE_INTEGER),
+        Just(-MOST_SAFE_INTEGER - 1),
+        Just(i64::from(i32::MAX)),
+        Just(i64::from(i32::MAX) + 1),
+        Just(255),
+        Just(256),
+    ]
+}
+
+const NAMES: usize = 3;
+
+fn any_name() -> impl Strategy<Value = Sym> {
+    (0..NAMES).prop_map(|position| {
+        let mut symbols = Symbols::default();
+        let mut named = symbols.intern("a");
+        for text in ["b", "c"].iter().take(position) {
+            named = symbols.intern(text);
+        }
+        named
+    })
+}
+
+fn any_value() -> impl Strategy<Value = Value> {
+    let plain = prop_oneof![
+        3 => edge_number().prop_map(Value::Int),
+        1 => any::<bool>().prop_map(Value::Bool),
+        1 => Just(Value::Null),
+        1 => any_name().prop_map(Value::Str),
+    ];
+    plain.prop_recursive(2, 6, 3, |inner| {
+        prop_oneof![
+            1 => proptest::collection::vec(inner.clone(), 0..3).prop_map(Value::seq),
+            1 => proptest::collection::btree_set(inner.clone(), 0..3).prop_map(Value::set),
+            1 => proptest::collection::btree_map(inner.clone(), inner.clone(), 0..3)
+                .prop_map(Value::map),
+            2 => proptest::collection::btree_map(any_name(), inner, 0..4)
+                .prop_map(|fields| Value::record(fields.into_iter().collect())),
+        ]
+    })
+}
+
+fn any_op() -> impl Strategy<Value = Op> {
+    let set_ops = prop_oneof![
+        Just(SetOp::Has),
+        Just(SetOp::Add),
+        Just(SetOp::Delete),
+        Just(SetOp::Union),
+        Just(SetOp::Intersect),
+        Just(SetOp::Subtract),
+        Just(SetOp::IsSubset),
+        Just(SetOp::Size),
+    ];
+    let map_ops = prop_oneof![
+        Just(MapOp::Has),
+        Just(MapOp::Get),
+        Just(MapOp::Set),
+        Just(MapOp::Delete),
+        Just(MapOp::Size),
+        Just(MapOp::Keys),
+    ];
+    let sequence_ops = prop_oneof![
+        Just(SeqOp::Size),
+        Just(SeqOp::Get),
+        Just(SeqOp::First),
+        Just(SeqOp::Last),
+        Just(SeqOp::Push),
+        Just(SeqOp::Shift),
+        Just(SeqOp::Pop),
+        Just(SeqOp::Includes),
+    ];
+    prop_oneof![
+        2 => Just(Op::Not),
+        1 => Just(Op::Negate),
+        2 => Just(Op::SomeOf),
+        1 => Just(Op::Unwrap),
+        1 => Just(Op::Safe),
+        1 => Just(Op::Fit(IntType::U8)),
+        1 => Just(Op::Fit(IntType::I32)),
+        3 => Just(Op::Equal),
+        3 => Just(Op::Differ),
+        1 => Just(Op::Order(Order::Less)),
+        1 => Just(Op::Order(Order::LessOrEqual)),
+        1 => Just(Op::Order(Order::Greater)),
+        1 => Just(Op::Order(Order::GreaterOrEqual)),
+        1 => Just(Op::Math(Math::Add)),
+        1 => Just(Op::Math(Math::Subtract)),
+        1 => Just(Op::Math(Math::Multiply)),
+        1 => Just(Op::Math(Math::Remainder)),
+        1 => Just(Op::Math(Math::Divide)),
+        2 => set_ops.prop_map(Op::Set),
+        2 => map_ops.prop_map(Op::Map),
+        2 => sequence_ops.prop_map(Op::Seq),
+    ]
+}
+
+fn any_sweep() -> impl Strategy<Value = (Sweep, Shelf)> {
+    (
+        prop_oneof![Just(Sweep::Every), Just(Sweep::Some), Just(Sweep::Filter)],
+        prop_oneof![Just(Shelf::Set), Just(Shelf::Seq)],
+    )
+}
+
+fn any_expr() -> impl Strategy<Value = Expr> {
+    let leaf = prop_oneof![
+        2 => any_value().prop_map(Expr::Const),
+        2 => (0..FIELDS + 1).prop_map(Expr::Field),
+        3 => (0..SLOTS + 1).prop_map(Expr::Local),
+    ];
+    leaf.prop_recursive(5, 40, 4, |inner| {
+        let boxed = || inner.clone().prop_map(Box::new);
+        let named = || proptest::collection::vec((any_name(), inner.clone()), 0..4);
+        prop_oneof![
+            6 => (any_op(), proptest::collection::vec(inner.clone(), 0..4))
+                .prop_map(|(op, arguments)| Expr::Apply(op, arguments)),
+            2 => (boxed(), boxed()).prop_map(|(left, right)| Expr::And(left, right)),
+            2 => (boxed(), boxed()).prop_map(|(left, right)| Expr::Or(left, right)),
+            1 => (boxed(), boxed(), boxed()).prop_map(|(test, yes, no)| Expr::Choose(test, yes, no)),
+            2 => (0..SLOTS, boxed(), boxed())
+                .prop_map(|(slot, value, body)| Expr::Bind { slot, value, body }),
+            1 => (any_sweep(), 0..SLOTS, boxed(), boxed()).prop_map(
+                |((sweep, shelf), slot, source, body)| Expr::Sweep {
+                    sweep,
+                    shelf,
+                    slot,
+                    source,
+                    body,
+                },
+            ),
+            1 => proptest::collection::vec(inner.clone(), 0..3).prop_map(Expr::SeqOf),
+            1 => proptest::collection::vec(inner.clone(), 0..3).prop_map(Expr::SetOf),
+            1 => proptest::collection::vec((inner.clone(), inner.clone()), 0..3)
+                .prop_map(Expr::MapOf),
+            2 => named().prop_map(Expr::Record),
+            3 => (boxed(), any_name()).prop_map(|(record, name)| Expr::Get(record, name)),
+            1 => (boxed(), named()).prop_map(|(base, changes)| Expr::With(base, changes)),
+        ]
+    })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(4096))]
+
+    #[test]
+    fn the_prepared_form_agrees_with_the_reference_walk(
+        expr in any_expr(),
+        state in proptest::collection::vec(any_value(), FIELDS),
+        locals in proptest::collection::vec(any_value(), SLOTS),
+    ) {
+        both_values(&state, &locals, &expr);
+        both_truths(&state, &locals, &expr);
+    }
+}
+
+const CODES: usize = 4;
+const SHARED_BINDINGS: usize = 3;
+
+#[derive(Clone, Debug)]
+enum Step {
+    Value(usize),
+    Truth(usize),
+    Apart(usize),
+    Other(usize),
+    Put(usize, Value),
+}
+
+fn any_step() -> impl Strategy<Value = Step> {
+    prop_oneof![
+        3 => (0..CODES).prop_map(Step::Value),
+        3 => (0..CODES).prop_map(Step::Truth),
+        1 => (0..CODES).prop_map(Step::Apart),
+        1 => (0..CODES).prop_map(Step::Other),
+        1 => (0..SLOTS, any_value()).prop_map(|(slot, value)| Step::Put(slot, value)),
+    ]
+}
+
+fn wrapped(body: Expr, bindings: &[(usize, Expr)], chosen: &[bool]) -> Expr {
+    bindings
+        .iter()
+        .zip(chosen)
+        .rev()
+        .filter(|(_, wanted)| **wanted)
+        .fold(body, |inner, ((slot, value), _)| Expr::Bind {
+            slot: *slot,
+            value: Box::new(value.clone()),
+            body: Box::new(inner),
+        })
+}
+
+fn any_unit() -> impl Strategy<Value = Vec<Expr>> {
+    let bindings = proptest::collection::vec((0..SLOTS, any_expr()), 1..=SHARED_BINDINGS);
+    let parts = proptest::collection::vec(
+        (
+            any_expr(),
+            any_expr(),
+            proptest::collection::vec(any::<bool>(), SHARED_BINDINGS),
+            any::<bool>(),
+        ),
+        CODES,
+    );
+    (bindings, parts).prop_map(|(bindings, parts)| {
+        parts
+            .into_iter()
+            .map(|(body, test, chosen, behind_a_test)| {
+                let shared = wrapped(body, &bindings, &chosen);
+                if behind_a_test {
+                    Expr::Choose(Box::new(test.clone()), Box::new(shared), Box::new(test))
+                } else {
+                    shared
+                }
+            })
+            .collect()
+    })
+}
+
+fn slots_of(frame: &mut Frame<'_>) -> Vec<Result<Value, Fault>> {
+    (0..SLOTS)
+        .map(|slot| eval(&Expr::Local(slot), frame))
+        .collect()
+}
+
+struct Units<'e> {
+    exprs: &'e [Expr],
+    others: &'e [Expr],
+    together: Vec<Code>,
+    apart: Vec<Code>,
+    other: Vec<Code>,
+}
+
+impl Units<'_> {
+    fn chosen(&self, step: &Step) -> Option<(&Expr, &Code)> {
+        let (exprs, codes, at) = match step {
+            Step::Value(at) | Step::Truth(at) => (self.exprs, &self.together, at),
+            Step::Apart(at) => (self.exprs, &self.apart, at),
+            Step::Other(at) => (self.others, &self.other, at),
+            Step::Put(..) => return None,
+        };
+        Some((exprs.get(*at)?, codes.get(*at)?))
+    }
+}
+
+fn agreed_in_turn(
+    state: &[Value],
+    locals: &[Value],
+    (exprs, others): (&[Expr], &[Expr]),
+    steps: &[Step],
+) {
+    let units = Units {
+        exprs,
+        others,
+        together: Code::together(exprs.iter().cloned()),
+        apart: exprs.iter().cloned().map(Code::new).collect(),
+        other: Code::together(others.iter().cloned()),
+    };
+    let mut reference = Frame::new(state, SLOTS);
+    let mut prepared = Frame::new(state, SLOTS);
+    for (slot, value) in locals.iter().enumerate() {
+        reference.put(slot, value.clone());
+        prepared.put(slot, value.clone());
+    }
+    for step in steps {
+        if let Step::Put(slot, value) = step {
+            reference.put(*slot, value.clone());
+            prepared.put(*slot, value.clone());
+        } else if let Some((expr, code)) = units.chosen(step) {
+            if matches!(step, Step::Truth(_)) {
+                assert_eq!(
+                    truth(expr, &mut reference),
+                    code.truth(&mut prepared),
+                    "the same truth or fault at {step:?}"
+                );
+            } else {
+                assert_eq!(
+                    eval(expr, &mut reference),
+                    code.eval(&mut prepared),
+                    "the same value or fault at {step:?}"
+                );
+            }
+        }
+        assert_eq!(
+            reference.computed_beyond_32_bits(),
+            prepared.computed_beyond_32_bits(),
+            "the same mark for numbers beyond 32 bits after {step:?}"
+        );
+        assert_eq!(
+            slots_of(&mut reference),
+            slots_of(&mut prepared),
+            "the same slots after {step:?}"
+        );
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(4096))]
+
+    #[test]
+    fn codes_prepared_together_agree_with_the_reference_walk_in_any_order(
+        exprs in any_unit(),
+        others in any_unit(),
+        state in proptest::collection::vec(any_value(), FIELDS),
+        locals in proptest::collection::vec(any_value(), SLOTS),
+        steps in proptest::collection::vec(any_step(), 1..12),
+    ) {
+        agreed_in_turn(&state, &locals, (&exprs, &others), &steps);
+    }
+}
+
+const INPUT_SLOT: usize = 0;
+
+fn small_field() -> impl Strategy<Value = Value> {
+    prop_oneof![
+        3 => (0..2_i64).prop_map(Value::Int),
+        1 => Just(Value::Null),
+    ]
+}
+
+fn any_input_value() -> impl Strategy<Value = Value> {
+    prop_oneof![
+        6 => proptest::collection::btree_map(any_name(), small_field(), 1..=NAMES)
+            .prop_map(|fields| Value::record(fields.into_iter().collect())),
+        1 => small_field(),
+    ]
+}
+
+fn any_reading_expr() -> impl Strategy<Value = Expr> {
+    let leaf = prop_oneof![
+        2 => any_value().prop_map(Expr::Const),
+        2 => (0..FIELDS).prop_map(Expr::Field),
+        1 => (0..SLOTS).prop_map(Expr::Local),
+        6 => (0..SLOTS, any_name())
+            .prop_map(|(slot, name)| Expr::Get(Box::new(Expr::Local(slot)), name)),
+    ];
+    leaf.prop_recursive(4, 24, 3, |inner| {
+        let boxed = || inner.clone().prop_map(Box::new);
+        prop_oneof![
+            4 => (any_op(), proptest::collection::vec(inner.clone(), 1..3))
+                .prop_map(|(op, arguments)| Expr::Apply(op, arguments)),
+            2 => (boxed(), boxed()).prop_map(|(left, right)| Expr::And(left, right)),
+            1 => (boxed(), boxed(), boxed()).prop_map(|(test, yes, no)| Expr::Choose(test, yes, no)),
+            3 => (1..SLOTS, 0..SLOTS, boxed()).prop_map(|(slot, source, body)| Expr::Bind {
+                slot,
+                value: Box::new(Expr::Local(source)),
+                body,
+            }),
+            1 => (1..SLOTS, boxed(), boxed())
+                .prop_map(|(slot, value, body)| Expr::Bind { slot, value, body }),
+            2 => proptest::collection::vec((any_name(), inner.clone()), 1..3).prop_map(Expr::Record),
+        ]
+    })
+}
+
+const INPUT_SLOTS: [usize; 2] = [INPUT_SLOT, INPUT_SLOT + 1];
+
+fn reading_action(values: [Vec<Value>; 2], exprs: Vec<Expr>) -> Action {
+    let mut codes = Code::together(exprs).into_iter();
+    let guard = codes
+        .next()
+        .unwrap_or_else(|| Code::new(Expr::Const(Value::Bool(true))));
+    Action {
+        id: "act".to_owned(),
+        label: "acts".to_owned(),
+        line: 1,
+        inputs: INPUT_SLOTS
+            .into_iter()
+            .zip(values)
+            .enumerate()
+            .map(|(position, (slot, values))| Input {
+                name: format!("input{position}"),
+                slot,
+                domain: Domain::OneOf(values.clone()),
+                values,
+            })
+            .collect(),
+        guard,
+        updates: codes.map(Some).collect(),
+        slots: SLOTS,
+    }
+}
+
+type Answers = Vec<Result<Value, Fault>>;
+
+struct Walk {
+    answers: Vec<Option<Answers>>,
+    beyond_32_bits: bool,
+}
+
+fn combinations(action: &Action) -> Vec<Vec<usize>> {
+    let counts: Vec<usize> = action
+        .inputs
+        .iter()
+        .map(|input| input.values.len())
+        .collect();
+    let total: usize = counts.iter().product();
+    (0..total)
+        .map(|mut rest| {
+            counts
+                .iter()
+                .map(|count| {
+                    let digit = rest % count;
+                    rest /= count;
+                    digit
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn walked_in_turn(
+    action: &Action,
+    state: &[Value],
+    left_over: &[Value],
+    tried: impl Fn(&[usize]) -> bool,
+) -> Walk {
+    let mut frame = Frame::new(state, SLOTS);
+    for (slot, value) in left_over.iter().enumerate() {
+        frame.put(slot, value.clone());
+    }
+    let answers = combinations(action)
+        .into_iter()
+        .map(|digits| {
+            if !tried(&digits) {
+                return None;
+            }
+            for (input, digit) in action.inputs.iter().zip(&digits) {
+                if let Some(value) = input.values.get(*digit) {
+                    frame.put(input.slot, value.clone());
+                }
+            }
+            Some(
+                std::iter::once(&action.guard)
+                    .chain(action.updates.iter().flatten())
+                    .map(|code| eval(code.expr(), &mut frame))
+                    .collect(),
+            )
+        })
+        .collect();
+    Walk {
+        answers,
+        beyond_32_bits: frame.computed_beyond_32_bits(),
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(4096))]
+
+    #[test]
+    fn a_search_that_skips_values_not_told_apart_sees_the_same_answers(
+        first_values in proptest::collection::vec(any_input_value(), 1..6),
+        second_values in proptest::collection::vec(any_input_value(), 1..4),
+        exprs in proptest::collection::vec(any_reading_expr(), 1..4),
+        state in proptest::collection::vec(any_value(), FIELDS),
+        left_over in proptest::collection::vec(any_value(), SLOTS),
+    ) {
+        let action = reading_action([first_values, second_values], exprs);
+        let told = action.told_apart();
+        prop_assert_eq!(told.len(), action.inputs.len(), "one answer for each input");
+        for (apart, input) in told.iter().zip(&action.inputs) {
+            prop_assert_eq!(apart.len(), input.values.len(), "one answer for each value");
+            prop_assert!(apart.first().copied().unwrap_or(true), "the first value is always new");
+        }
+        let new_in_each = |digits: &[usize]| {
+            told.iter()
+                .zip(digits)
+                .all(|(apart, digit)| apart.get(*digit).copied().unwrap_or(true))
+        };
+        let every = walked_in_turn(&action, &state, &left_over, |_| true);
+        let skipping = walked_in_turn(&action, &state, &left_over, new_in_each);
+        prop_assert_eq!(
+            skipping.beyond_32_bits, every.beyond_32_bits,
+            "the state gets the same mark for numbers beyond 32 bits"
+        );
+        for (position, (all, skipped)) in every.answers.iter().zip(&skipping.answers).enumerate() {
+            match skipped {
+                Some(answers) => prop_assert_eq!(Some(answers), all.as_ref(), "combination {} answers as it does in the full walk", position),
+                None => prop_assert!(
+                    every.answers.iter().take(position).any(|earlier| earlier == all),
+                    "combination {} answers like no combination before it", position
+                ),
+            }
+        }
+    }
 }

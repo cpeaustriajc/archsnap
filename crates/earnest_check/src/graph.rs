@@ -1,5 +1,5 @@
 use crate::explore::{Note, Search};
-use earnest_ir::{Frame, Label, Piece, eval};
+use earnest_ir::{Frame, Label, Piece};
 use earnest_value::Value;
 use rustc_hash::FxHashMap;
 
@@ -66,7 +66,7 @@ impl Search<'_> {
         for piece in &label.pieces {
             match piece {
                 Piece::Text(plain) => text.push_str(plain),
-                Piece::Shown(expr) => match eval(expr, &mut frame) {
+                Piece::Shown(expr) => match expr.eval(&mut frame) {
                     Ok(value) => text.push_str(&self.model.symbols.plain(&value)),
                     Err(_) => text.push('?'),
                 },
@@ -100,7 +100,7 @@ impl Search<'_> {
 
     fn mark_node(&self, node: &mut Node, id: usize) {
         node.states = node.states.saturating_add(1);
-        node.start |= matches!(self.parents.get(id), Some(None));
+        node.start |= id < self.store.len() && self.store.parent(id).is_none();
         let Some(Note {
             end,
             stuck,
@@ -128,8 +128,10 @@ impl Search<'_> {
             ..Graph::default()
         };
         let mut places: FxHashMap<(Option<String>, String), usize> = FxHashMap::default();
-        let mut node_of = Vec::with_capacity(self.states.len());
-        for (id, state) in self.states.iter().enumerate() {
+        let mut node_of = Vec::with_capacity(self.store.len());
+        for id in 0..self.store.len() {
+            let state = self.store.state(id);
+            let state = state.as_slice();
             let label = view.state.as_ref().map_or_else(
                 || self.default_label(state),
                 |found| self.label(found, state),

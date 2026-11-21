@@ -3,7 +3,7 @@ use crate::build::{
     text,
 };
 use earnest_ast::{Binary, Draft};
-use earnest_ir::{Frame, Model, Rule, truth};
+use earnest_ir::{Frame, Model, Rule};
 use earnest_semantic::lower_with_earlier;
 
 fn tank(level: i64) -> Draft {
@@ -22,7 +22,9 @@ fn capped(max: i64) -> Draft {
 
 fn in_the_start_state(model: &Model, rule: &Rule) -> bool {
     let state = first_state(model);
-    truth(&rule.holds, &mut Frame::new(&state, rule.slots)).expect("the rule has a value")
+    rule.holds
+        .truth(&mut Frame::new(&state, rule.slots))
+        .expect("the rule has a value")
 }
 
 #[test]

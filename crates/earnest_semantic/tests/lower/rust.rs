@@ -486,7 +486,7 @@ fn an_action_computes_its_new_values_in_the_type_of_their_field() {
     let state = crate::build::first_state(&model);
     let mut frame = earnest_ir::Frame::new(&state, model.actions[0].slots);
     assert_eq!(
-        earnest_ir::eval(update, &mut frame),
+        update.eval(&mut frame),
         Err(Fault::Outside(IntType::U8)),
         "`0 - 1` is computed as the `u8` the field is"
     );

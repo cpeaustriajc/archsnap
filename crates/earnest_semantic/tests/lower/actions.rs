@@ -5,7 +5,7 @@ use crate::build::{
 };
 use earnest_ast::{ActionDraft, Binary, Draft, EndDraft, Shape, Term};
 use earnest_diagnostics::{Place, Problem};
-use earnest_ir::{Frame, Model, truth};
+use earnest_ir::{Frame, Model};
 use earnest_value::Value;
 
 fn press() -> Shape {
@@ -69,7 +69,10 @@ fn enabled(model: &Model, inputs: &[Value]) -> bool {
     for (each, value) in taken.inputs.iter().zip(inputs) {
         frame.put(each.slot, value.clone());
     }
-    truth(&taken.guard, &mut frame).expect("the guard has a value in the start state")
+    taken
+        .guard
+        .truth(&mut frame)
+        .expect("the guard has a value in the start state")
 }
 
 #[test]
@@ -282,7 +285,7 @@ fn an_end_keeps_its_id_and_sentence_and_its_condition_reads_the_state() {
     assert_eq!(end.says, "The item is in the cart");
     let state = first_state(&model);
     assert_eq!(
-        truth(&end.when, &mut Frame::new(&state, end.slots)),
+        end.when.truth(&mut Frame::new(&state, end.slots)),
         Ok(false)
     );
 }

@@ -2,10 +2,15 @@
 //!
 //! A [`Model`] is what `earnest_semantic` makes of a draft: fields with finite domains, and
 //! actions, rules and ends whose conditions are [`Expr`]s. An expression reads state fields by
-//! position and local values by slot, and [`eval`] gives its value in one state.
+//! position and local values by slot, and [`eval`] gives its value in one state. The model
+//! keeps each expression the search evaluates as a [`Code`], which gives the same answers faster.
 
+mod code;
 mod eval;
+mod parts;
+mod told;
 
+pub use code::Code;
 pub use eval::{Fault, Frame, eval, truth};
 
 use earnest_value::{Domain, IntType, Sym, Symbols, Value};
@@ -167,7 +172,8 @@ pub enum Shelf {
 /// An expression over one state.
 ///
 /// Evaluate it with [`eval`] in a [`Frame`] that holds the state and enough local slots for
-/// every `slot` the expression names.
+/// every `slot` the expression names. To evaluate it in many states, prepare it once as a
+/// [`Code`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Expr {
@@ -262,10 +268,10 @@ pub struct Action {
     /// The inputs, each in its own slot.
     pub inputs: Vec<Input>,
     /// Whether the action can happen in a state with given inputs. It must give a boolean.
-    pub guard: Expr,
+    pub guard: Code,
     /// The new value of each state field, by position in [`Model::fields`]. `None` keeps the
     /// field as it is, and so does a list that ends before the field's position.
-    pub updates: Vec<Option<Expr>>,
+    pub updates: Vec<Option<Code>>,
     /// How many local slots `guard` and `updates` need.
     pub slots: usize,
 }
@@ -282,7 +288,7 @@ pub struct Rule {
     /// The condition's source text, kept to show a rule change in the report.
     pub text: String,
     /// The condition. It must give a boolean.
-    pub holds: Expr,
+    pub holds: Code,
     /// How many local slots `holds` needs.
     pub slots: usize,
 }
@@ -295,7 +301,7 @@ pub struct End {
     /// The end's sentence.
     pub says: String,
     /// The condition. It must give a boolean.
-    pub when: Expr,
+    pub when: Code,
     /// How many local slots `when` needs.
     pub slots: usize,
 }
@@ -307,7 +313,7 @@ pub enum Piece {
     /// Text copied as it is.
     Text(String),
     /// An expression whose value is printed without quotes.
-    Shown(Expr),
+    Shown(Code),
 }
 
 /// A chart label computed from a state.

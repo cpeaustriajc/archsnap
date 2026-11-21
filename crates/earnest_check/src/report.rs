@@ -1,5 +1,5 @@
 use crate::expand::{Whence, chosen};
-use crate::explore::{Parent, Search};
+use crate::explore::Search;
 use crate::outcome::{
     Change, Finding, FindingKind, Named, Outcome, Path, RuleOutcome, Shown, Status, Step, Verdict,
 };
@@ -27,12 +27,15 @@ impl Search<'_> {
             .collect()
     }
 
-    fn step(&self, parent: Parent, before: &[Value], after: &[Value]) -> Option<Step> {
-        let action = self.model.actions.get(parent.action)?;
+    fn step(&self, from: usize, to: usize) -> Option<Step> {
+        let (position, input) = self.choice(from, to)?;
+        let before = self.store.state(from);
+        let after = self.store.state(to);
+        let action = self.model.actions.get(position)?;
         let input = action
             .inputs
             .iter()
-            .zip(chosen(action, parent.input))
+            .zip(chosen(action, input))
             .map(|(each, value)| {
                 Some(Named {
                     name: each.name.clone(),
@@ -44,7 +47,7 @@ impl Search<'_> {
             .model
             .fields
             .iter()
-            .zip(before.iter().zip(after))
+            .zip(before.iter().zip(&after))
             .filter(|(_, (old, new))| old != new)
             .map(|(field, (old, new))| Change {
                 field: field.name.clone(),
@@ -57,29 +60,27 @@ impl Search<'_> {
             label: action.label.clone(),
             input,
             changes,
-            state: self.named(after),
+            state: self.named(&after),
         })
     }
 
     fn path_to(&self, target: usize) -> Path {
         let mut chain = vec![target];
         let mut at = target;
-        while let Some(Some(parent)) = self.parents.get(at) {
-            chain.push(parent.state);
-            at = parent.state;
+        while let Some(parent) = self.store.parent(at) {
+            chain.push(parent);
+            at = parent;
         }
         chain.reverse();
         let start = chain
             .first()
-            .and_then(|id| self.states.get(*id))
-            .map(|state| self.named(state))
+            .map(|id| self.named(&self.store.state(*id)))
             .unwrap_or_default();
         let steps = chain
             .windows(2)
             .filter_map(|pair| {
                 let [from, to] = pair else { return None };
-                let parent = (*self.parents.get(*to)?)?;
-                self.step(parent, self.states.get(*from)?, self.states.get(*to)?)
+                self.step(*from, *to)
             })
             .collect();
         Path { start, steps }
@@ -165,7 +166,7 @@ impl Search<'_> {
         };
         Outcome {
             status,
-            states: self.states.len(),
+            states: self.store.len(),
             rules,
             findings,
             reason: self.reason.clone(),

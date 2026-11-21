@@ -212,7 +212,7 @@ pub fn write(model: &Model) -> Files {
         blocks.push(writer.action(action, defined));
     }
     for (end, defined) in model.ends.iter().zip(&ends) {
-        let when = writer.condition(&end.when);
+        let when = writer.condition(end.when.expr());
         let marked = match when.sound {
             Some(sound) => format!("((~{sound}) \\/ {})", when.text),
             None => when.text,
@@ -223,7 +223,7 @@ pub fn write(model: &Model) -> Files {
     blocks.push(steps(&actions));
     let mut exported = Vec::with_capacity(model.rules.len());
     for (rule, defined) in model.rules.iter().zip(rules) {
-        let holds = writer.condition(&rule.holds);
+        let holds = writer.condition(rule.holds.expr());
         let judged = holds.sound.map(|sound| {
             let judged = writer.names.claim(&format!("Judged_{}", rule.id));
             (judged, sound)
@@ -347,8 +347,8 @@ impl Writer<'_> {
             choices.push(format!("{name} \\in {}", set_of(&values)));
         }
         let mut needed = vec![IN_RANGE.to_owned()];
-        if !matches!(action.guard, Expr::Const(Value::Bool(true))) {
-            let allowed = self.scribe.expr(&action.guard, &mut scope);
+        if !matches!(action.guard.expr(), Expr::Const(Value::Bool(true))) {
+            let allowed = self.scribe.expr(action.guard.expr(), &mut scope);
             needed.extend(allowed.sound);
             needed.push(allowed.text);
         }
@@ -356,7 +356,7 @@ impl Writer<'_> {
         let mut kept = Vec::new();
         for (position, variable) in self.scribe.variables().to_vec().iter().enumerate() {
             if let Some(Some(update)) = action.updates.get(position) {
-                let next = self.scribe.expr(update, &mut scope);
+                let next = self.scribe.expr(update.expr(), &mut scope);
                 needed.extend(next.sound);
                 primed.push(format!("/\\ {}' = {}", variable.name, next.text));
             } else {

@@ -10,6 +10,7 @@ verify = true
 [dependencies]
 earnest_ir.workspace = true
 earnest_value.workspace = true
+hashbrown.workspace = true
 rustc-hash.workspace = true
 serde.workspace = true
 serde_json.workspace = true

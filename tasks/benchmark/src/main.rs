@@ -13,8 +13,8 @@ use std::process::ExitCode;
 use std::thread;
 use std::time::Duration;
 
-use models::{LARGEST, Language, SCALED};
-use report::Row;
+use models::{LARGEST, Language, R12_LARGE, SCALED};
+use report::{LargeTarget, Row};
 use run::{Job, run_once};
 
 const DEFAULT_RUNS: usize = 5;
@@ -74,6 +74,7 @@ impl Bench<'_> {
             binary: &self.options.binary,
             files,
             workers,
+            max_states: models::state_limit(files),
             scratch: self.scratch,
         };
         let names: Vec<String> = files
@@ -121,7 +122,12 @@ fn row(label: &str, language: &str, measured: &Measured) -> Row {
     }
 }
 
-fn benchmark(options: &Options) -> Result<String, String> {
+struct Benchmarked {
+    text: String,
+    large_target: LargeTarget,
+}
+
+fn benchmark(options: &Options) -> Result<Benchmarked, String> {
     if !options.binary.is_file() {
         return Err(format!(
             "{} does not exist; build it with `cargo build --release -p earnest-cli`",
@@ -166,17 +172,20 @@ fn benchmark(options: &Options) -> Result<String, String> {
     let cores = thread::available_parallelism().map_or(1, usize::from);
     let all = bench.measure(std::slice::from_ref(&largest), None)?;
     let one = bench.measure(std::slice::from_ref(&largest), Some(1))?;
+    let target = bench.measure(std::slice::from_ref(&largest), Some(report::TARGET_WORKERS))?;
 
-    let mut with_largest = mixed.clone();
-    with_largest.push(largest.clone());
-    let everything = bench.measure(&with_largest, None)?;
+    let r12_large = models::scaled_path(&repository, R12_LARGE, Language::TypeScript);
+    let r12_alone = bench.measure(std::slice::from_ref(&r12_large), None)?;
+    let mut with_r12_large = mixed.clone();
+    with_r12_large.push(r12_large);
+    let everything = bench.measure(&with_r12_large, None)?;
     let slowest_row = alone.iter().max_by_key(|each| each.median);
     let r12 = report::r12_lines(
         everything.median,
-        with_largest.len(),
+        with_r12_large.len(),
         report::Alone {
-            model: LARGEST,
-            median: all.median,
+            model: R12_LARGE,
+            median: r12_alone.median,
         },
         report::Alone {
             model: slowest_row.map_or("?", |each| each.model.as_str()),
@@ -190,6 +199,7 @@ fn benchmark(options: &Options) -> Result<String, String> {
         report::with_separators(together.states),
         report::memory(together.peak_kib)
     );
+    let target_line = report::target_line(LARGEST, target.median, target.peak_kib, cores);
     let speedup = report::speedup_line(LARGEST, one.median, all.median, cores);
     let text = [
         format!(
@@ -201,7 +211,10 @@ fn benchmark(options: &Options) -> Result<String, String> {
         "## The 12 mixed models, each alone\n".to_owned(),
         report::table(&alone),
         "## Spec targets\n".to_owned(),
-        format!("- {}\n- {}\n- {together_line}\n", spec[0], spec[1]),
+        format!(
+            "- {}\n- {}\n- {together_line}\n- {target_line}\n",
+            spec[0], spec[1]
+        ),
         "## One large model on one worker and on all cores\n".to_owned(),
         format!("- {speedup}\n"),
         "## R12: many models and one large model in one run\n".to_owned(),
@@ -213,17 +226,34 @@ fn benchmark(options: &Options) -> Result<String, String> {
         ),
     ]
     .join("\n");
-    Ok(text)
+    Ok(Benchmarked {
+        text,
+        large_target: report::large_target(target.median, cores),
+    })
+}
+
+fn printed(benchmarked: &Benchmarked) -> Result<(), String> {
+    io::stdout()
+        .lock()
+        .write_all(benchmarked.text.as_bytes())
+        .map_err(|error| error.to_string())?;
+    if benchmarked.large_target == LargeTarget::Missed {
+        return Err(format!(
+            "{LARGEST} with {} workers missed its target of under {} s",
+            report::TARGET_WORKERS,
+            report::LARGE_TARGET_SECONDS
+        ));
+    }
+    Ok(())
 }
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
-    let outcome = parse_options(&arguments).and_then(|options| benchmark(&options));
+    let outcome = parse_options(&arguments)
+        .and_then(|options| benchmark(&options))
+        .and_then(|benchmarked| printed(&benchmarked));
     match outcome {
-        Ok(text) => match io::stdout().lock().write_all(text.as_bytes()) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(_) => ExitCode::FAILURE,
-        },
+        Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             let _ = writeln!(io::stderr().lock(), "benchmark: {message}");
             ExitCode::FAILURE
