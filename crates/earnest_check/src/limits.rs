@@ -22,11 +22,11 @@ pub struct Limits {
     /// run side by side share one handle, so a thread one of them leaves idle goes to
     /// another. The outcome is the same whatever is borrowed.
     pub helpers: Option<Helpers>,
-    /// Whether [`Outcome::graph`] is filled. It costs memory for every arrow, so leave it off
-    /// unless a chart is wanted.
+    /// Whether [`crate::Outcome::graph`] is filled. It costs memory for every arrow, so leave
+    /// it off unless a chart is wanted.
     pub keep_graph: bool,
     /// Check only the rule with this id. The others are not evaluated and are left out of
-    /// [`Outcome::rules`]. An id no rule has leaves no rule checked.
+    /// [`crate::Outcome::rules`]. An id no rule has leaves no rule checked.
     pub only_rule: Option<String>,
 }
 
@@ -50,7 +50,7 @@ pub const WORKER_STACK: usize = 256 * 1024 * 1024;
 
 pub(crate) const TIME_LIMIT_REASON: &str = "time limit of";
 
-/// Whether `reason`, the [`Outcome::reason`] of a search, says the time limit stopped it.
+/// Whether `reason`, the [`crate::Outcome::reason`] of a search, says the time limit stopped it.
 ///
 /// A search that a state limit stopped is the same on every run, one that a time limit stopped
 /// is not: it ends wherever the clock caught it.
