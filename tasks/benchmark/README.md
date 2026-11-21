@@ -39,8 +39,11 @@ Wall time is the time from starting the process to its exit, so it includes read
 Peak memory is the largest resident set (`VmHWM` in `/proc`) any run reached; it is `n/a` where
 `/proc` has no such file. The binary fails, with the model and both numbers, when the checker's
 state count for a model differs from the one derived below, when a model is not `pass`, or when
-a file is unreadable. It is not part of `just check`; that runs only its unit tests, which also
-check that every derived count below is in this file.
+a file is unreadable. It also fails, after it prints the result, when `grid_10m` with 4 workers
+takes 5 s or more on a machine with at least 4 cores; with fewer cores it does not judge that
+target. It is not part of `just check`; that runs only its unit tests, which also check that
+every derived count below is in this file. The `check` workflow runs it after `just check`, on a
+runner with 4 vCPUs and 16 GB, so a change that misses the target fails there.
 
 ## Models and their state counts
 

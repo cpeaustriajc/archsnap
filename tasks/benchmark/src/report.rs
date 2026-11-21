@@ -119,6 +119,23 @@ pub(crate) fn target_line(
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LargeTarget {
+    Met,
+    Missed,
+    TooFewCoresToJudge,
+}
+
+pub(crate) fn large_target(median: Duration, cores: usize) -> LargeTarget {
+    if cores < TARGET_WORKERS {
+        LargeTarget::TooFewCoresToJudge
+    } else if median < Duration::from_secs(u64::from(LARGE_TARGET_SECONDS)) {
+        LargeTarget::Met
+    } else {
+        LargeTarget::Missed
+    }
+}
+
 pub(crate) fn speedup_line(model: &str, one: Duration, all: Duration, cores: usize) -> String {
     let speedup = one.as_secs_f64() / all.as_secs_f64().max(f64::EPSILON);
     format!(
@@ -268,6 +285,25 @@ mod tests {
             fewer.contains("peak memory n/a")
                 && fewer.contains("a stand-in: this machine has 2 cores, fewer than the 4"),
             "{fewer}"
+        );
+    }
+
+    #[test]
+    fn the_large_target_is_judged_only_on_a_machine_with_the_cores() {
+        assert_eq!(
+            large_target(millis(4_999), 4),
+            LargeTarget::Met,
+            "under the target"
+        );
+        assert_eq!(
+            large_target(millis(5_000), 16),
+            LargeTarget::Missed,
+            "the target itself is not under the target"
+        );
+        assert_eq!(
+            large_target(millis(60_000), 2),
+            LargeTarget::TooFewCoresToJudge,
+            "a slow run on two cores says nothing about four"
         );
     }
 

@@ -14,7 +14,7 @@ use std::thread;
 use std::time::Duration;
 
 use models::{LARGEST, Language, R12_LARGE, SCALED};
-use report::Row;
+use report::{LargeTarget, Row};
 use run::{Job, run_once};
 
 const DEFAULT_RUNS: usize = 5;
@@ -122,7 +122,12 @@ fn row(label: &str, language: &str, measured: &Measured) -> Row {
     }
 }
 
-fn benchmark(options: &Options) -> Result<String, String> {
+struct Benchmarked {
+    text: String,
+    large_target: LargeTarget,
+}
+
+fn benchmark(options: &Options) -> Result<Benchmarked, String> {
     if !options.binary.is_file() {
         return Err(format!(
             "{} does not exist; build it with `cargo build --release -p earnest-cli`",
@@ -221,17 +226,34 @@ fn benchmark(options: &Options) -> Result<String, String> {
         ),
     ]
     .join("\n");
-    Ok(text)
+    Ok(Benchmarked {
+        text,
+        large_target: report::large_target(target.median, cores),
+    })
+}
+
+fn printed(benchmarked: &Benchmarked) -> Result<(), String> {
+    io::stdout()
+        .lock()
+        .write_all(benchmarked.text.as_bytes())
+        .map_err(|error| error.to_string())?;
+    if benchmarked.large_target == LargeTarget::Missed {
+        return Err(format!(
+            "{LARGEST} with {} workers missed its target of under {} s",
+            report::TARGET_WORKERS,
+            report::LARGE_TARGET_SECONDS
+        ));
+    }
+    Ok(())
 }
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
-    let outcome = parse_options(&arguments).and_then(|options| benchmark(&options));
+    let outcome = parse_options(&arguments)
+        .and_then(|options| benchmark(&options))
+        .and_then(|benchmarked| printed(&benchmarked));
     match outcome {
-        Ok(text) => match io::stdout().lock().write_all(text.as_bytes()) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(_) => ExitCode::FAILURE,
-        },
+        Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             let _ = writeln!(io::stderr().lock(), "benchmark: {message}");
             ExitCode::FAILURE
