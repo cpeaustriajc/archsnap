@@ -183,8 +183,18 @@ pub fn eval(expr: &Expr, frame: &mut Frame<'_>) -> Result<Value, Fault> {
             source,
             body,
         } => {
-            let items = members(eval(source, frame)?)?;
-            sweep_over(*sweep, *shelf, *slot, items, body, frame)
+            let collection = eval(source, frame)?;
+            let test = Test {
+                sweep: *sweep,
+                shelf: *shelf,
+                slot: *slot,
+                body,
+            };
+            match &collection {
+                Value::Set(items) => test.over(items.iter(), frame),
+                Value::Seq(items) => test.over(items.iter(), frame),
+                other => Err(wrong_or_null(other)),
+            }
         }
     }
 }
@@ -230,42 +240,40 @@ fn with_fields(base: &Expr, changes: &[(Sym, Expr)], frame: &mut Frame<'_>) -> E
     Ok(Value::record(fields))
 }
 
-fn members(source: Value) -> Result<Vec<Value>, Fault> {
-    match source {
-        Value::Set(items) => Ok(items.iter().cloned().collect()),
-        Value::Seq(items) => Ok(Arc::unwrap_or_clone(items)),
-        other => Err(wrong_or_null(&other)),
-    }
-}
-
-fn sweep_over(
+struct Test<'e> {
     sweep: Sweep,
     shelf: Shelf,
     slot: usize,
-    items: Vec<Value>,
-    body: &Expr,
-    frame: &mut Frame<'_>,
-) -> Evaluated {
-    let mut kept = Vec::new();
-    for item in items {
-        if frame.out_of_time() {
-            return Err(Fault::Stopped);
+    body: &'e Expr,
+}
+
+impl Test<'_> {
+    fn over<'v>(&self, items: impl Iterator<Item = &'v Value>, frame: &mut Frame<'_>) -> Evaluated {
+        let mut kept = Vec::new();
+        for item in items {
+            if frame.out_of_time() {
+                return Err(Fault::Stopped);
+            }
+            frame.put(self.slot, item.clone());
+            let passed = truth(self.body, frame)?;
+            match self.sweep {
+                Sweep::Every if !passed => return Ok(Value::Bool(false)),
+                Sweep::Some if passed => return Ok(Value::Bool(true)),
+                Sweep::Filter if passed => kept.push(item.clone()),
+                Sweep::Every | Sweep::Some | Sweep::Filter => {}
+            }
         }
-        frame.put(slot, item.clone());
-        let passed = truth(body, frame)?;
-        match sweep {
-            Sweep::Every if !passed => return Ok(Value::Bool(false)),
-            Sweep::Some if passed => return Ok(Value::Bool(true)),
-            Sweep::Filter if passed => kept.push(item),
-            Sweep::Every | Sweep::Some | Sweep::Filter => {}
+        Ok(self.gathered(kept))
+    }
+
+    fn gathered(&self, kept: Vec<Value>) -> Value {
+        match (self.sweep, self.shelf) {
+            (Sweep::Every, _) => Value::Bool(true),
+            (Sweep::Some, _) => Value::Bool(false),
+            (Sweep::Filter, Shelf::Set) => Value::set(kept.into_iter().collect()),
+            (Sweep::Filter, Shelf::Seq) => Value::seq(kept),
         }
     }
-    Ok(match (sweep, shelf) {
-        (Sweep::Every, _) => Value::Bool(true),
-        (Sweep::Some, _) => Value::Bool(false),
-        (Sweep::Filter, Shelf::Set) => Value::set(kept.into_iter().collect()),
-        (Sweep::Filter, Shelf::Seq) => Value::seq(kept),
-    })
 }
 
 fn apply(op: Op, arguments: &[Expr], frame: &mut Frame<'_>) -> Evaluated {
@@ -335,6 +343,27 @@ fn as_int(value: &Value) -> Result<i64, Fault> {
         return Err(wrong_or_null(value));
     };
     Ok(*number)
+}
+
+fn set_in(value: &Value) -> Result<&BTreeSet<Value>, Fault> {
+    let Value::Set(shared) = value else {
+        return Err(wrong_or_null(value));
+    };
+    Ok(shared)
+}
+
+fn map_in(value: &Value) -> Result<&BTreeMap<Value, Value>, Fault> {
+    let Value::Map(shared) = value else {
+        return Err(wrong_or_null(value));
+    };
+    Ok(shared)
+}
+
+fn seq_in(value: &Value) -> Result<&[Value], Fault> {
+    let Value::Seq(shared) = value else {
+        return Err(wrong_or_null(value));
+    };
+    Ok(shared)
 }
 
 fn as_set(value: Value) -> Result<BTreeSet<Value>, Fault> {
@@ -407,36 +436,47 @@ fn needed(argument: Option<Value>) -> Evaluated {
 }
 
 fn on_set(op: SetOp, first: Value, second: Option<Value>) -> Evaluated {
-    let mut items = as_set(first)?;
+    let items = set_in(&first)?;
     match op {
         SetOp::Size => size_of(items.len()),
         SetOp::Has => Ok(Value::Bool(items.contains(&needed(second)?))),
         SetOp::Add => {
-            items.insert(needed(second)?);
+            let item = needed(second)?;
+            let mut items = as_set(first)?;
+            items.insert(item);
             Ok(Value::set(items))
         }
         SetOp::Delete => {
-            items.remove(&needed(second)?);
+            let item = needed(second)?;
+            let mut items = as_set(first)?;
+            items.remove(&item);
             Ok(Value::set(items))
         }
         SetOp::Union => {
-            let other = as_set(needed(second)?)?;
-            Ok(Value::set(items.union(&other).cloned().collect()))
+            let other = needed(second)?;
+            Ok(Value::set(items.union(set_in(&other)?).cloned().collect()))
         }
         SetOp::Intersect => {
-            let other = as_set(needed(second)?)?;
-            Ok(Value::set(items.intersection(&other).cloned().collect()))
+            let other = needed(second)?;
+            Ok(Value::set(
+                items.intersection(set_in(&other)?).cloned().collect(),
+            ))
         }
         SetOp::Subtract => {
-            let other = as_set(needed(second)?)?;
-            Ok(Value::set(items.difference(&other).cloned().collect()))
+            let other = needed(second)?;
+            Ok(Value::set(
+                items.difference(set_in(&other)?).cloned().collect(),
+            ))
         }
-        SetOp::IsSubset => Ok(Value::Bool(items.is_subset(&as_set(needed(second)?)?))),
+        SetOp::IsSubset => {
+            let other = needed(second)?;
+            Ok(Value::Bool(items.is_subset(set_in(&other)?)))
+        }
     }
 }
 
 fn on_map(op: MapOp, first: Value, second: Option<Value>, third: Option<Value>) -> Evaluated {
-    let mut entries = as_map(first)?;
+    let entries = map_in(&first)?;
     match op {
         MapOp::Size => size_of(entries.len()),
         MapOp::Keys => Ok(Value::set(entries.keys().cloned().collect())),
@@ -446,24 +486,30 @@ fn on_map(op: MapOp, first: Value, second: Option<Value>, third: Option<Value>) 
             .cloned()
             .unwrap_or(Value::Null)),
         MapOp::Delete => {
-            entries.remove(&needed(second)?);
+            let key = needed(second)?;
+            let mut entries = as_map(first)?;
+            entries.remove(&key);
             Ok(Value::map(entries))
         }
         MapOp::Set => {
-            entries.insert(needed(second)?, needed(third)?);
+            let key = needed(second)?;
+            let value = needed(third)?;
+            let mut entries = as_map(first)?;
+            entries.insert(key, value);
             Ok(Value::map(entries))
         }
     }
 }
 
 fn on_seq(op: SeqOp, first: Value, second: Option<Value>) -> Evaluated {
-    let mut items = as_seq(first)?;
+    let items = seq_in(&first)?;
     match op {
         SeqOp::Size => size_of(items.len()),
         SeqOp::First => Ok(items.first().cloned().unwrap_or(Value::Null)),
         SeqOp::Last => Ok(items.last().cloned().unwrap_or(Value::Null)),
-        SeqOp::Shift => Ok(Value::seq(items.into_iter().skip(1).collect())),
+        SeqOp::Shift => Ok(Value::seq(items.iter().skip(1).cloned().collect())),
         SeqOp::Pop => {
+            let mut items = as_seq(first)?;
             items.pop();
             Ok(Value::seq(items))
         }
@@ -475,7 +521,9 @@ fn on_seq(op: SeqOp, first: Value, second: Option<Value>) -> Evaluated {
             Ok(found.cloned().unwrap_or(Value::Null))
         }
         SeqOp::Push => {
-            items.push(needed(second)?);
+            let item = needed(second)?;
+            let mut items = as_seq(first)?;
+            items.push(item);
             Ok(Value::seq(items))
         }
         SeqOp::Includes => Ok(Value::Bool(items.contains(&needed(second)?))),
