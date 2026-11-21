@@ -37,17 +37,34 @@ pub(super) struct Part {
     pub(super) crowded: bool,
 }
 
-struct PartSink<'a> {
-    store: &'a Store,
-    graph: bool,
+#[derive(Default)]
+pub(super) struct Kit {
+    rows: RowKit,
+    scratch: Scratch,
+    state: Vec<Value>,
+}
+
+#[derive(Default)]
+struct RowKit {
     base: Vec<u64>,
-    base_is_row: bool,
-    from: usize,
     row: Vec<u64>,
     met: HashTable<usize>,
     met_raw: FxHashSet<Box<[Value]>>,
+}
+
+struct PartSink<'a> {
+    store: &'a Store,
+    graph: bool,
+    merge_finds_known: bool,
+    base_is_row: bool,
+    from: usize,
     counted: usize,
+    kit: &'a mut RowKit,
     part: Part,
+}
+
+fn same_row(one: &[u64], other: &[u64]) -> bool {
+    one.len() == other.len() && one.iter().zip(other).all(|(left, right)| left == right)
 }
 
 impl PartSink<'_> {
@@ -60,7 +77,7 @@ impl PartSink<'_> {
     }
 
     fn add_fresh(&mut self, action: usize, hash: u64) {
-        self.part.rows.extend_from_slice(&self.row);
+        self.part.rows.extend_from_slice(&self.kit.row);
         if self.part.shards.is_empty() {
             self.part.shards.resize_with(SHARD_COUNT, Vec::new);
         }
@@ -76,10 +93,10 @@ impl PartSink<'_> {
 
     fn offer_new_with_graph(&mut self, action: usize, hash: u64) -> bool {
         let words = self.store.layout().words();
-        let (rows, hashes, row) = (&self.part.rows, &self.part.hashes, &self.row);
-        let met = self.met.entry(
+        let (rows, hashes, row) = (&self.part.rows, &self.part.hashes, &self.kit.row);
+        let met = self.kit.met.entry(
             hash,
-            |at| row_at(rows, words, *at) == row.as_slice(),
+            |at| same_row(row_at(rows, words, *at), row),
             |at| hashes.get(*at).copied().unwrap_or(0),
         );
         match met {
@@ -98,16 +115,16 @@ impl PartSink<'_> {
 
     fn offer_unseen(&mut self, action: usize, hash: u64) -> bool {
         let words = self.store.layout().words();
-        let (rows, hashes, row) = (&self.part.rows, &self.part.hashes, &self.row);
-        let met = self.met.entry(
+        let (rows, hashes, row) = (&self.part.rows, &self.part.hashes, &self.kit.row);
+        let met = self.kit.met.entry(
             hash,
-            |at| row_at(rows, words, *at) == row.as_slice(),
+            |at| same_row(row_at(rows, words, *at), row),
             |at| hashes.get(*at).copied().unwrap_or(0),
         );
         let hashbrown::hash_table::Entry::Vacant(vacant) = met else {
             return false;
         };
-        if self.store.find(row, hash).is_some() {
+        if !self.merge_finds_known && self.store.find(row, hash).is_some() {
             return false;
         }
         vacant.insert(hashes.len());
@@ -137,8 +154,8 @@ impl PartSink<'_> {
         state: &[Value],
         updates: &[(usize, Value)],
     ) -> bool {
-        let base = self.base_is_row.then_some(self.base.as_slice());
-        if !encode_next(self.store, base, &mut self.row, state, updates) {
+        let base = self.base_is_row.then_some(self.kit.base.as_slice());
+        if !encode_next(self.store, base, &mut self.kit.row, state, updates) {
             let next = with_updates(state, updates);
             if let Some(to) = self.store.find_values(&next) {
                 if self.graph {
@@ -146,7 +163,7 @@ impl PartSink<'_> {
                 }
                 return false;
             }
-            let first = self.met_raw.insert(next.clone());
+            let first = self.kit.met_raw.insert(next.clone());
             if !self.graph && !first {
                 return false;
             }
@@ -155,11 +172,11 @@ impl PartSink<'_> {
             self.push(action, Target::Raw { fresh_before });
             return first;
         }
-        let hash = self.store.layout().hash(&self.row);
+        let hash = self.store.layout().hash(&self.kit.row);
         if !self.graph {
             return self.offer_unseen(action, hash);
         }
-        if let Some(found) = self.store.find(&self.row, hash) {
+        if let Some(found) = self.store.find(&self.kit.row, hash) {
             if let Some(to) = found.id {
                 self.push(action, Target::Known(to));
             }
@@ -180,25 +197,24 @@ impl Search<'_> {
         ids: Range<usize>,
         deadline: Option<Instant>,
         asked: Asked,
+        kit: &mut Kit,
     ) -> Part {
         let expand = self.expand(deadline, asked);
+        kit.rows.met.clear();
+        kit.rows.met_raw.clear();
         let mut sink = PartSink {
             store: &self.store,
             graph: self.limits.keep_graph,
-            base: Vec::new(),
+            merge_finds_known: self.store.files_rows(),
             base_is_row: false,
             from: 0,
-            row: Vec::new(),
-            met: HashTable::new(),
-            met_raw: FxHashSet::default(),
             counted: 0,
+            kit: &mut kit.rows,
             part: Part {
                 first: ids.start,
                 ..Part::default()
             },
         };
-        let mut scratch = Scratch::default();
-        let mut state = Vec::new();
         for (position, id) in ids.enumerate() {
             let clock_due = position.is_multiple_of(STATES_BETWEEN_CLOCK_READS);
             let late = deadline.is_some_and(|limit| Instant::now() >= limit);
@@ -206,11 +222,13 @@ impl Search<'_> {
                 sink.part.stopped = true;
                 return sink.part;
             }
-            sink.base_is_row = self.store.read_state(id, &mut sink.base, &mut state);
+            sink.base_is_row = self
+                .store
+                .read_state(id, &mut sink.kit.base, &mut kit.state);
+            let outside = self.store.outside(id, &sink.kit.base, &self.model.fields);
             sink.from = id;
             sink.counted = 0;
-            let outside = self.store.outside(id, &sink.base, &self.model.fields);
-            let mark = expand.state(&state, outside, &mut sink, &mut scratch);
+            let mark = expand.state(&kit.state, outside, &mut sink, &mut kit.scratch);
             if mark.clock == Clock::Stopped {
                 sink.part.stopped = true;
                 return sink.part;

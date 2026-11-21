@@ -169,6 +169,10 @@ impl Store {
             })
     }
 
+    pub(crate) fn files_rows(&self) -> bool {
+        self.index.files_rows()
+    }
+
     pub(crate) fn find_values(&self, values: &[Value]) -> Option<usize> {
         self.wide_ids.get(values).copied()
     }

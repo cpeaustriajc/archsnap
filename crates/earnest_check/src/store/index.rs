@@ -219,6 +219,10 @@ impl Index {
         }
     }
 
+    pub(super) fn files_rows(&self) -> bool {
+        matches!(self, Self::NarrowKeys(_) | Self::Keys(_))
+    }
+
     pub(super) fn find(&self, rows: &Rows, row: &[u64], hash: u64) -> Option<Found> {
         match self {
             Self::NarrowKeys(shards) => shards.find(rows, row, hash),

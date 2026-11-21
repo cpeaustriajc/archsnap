@@ -1,5 +1,5 @@
 use super::Search;
-use super::part::Part;
+use super::part::{Kit, Part};
 use crate::cut::cut_points;
 use crate::expand::Asked;
 use crate::helpers::{Helpers, Loan};
@@ -155,6 +155,7 @@ impl Search<'_> {
         shared: &'env Shared,
     ) {
         let parts = level.cuts.len().saturating_sub(1);
+        let mut kit = Kit::default();
         loop {
             self.take_up_idle_threads(scope, level, shared, parts);
             let part = shared.next.fetch_add(1, Ordering::SeqCst);
@@ -172,7 +173,7 @@ impl Search<'_> {
             let Some(ids) = ids else {
                 return;
             };
-            let expansion = self.expand_ids(ids, level.deadline, level.asked);
+            let expansion = self.expand_ids(ids, level.deadline, level.asked, &mut kit);
             if expansion.stopped {
                 shared.stopped.store(true, Ordering::SeqCst);
             }
