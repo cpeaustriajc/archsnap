@@ -1380,7 +1380,12 @@ fn reading_action(values: [Vec<Value>; 2], exprs: Vec<Expr>) -> Action {
     }
 }
 
-type Answers = Vec<(Result<Value, Fault>, bool)>;
+type Answers = Vec<Result<Value, Fault>>;
+
+struct Walk {
+    answers: Vec<Option<Answers>>,
+    beyond_32_bits: bool,
+}
 
 fn combinations(action: &Action) -> Vec<Vec<usize>> {
     let counts: Vec<usize> = action
@@ -1403,17 +1408,17 @@ fn combinations(action: &Action) -> Vec<Vec<usize>> {
         .collect()
 }
 
-fn answers_in_turn(
+fn walked_in_turn(
     action: &Action,
     state: &[Value],
     left_over: &[Value],
     tried: impl Fn(&[usize]) -> bool,
-) -> Vec<Option<Answers>> {
+) -> Walk {
     let mut frame = Frame::new(state, SLOTS);
     for (slot, value) in left_over.iter().enumerate() {
         frame.put(slot, value.clone());
     }
-    combinations(action)
+    let answers = combinations(action)
         .into_iter()
         .map(|digits| {
             if !tried(&digits) {
@@ -1427,16 +1432,15 @@ fn answers_in_turn(
             Some(
                 std::iter::once(&action.guard)
                     .chain(action.updates.iter().flatten())
-                    .map(|code| {
-                        (
-                            eval(code.expr(), &mut frame),
-                            frame.computed_beyond_32_bits(),
-                        )
-                    })
+                    .map(|code| eval(code.expr(), &mut frame))
                     .collect(),
             )
         })
-        .collect()
+        .collect();
+    Walk {
+        answers,
+        beyond_32_bits: frame.computed_beyond_32_bits(),
+    }
 }
 
 proptest! {
@@ -1462,13 +1466,17 @@ proptest! {
                 .zip(digits)
                 .all(|(apart, digit)| apart.get(*digit).copied().unwrap_or(true))
         };
-        let every = answers_in_turn(&action, &state, &left_over, |_| true);
-        let skipping = answers_in_turn(&action, &state, &left_over, new_in_each);
-        for (position, (all, skipped)) in every.iter().zip(&skipping).enumerate() {
+        let every = walked_in_turn(&action, &state, &left_over, |_| true);
+        let skipping = walked_in_turn(&action, &state, &left_over, new_in_each);
+        prop_assert_eq!(
+            skipping.beyond_32_bits, every.beyond_32_bits,
+            "the state gets the same mark for numbers beyond 32 bits"
+        );
+        for (position, (all, skipped)) in every.answers.iter().zip(&skipping.answers).enumerate() {
             match skipped {
                 Some(answers) => prop_assert_eq!(Some(answers), all.as_ref(), "combination {} answers as it does in the full walk", position),
                 None => prop_assert!(
-                    every.iter().take(position).any(|earlier| earlier == all),
+                    every.answers.iter().take(position).any(|earlier| earlier == all),
                     "combination {} answers like no combination before it", position
                 ),
             }
