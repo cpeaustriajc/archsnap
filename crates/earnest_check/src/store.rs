@@ -177,8 +177,13 @@ pub(crate) struct Store {
     count: usize,
     parents: Vec<Option<Parent>>,
     shards: Vec<HashTable<usize>>,
+    grown: Vec<usize>,
     wide: FxHashMap<usize, Box<[Value]>>,
     wide_ids: FxHashMap<Box<[Value]>, usize>,
+}
+
+pub(crate) fn same_row(one: &[u64], other: &[u64]) -> bool {
+    one.len() == other.len() && one.iter().zip(other).all(|(left, right)| left == right)
 }
 
 pub(crate) fn hash_row(row: &[u64]) -> u64 {
@@ -218,7 +223,14 @@ impl Store {
             used += bits;
         }
         let words = if used > 0 { word + 1 } else { word };
+        let grown = codecs
+            .iter()
+            .enumerate()
+            .filter(|(_, codec)| matches!(codec.kind, Kind::Grown { .. }))
+            .map(|(position, _)| position)
+            .collect();
         Self {
+            grown,
             codecs,
             words,
             rows: Vec::new(),
@@ -239,10 +251,17 @@ impl Store {
     }
 
     pub(crate) fn row(&self, id: usize) -> Option<&[u64]> {
-        if self.wide.contains_key(&id) || id >= self.count {
+        if id >= self.count || self.wide_state(id).is_some() {
             return None;
         }
         Some(row_at(&self.rows, self.words, id))
+    }
+
+    fn wide_state(&self, id: usize) -> Option<&[Value]> {
+        if self.wide.is_empty() {
+            return None;
+        }
+        self.wide.get(&id).map(AsRef::as_ref)
     }
 
     pub(crate) fn parent(&self, id: usize) -> Option<Parent> {
@@ -256,7 +275,7 @@ impl Store {
     }
 
     pub(crate) fn read_state(&self, id: usize, values: &mut Vec<Value>) {
-        if let Some(full) = self.wide.get(&id) {
+        if let Some(full) = self.wide_state(id) {
             values.extend(full.iter().cloned());
             return;
         }
@@ -265,16 +284,18 @@ impl Store {
     }
 
     pub(crate) fn outside(&self, id: usize, fields: &[Field]) -> Option<usize> {
-        if let Some(full) = self.wide.get(&id) {
+        if let Some(full) = self.wide_state(id) {
             return fields
                 .iter()
                 .zip(full.iter())
                 .position(|(field, value)| !field.domain.contains(value));
         }
         let row = row_at(&self.rows, self.words, id);
-        self.codecs
-            .iter()
-            .position(|codec| !codec.inside(codec.read(row)))
+        self.grown.iter().copied().find(|position| {
+            self.codecs
+                .get(*position)
+                .is_some_and(|codec| !codec.inside(codec.read(row)))
+        })
     }
 
     pub(crate) fn encode_update(&self, row: &mut [u64], position: usize, value: &Value) -> bool {
@@ -319,7 +340,7 @@ impl Store {
         let (rows, words) = (&self.rows, self.words);
         self.shards
             .get(shard_of(hash))?
-            .find(hash, |id| row_at(rows, words, *id) == row)
+            .find(hash, |id| same_row(row_at(rows, words, *id), row))
             .copied()
     }
 
@@ -336,7 +357,7 @@ impl Store {
         let (rows, words) = (&self.rows, self.words);
         let entry = shard.entry(
             hash,
-            |id| row_at(rows, words, *id) == row,
+            |id| same_row(row_at(rows, words, *id), row),
             |id| hash_row(row_at(rows, words, *id)),
         );
         match entry {

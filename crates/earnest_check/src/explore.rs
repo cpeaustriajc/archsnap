@@ -2,7 +2,7 @@ use crate::cut::cut_points;
 use crate::expand::{Asked, Budget, Clock, Expand, Mark, Scratch, Successors, Whence, Width};
 use crate::helpers::{Helpers, Loan};
 use crate::outcome::Outcome;
-use crate::store::{Parent, Placed, Store, hash_row, row_at};
+use crate::store::{Parent, Placed, Store, hash_row, row_at, same_row};
 use earnest_ir::{Fault, Field, Model};
 use earnest_value::Value;
 use hashbrown::HashTable;
@@ -304,7 +304,7 @@ impl PartSink<'_> {
         let (rows, row) = (&self.part.rows, &self.row);
         match self.met.entry(
             hash,
-            |at| row_at(rows, words, *at) == row.as_slice(),
+            |at| same_row(row_at(rows, words, *at), row),
             |at| hash_row(row_at(rows, words, *at)),
         ) {
             hashbrown::hash_table::Entry::Occupied(_) => false,
