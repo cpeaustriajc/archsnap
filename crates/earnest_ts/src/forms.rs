@@ -268,6 +268,20 @@ fn a_part_with_a_wrong_number_of_arguments_names_its_callee() {
 }
 
 #[test]
+fn an_action_whose_sentence_is_spread_from_a_list_is_refused() {
+    let found = problems(
+        "export const a = m.action(M, ...([\"a\"] as const), { changes: () => ({ n: 0 }) });",
+    );
+    assert_eq!(found.len(), 1, "refused once: {found:?}");
+    assert_eq!(found[0].feature, "`m.action`", "the callee");
+    assert!(
+        found[0].message.contains("sentence"),
+        "the message names the sentence: {}",
+        found[0].message
+    );
+}
+
+#[test]
 fn a_part_that_is_written_wrongly_is_named() {
     assert_eq!(
         features("export const a = m.action(M, \"a\", { when: (s) => s.n < 1 });"),

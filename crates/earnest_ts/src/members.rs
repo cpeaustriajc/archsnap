@@ -164,23 +164,6 @@ impl Reader<'_> {
         Some(entries)
     }
 
-    fn needed<'p, 'a>(
-        &mut self,
-        entries: &Entries<'p, 'a>,
-        key: &str,
-        call: &CallExpression<'_>,
-    ) -> Option<&'p Expression<'a>> {
-        let found = pick(entries, key);
-        if found.is_none() {
-            self.refuse(
-                call.span.start,
-                &self.quoted(call.callee.span()),
-                &format!("it needs a `{key}`"),
-            );
-        }
-        found
-    }
-
     fn action(&mut self, id: String, start: u32, call: &CallExpression<'_>) -> Option<ActionDraft> {
         let entries = self.parts(
             call,
@@ -188,21 +171,25 @@ impl Reader<'_> {
             &["input", "when", "changes"],
             &[("then", CHANGES_NOT_THEN)],
         )?;
-        let label = call
-            .arguments
-            .get(SENTENCE)
-            .and_then(Argument::as_expression)
-            .map(|sentence| self.sentence(sentence))?;
+        let sentence = self.argument(
+            call,
+            SENTENCE,
+            "its sentence is needed here, as text in quotes and an argument of its own",
+        )?;
+        let label = self.sentence(sentence);
         let inputs: Vec<(String, Shape)> = match pick(&entries, "input") {
             Some(declared) => self.fields(declared),
             None => Vec::new(),
         };
         let when = pick(&entries, "when").and_then(|written| self.arrow(written));
-        let changes = if pick(&entries, "then").is_some() {
-            pick(&entries, "changes")
-        } else {
-            self.needed(&entries, "changes", call)
-        };
+        let changes = pick(&entries, "changes");
+        if changes.is_none() && pick(&entries, "then").is_none() {
+            self.refuse(
+                call.span.start,
+                &self.quoted(call.callee.span()),
+                "it needs a `changes`",
+            );
+        }
         let changing = changes.and_then(|written| self.arrow(written));
         let guard = when.map(|arrow| self.action_body(arrow));
         let change = changing.map(|arrow| self.action_body(arrow))?;
@@ -336,7 +323,8 @@ impl Reader<'_> {
             let model = call
                 .arguments
                 .first()
-                .map_or_else(|| "Model".to_owned(), |first| self.quoted(first.span()));
+                .map(|first| self.quoted(first.span()))
+                .unwrap_or_default();
             self.refuse(
                 object.span().start,
                 &written,

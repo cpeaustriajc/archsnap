@@ -304,8 +304,9 @@ export const end = <F extends Fields>(
 };
 
 /**
- * Declares how `earnest chart` draws `model`. A model needs no view. Export the result from the
- * model file: the name of the export is the view's id.
+ * Declares how `earnest chart` draws `model`. A model needs no view, and a view has no id, so
+ * its constant needs no export. In a model file, write the second argument, even as `{}`: the
+ * checker refuses `m.view(model)`.
  */
 export const view = <F extends Fields>(model: Model<F>, spec: ViewSpec<F> = {}): View<F> => {
   const declaredView: View<F> = Object.freeze({ ...spec, kind: "view" });

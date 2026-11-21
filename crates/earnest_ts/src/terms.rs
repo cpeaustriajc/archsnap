@@ -1,4 +1,5 @@
 use crate::Reader;
+use crate::members::MemberKind;
 use crate::names::{DECLARATIONS, snake, why_outside};
 use crate::shapes::WRITTEN_TWICE;
 use earnest_ast::{Binary, HelperKind, Reach, TemplatePiece, Term, TermKind, Unary};
@@ -552,7 +553,7 @@ impl Reader<'_> {
                     "`m.div` takes the number and the divisor: `m.div(a, b)`",
                 ),
             },
-            "action" | "rule" | "end" | "view" => self.refused(
+            _ if MemberKind::named(part).is_some() => self.refused(
                 call.span.start,
                 &format!("{library}.{part}"),
                 "an action, a rule, an end or a view is the whole value of a top-level `const`: \
