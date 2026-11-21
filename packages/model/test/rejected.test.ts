@@ -7,17 +7,19 @@ const FOLDER = "test/rejected";
 const COMPILER = "node_modules/.bin/tsrs";
 
 const REJECTED_AT: Readonly<Record<string, string>> = {
+  "end-not-boolean": `(s) => s.cta)`,
   "input-compared-to-stranger": `by === "touch"`,
-  "missing-then": `Cart.action(`,
+  "missing-changes": `m.action(`,
   "null-into-required": `cta: null`,
   "optional-read-unguarded": `s.pressBy.length`,
-  "rule-not-boolean": `holds: (s) => s.count,`,
+  "rule-not-boolean": `(s) => s.count)`,
   "state-assigned": `s.count = 2`,
   "stranger-in-set": `s.seen.add("touch")`,
   "unknown-color": `stuck:`,
   "unknown-field": `basket: 1`,
-  "unknown-field-in-one-branch": `then: (s) => {`,
+  "unknown-field-in-one-branch": `changes: (s) => {`,
   "unknown-input": `{ who }`,
+  "unknown-input-in-when": `{ who }`,
   "unknown-state-field": `s.basket`,
   "unknown-view-key": `colours:`,
   "wrong-initial": `.initial("medium")`,

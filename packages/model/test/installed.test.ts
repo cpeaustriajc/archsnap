@@ -19,12 +19,12 @@ const MODEL = `import { m } from "@earnest/model";
 
 export const Counter = m.model("Counter", { count: m.int(0, 2).initial(0) });
 
-export const increment = Counter.action("the count goes up", {
+export const increment = m.action(Counter, "the count goes up", {
   when: (s) => s.count < 2,
-  then: (s) => ({ count: s.count + 1 }),
+  changes: (s) => ({ count: s.count + 1 }),
 });
 
-export const full = Counter.end({ says: "The count is full", when: (s) => s.count === 2 });
+export const full = m.end(Counter, "The count is full", (s) => s.count === 2);
 
 export type State = m.Infer<typeof Counter>;
 `;
@@ -110,7 +110,7 @@ test("the installed package type-checks a model file under strict settings", () 
 test("the installed package still rejects a wrong model at type-check time", () => {
   writeFileSync(
     join(project, "wrong.model.ts"),
-    `import { m } from "@earnest/model";\nconst Wrong = m.model("Wrong", { n: m.int(0, 1).initial(0) });\nexport const bad = Wrong.action("bad", { then: () => ({ n: "x" }) });\n`,
+    `import { m } from "@earnest/model";\nconst Wrong = m.model("Wrong", { n: m.int(0, 1).initial(0) });\nexport const bad = m.action(Wrong, "bad", { changes: () => ({ n: "x" }) });\n`,
   );
   const result = typeCheck();
   rmSync(join(project, "wrong.model.ts"));

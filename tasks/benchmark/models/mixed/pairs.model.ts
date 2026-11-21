@@ -5,22 +5,16 @@ export const Pairs = m.model("Pairs", {
 	b: m.int(0, 14).initial(0),
 });
 
-export const raiseB = Pairs.action("the upper number goes up", {
+export const raiseB = m.action(Pairs, "the upper number goes up", {
 	when: (s) => s.b < 14,
-	then: (s) => ({ b: s.b + 1 }),
+	changes: (s) => ({ b: s.b + 1 }),
 });
 
-export const raiseA = Pairs.action("the lower number catches up by one", {
+export const raiseA = m.action(Pairs, "the lower number catches up by one", {
 	when: (s) => s.a < s.b,
-	then: (s) => ({ a: s.a + 1 }),
+	changes: (s) => ({ a: s.a + 1 }),
 });
 
-export const ordered = Pairs.rule({
-	says: "The lower number never passes the upper",
-	holds: (s) => s.a <= s.b,
-});
+export const ordered = m.rule(Pairs, "The lower number never passes the upper", (s) => s.a <= s.b);
 
-export const level = Pairs.end({
-	says: "Both numbers are at the top",
-	when: (s) => s.a === 14 && s.b === 14,
-});
+export const level = m.end(Pairs, "Both numbers are at the top", (s) => s.a === 14 && s.b === 14);

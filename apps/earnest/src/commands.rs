@@ -470,7 +470,7 @@ mod tests {
 
     const CLIMB: &str = "import { m } from \"@earnest/model\";\n\
         export const Climb = m.model(\"Climb\", { n: m.int(0, 3).initial(0) });\n\
-        export const low = Climb.rule({ says: \"low\", holds: (s) => s.n <= 1 });\n";
+        export const low = m.rule(Climb, \"low\", (s) => s.n <= 1);\n";
     const NO_MODEL: &str = "no model is named `Climb`";
 
     fn skipped_files(files: &[(&str, &str)]) -> (tempfile::TempDir, Vec<String>) {

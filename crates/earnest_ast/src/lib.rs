@@ -370,7 +370,7 @@ pub struct FieldDraft {
 
 /// One function of an action, with the names that function itself brings into scope.
 ///
-/// The `when` and the `then` of one action may take different names. A name in `term` that
+/// The condition and the change of one action may take different names. A name in `term` that
 /// none of these explains, and no binding inside `term` either, is a top-level constant, even
 /// when the action declares an input with that name.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -398,9 +398,9 @@ pub struct ActionDraft {
     pub place: Place,
     /// Each input's name and declaration. The checker tries every combination of their values.
     pub inputs: Vec<(String, Shape)>,
-    /// The `when` condition, with every `require!` joined in. `None` means always.
+    /// The condition, with every `require!` joined in. `None` means always.
     pub guard: Option<ActionBody>,
-    /// The `then` result. Its term is a [`TermKind::Record`] of the fields that change,
+    /// The change. Its term is a [`TermKind::Record`] of the fields that change,
     /// possibly inside [`TermKind::Bind`], [`TermKind::Choose`] or [`TermKind::Wrap`].
     pub change: ActionBody,
 }

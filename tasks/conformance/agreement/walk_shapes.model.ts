@@ -39,72 +39,57 @@ export const Shapes = m.model("Shapes", {
 	),
 });
 
-export const open = Shapes.action("the shapes are opened", {
+export const open = m.action(Shapes, "the shapes are opened", {
 	when: (s) => s.n === 0,
-	then: () => ({ n: 1 }),
+	changes: () => ({ n: 1 }),
 });
 
-export const shown = Shapes.rule({
-	says: "The shapes are open",
-	holds: (s) => s.n === 1,
-});
+export const shown = m.rule(Shapes, "The shapes are open", (s) => s.n === 1);
 
-export const numsAscend = Shapes.rule({
-	says: "The least number is walked first",
-	holds: (s) => m.exists(s.nums, (x) => x === 1 || m.div(6, s.n) > 1),
-});
+export const numsAscend = m.rule(Shapes, "The least number is walked first", (s) =>
+	m.exists(s.nums, (x) => x === 1 || m.div(6, s.n) > 1),
+);
 
-export const numsDoNotDescend = Shapes.rule({
-	says: "The greatest number is walked first",
-	holds: (s) => m.exists(s.nums, (x) => x === 3 || m.div(6, s.n) > 1),
-});
+export const numsDoNotDescend = m.rule(Shapes, "The greatest number is walked first", (s) =>
+	m.exists(s.nums, (x) => x === 3 || m.div(6, s.n) > 1),
+);
 
-export const falseFirst = Shapes.rule({
-	says: "False is walked first",
-	holds: (s) => m.exists(s.flags, (x) => !x || m.div(6, s.n) > 1),
-});
+export const falseFirst = m.rule(Shapes, "False is walked first", (s) =>
+	m.exists(s.flags, (x) => !x || m.div(6, s.n) > 1),
+);
 
-export const spotsByNames = Shapes.rule({
-	says: "The record with the least apple, then zebra, then tone is walked first",
-	holds: (s) =>
-		m.exists(s.spots, (x) => (x.apple === 1 && x.zebra === 1 && x.tone === "Bright") || m.div(6, s.n) > 1),
-});
+export const spotsByNames = m.rule(
+	Shapes,
+	"The record with the least apple, then zebra, then tone is walked first",
+	(s) => m.exists(s.spots, (x) => (x.apple === 1 && x.zebra === 1 && x.tone === "Bright") || m.div(6, s.n) > 1),
+);
 
-export const spotsNotInDeclaredOrder = Shapes.rule({
-	says: "The record with the least zebra is walked first",
-	holds: (s) => m.exists(s.spots, (x) => x.zebra === 0 || m.div(6, s.n) > 1),
-});
+export const spotsNotInDeclaredOrder = m.rule(Shapes, "The record with the least zebra is walked first", (s) =>
+	m.exists(s.spots, (x) => x.zebra === 0 || m.div(6, s.n) > 1),
+);
 
-export const emptyGroupFirst = Shapes.rule({
-	says: "The empty group is walked first",
-	holds: (s) => m.exists(s.groups, (x) => x.isEmpty || m.div(6, s.n) > 1),
-});
+export const emptyGroupFirst = m.rule(Shapes, "The empty group is walked first", (s) =>
+	m.exists(s.groups, (x) => x.isEmpty || m.div(6, s.n) > 1),
+);
 
-export const prefixFirst = Shapes.rule({
-	says: "A group is walked before every group that starts with it",
-	holds: (s) =>
-		m.forall(s.groups, (x) => x.isEmpty || x.has(1) || x.has(2) || m.div(6, s.n) > 1),
-});
+export const prefixFirst = m.rule(Shapes, "A group is walked before every group that starts with it", (s) =>
+	m.forall(s.groups, (x) => x.isEmpty || x.has(1) || x.has(2) || m.div(6, s.n) > 1),
+);
 
-export const shortLineFirst = Shapes.rule({
-	says: "The empty line is walked first",
-	holds: (s) => m.exists(s.lines, (x) => x.isEmpty || m.div(6, s.n) > 1),
-});
+export const shortLineFirst = m.rule(Shapes, "The empty line is walked first", (s) =>
+	m.exists(s.lines, (x) => x.isEmpty || m.div(6, s.n) > 1),
+);
 
-export const lowLineBeforeMid = Shapes.rule({
-	says: "The line of Low alone is walked before the line of Mid alone",
-	holds: (s) =>
+export const lowLineBeforeMid = m.rule(
+	Shapes,
+	"The line of Low alone is walked before the line of Mid alone",
+	(s) =>
 		m.exists(s.lines, (x) => x.first === "Mid" || m.div(6, s.n) > 1) &&
 		m.exists(s.lines, (x) => x.first === "Low" || m.div(6, s.n) > 1),
-});
+);
 
-export const brightMapFirst = Shapes.rule({
-	says: "The map of Bright to 1 alone is walked first",
-	holds: (s) =>
-		m.exists(s.maps, (x) => x.size === 1 && x.get("Bright") === 1 || m.div(6, s.n) > 1),
-});
+export const brightMapFirst = m.rule(Shapes, "The map of Bright to 1 alone is walked first", (s) =>
+	m.exists(s.maps, (x) => x.size === 1 && x.get("Bright") === 1 || m.div(6, s.n) > 1),
+);
 
-export const done = Shapes.end({
-	says: "The shapes are open",
-	when: (s) => s.n === 1,
-});
+export const done = m.end(Shapes, "The shapes are open", (s) => s.n === 1);

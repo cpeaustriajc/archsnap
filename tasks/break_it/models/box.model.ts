@@ -6,27 +6,29 @@ export const Box = m.model("Box", {
 	chosen: Item.optional().initial(null),
 });
 
-export const pick = Box.action("the buyer picks an item", {
+export const pick = m.action(Box, "the buyer picks an item", {
 	when: (s) => s.chosen === null,
-	then: () => ({ chosen: { qty: 0, hot: false } }),
+	changes: () => ({ chosen: { qty: 0, hot: false } }),
 });
 
-export const more = Box.action("the buyer takes one more", {
+export const more = m.action(Box, "the buyer takes one more", {
 	when: (s) => s.chosen !== null && s.chosen.qty < 2,
-	then: (s) => ({ chosen: { ...m.some(s.chosen), qty: m.some(s.chosen).qty + 1 } }),
+	changes: (s) => ({ chosen: { ...m.some(s.chosen), qty: m.some(s.chosen).qty + 1 } }),
 });
 
-export const heat = Box.action("the item is heated", {
+export const heat = m.action(Box, "the item is heated", {
 	when: (s) => s.chosen !== null && !s.chosen.hot,
-	then: (s) => ({ chosen: { ...m.some(s.chosen), hot: true } }),
+	changes: (s) => ({ chosen: { ...m.some(s.chosen), hot: true } }),
 });
 
-export const cold = Box.rule({
-	says: "Two items are never hot",
-	holds: (s) => s.chosen === null || !(s.chosen.hot && s.chosen.qty === 2),
-});
+export const cold = m.rule(
+	Box,
+	"Two items are never hot",
+	(s) => s.chosen === null || !(s.chosen.hot && s.chosen.qty === 2),
+);
 
-export const served = Box.end({
-	says: "Two hot items are served",
-	when: (s) => s.chosen !== null && s.chosen.hot && s.chosen.qty === 2,
-});
+export const served = m.end(
+	Box,
+	"Two hot items are served",
+	(s) => s.chosen !== null && s.chosen.hot && s.chosen.qty === 2,
+);

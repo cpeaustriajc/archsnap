@@ -60,9 +60,9 @@ fn typescript_with_rule(condition: &str) -> String {
 
 export const Bad = m.model("Bad", {{ n: m.int(0, 1).initial(0) }});
 
-export const top = Bad.end({{ says: "Always", when: () => true }});
+export const top = m.end(Bad, "Always", () => true);
 
-export const clock = Bad.rule({{ says: "The clock is read", holds: () => {condition} }});
+export const clock = m.rule(Bad, "The clock is read", () => {condition});
 "#
     )
 }
@@ -109,7 +109,7 @@ fn explore_in_node_does_not_take_a_step_whose_then_reads_null() {
     assert_eq!(
         checked.model("Bump")["states"],
         1,
-        "`o` is null in the only start state, so the `then` of `bump` reads a value that is \
+        "`o` is null in the only start state, so the change of `bump` reads a value that is \
          null: a fault, and no state follows\n{checked}"
     );
     assert_eq!(
@@ -119,7 +119,7 @@ fn explore_in_node_does_not_take_a_step_whose_then_reads_null() {
     );
     assert!(
         has_a_fault(&explored.json),
-        "the `then` of `bump` faults in the start state\n{explored}"
+        "the change of `bump` faults in the start state\n{explored}"
     );
 }
 

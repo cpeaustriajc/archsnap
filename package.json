@@ -4,5 +4,8 @@
   "workspaces": [
     "packages/*",
     "packages/cli/platforms/*"
-  ]
+  ],
+  "devDependencies": {
+    "oxlint": "1.94.0"
+  }
 }

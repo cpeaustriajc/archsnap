@@ -17,6 +17,7 @@ unused-dependencies:
 
 typescript:
     bun install --frozen-lockfile
+    bunx oxlint packages tasks/conformance tasks/benchmark tasks/models
     bun run --cwd packages/model typecheck
     bun run --cwd packages/model format
     bun run --cwd packages/model test

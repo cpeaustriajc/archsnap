@@ -17,29 +17,26 @@ export const Heater = m.model("Heater", {
 	heating: m.boolean().initial(true),
 });
 
-export const warm = Heater.action("the element warms the room", {
+export const warm = m.action(Heater, "the element warms the room", {
 	when: (s) => s.heating && s.temp < MAX,
-	then: (s) => ({ temp: raised(s.temp) }),
+	changes: (s) => ({ temp: raised(s.temp) }),
 });
 
-export const cut = Heater.action("the thermostat cuts the power", {
+export const cut = m.action(Heater, "the thermostat cuts the power", {
 	when: (s) => s.heating && isHot(s.temp),
-	then: () => ({ heating: false }),
+	changes: () => ({ heating: false }),
 });
 
-export const cool = Heater.action("the room cools", {
+export const cool = m.action(Heater, "the room cools", {
 	when: (s) => !s.heating && s.temp > 0,
-	then: (s) => ({ temp: s.temp - STEP }),
+	changes: (s) => ({ temp: s.temp - STEP }),
 });
 
-export const resume = Heater.action("the thermostat restores the power", {
+export const resume = m.action(Heater, "the thermostat restores the power", {
 	when: (s) => !s.heating && s.temp === 0,
-	then: () => ({ heating: true }),
+	changes: () => ({ heating: true }),
 });
 
-export const capped = Heater.rule({
-	says: "The temperature never passes the maximum",
-	holds: (s) => s.temp <= MAX,
-});
+export const capped = m.rule(Heater, "The temperature never passes the maximum", (s) => s.temp <= MAX);
 
 export type State = m.Infer<typeof Heater>;

@@ -7,27 +7,18 @@ export const Basket = m.model("Basket", {
 	n: m.int(0, 2).initial(0),
 });
 
-export const inc = Basket.action("the count goes up", {
+export const inc = m.action(Basket, "the count goes up", {
 	when: (s) => s.n < 2,
-	then: (s) => ({ n: s.n + 1 }),
+	changes: (s) => ({ n: s.n + 1 }),
 });
 
-export const clear = Basket.action("the buyer empties the basket", {
+export const clear = m.action(Basket, "the buyer empties the basket", {
 	when: (s) => s.n === 2 && s.chosen !== null,
-	then: () => ({ chosen: null }),
+	changes: () => ({ chosen: null }),
 });
 
-export const few = Basket.rule({
-	says: "The basket holds at most one",
-	holds: (s) => m.some(s.chosen).qty <= 1,
-});
+export const few = m.rule(Basket, "The basket holds at most one", (s) => m.some(s.chosen).qty <= 1);
 
-export const early = Basket.rule({
-	says: "A late basket holds nothing",
-	holds: (s) => s.n <= 1 || m.some(s.chosen).qty === 0,
-});
+export const early = m.rule(Basket, "A late basket holds nothing", (s) => s.n <= 1 || m.some(s.chosen).qty === 0);
 
-export const emptied = Basket.end({
-	says: "The basket is empty",
-	when: (s) => s.chosen === null,
-});
+export const emptied = m.end(Basket, "The basket is empty", (s) => s.chosen === null);

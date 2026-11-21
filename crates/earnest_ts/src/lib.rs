@@ -9,6 +9,8 @@ mod bodies;
 #[cfg(test)]
 mod checks;
 mod file;
+#[cfg(test)]
+mod forms;
 mod members;
 mod names;
 mod shapes;
@@ -47,11 +49,17 @@ pub(crate) struct Reader<'s> {
 /// in `.tsx` is read as TSX and any other as TypeScript. Nothing is read from disk.
 ///
 /// A top-level `const` is read as exactly one of: a model, an action, a rule, an end or a view
-/// made by calling the library or the model directly; a declaration; a helper function; or a
-/// number, text or boolean written out or computed from earlier constants. Any other value is
-/// a problem, whether or not something reads the constant, and so is the name of a model used
-/// as a value. In an action, each function's own parameters decide which inputs it has in
-/// scope. A rule's `text` is in the normal form of `earnest_ast::condition_text`.
+/// made by calling the library with the model as its first argument, as in `m.rule(Model, ...)`;
+/// a declaration; a helper function; or a number, text or boolean written out or computed from
+/// earlier constants. Any other value is a problem, whether or not something reads the
+/// constant, and so is the name of a model used as a value anywhere but as that first argument.
+/// In an action, `when` and `changes` each take their own parameters, and those decide which
+/// inputs each has in scope. A rule's `text` is in the normal form of
+/// `earnest_ast::condition_text`.
+///
+/// Each of these is a problem that names what to write instead: a call on the model, as in
+/// `Model.action(...)`; a `then` key in an action; a `says`, `holds` or `when` key where the
+/// sentence or the function of `m.rule` or `m.end` belongs; and an exported name `then`.
 ///
 /// When the reading has any problem the file is unreadable and its drafts must not be
 /// checked. Problems come in order of position and cover the whole file, except after a

@@ -9,8 +9,8 @@ export const Cart = m.model("Cart", {
   count: m.int(0, 3).initial(0),
 });
 
-export const press = Cart.action("the buyer presses Add", {
-  then: (s) => {
+export const press = m.action(Cart, "the buyer presses Add", {
+  changes: (s) => {
     if (s.count === 0) {
       return { cta: "Adding", basket: 1 };
     }

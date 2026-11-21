@@ -4,9 +4,9 @@ export { m };
 
 export const Lamp = m.model("Lamp", { on: m.boolean().initial(false) });
 
-export const turn = Lamp.action("the lamp turns on", {
+export const turn = m.action(Lamp, "the lamp turns on", {
 	when: (s) => !s.on,
-	then: () => ({ on: true }),
+	changes: () => ({ on: true }),
 });
 
-export const lit = Lamp.end({ says: "The lamp is lit", when: (s) => s.on });
+export const lit = m.end(Lamp, "The lamp is lit", (s) => s.on);

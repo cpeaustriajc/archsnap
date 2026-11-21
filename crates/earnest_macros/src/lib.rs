@@ -85,7 +85,7 @@ pub fn model(arguments: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Marks the `impl` block that holds a model's statechart labels, the Rust form of the
-/// TypeScript library's `Model.view({ ... })`.
+/// TypeScript library's `m.view(Model, { ... })`.
 ///
 /// The arguments are all optional: `title = "..."` is the chart's title, `step(action = "...")`
 /// gives each named action an arrow label in place of its sentence, and

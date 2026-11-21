@@ -7,17 +7,11 @@ export const Keyed = m.model("Keyed", {
 	byWho: m.map(Who, Line),
 });
 
-export const tag = Keyed.action("Ann's line gets a tag", {
+export const tag = m.action(Keyed, "Ann's line gets a tag", {
 	when: (s) => s.byWho.isEmpty,
-	then: () => ({ byWho: m.mapOf(["ann", { qty: 1, tag: { size: 1 } }]) }),
+	changes: () => ({ byWho: m.mapOf(["ann", { qty: 1, tag: { size: 1 } }]) }),
 });
 
-export const empty = Keyed.rule({
-	says: "Nobody has a line",
-	holds: (s) => s.byWho.isEmpty,
-});
+export const empty = m.rule(Keyed, "Nobody has a line", (s) => s.byWho.isEmpty);
 
-export const stop = Keyed.end({
-	says: "Any state may stop",
-	when: () => true,
-});
+export const stop = m.end(Keyed, "Any state may stop", () => true);

@@ -7,18 +7,15 @@ export const Traffic = m.model("Traffic", {
 	cars: m.int(0, 9).initial(0),
 });
 
-export const change = Traffic.action("the light changes", {
-	then: (s) => ({
+export const change = m.action(Traffic, "the light changes", {
+	changes: (s) => ({
 		light: s.light === "Red" ? "Green" : s.light === "Green" ? "Amber" : "Red",
 	}),
 });
 
-export const pass = Traffic.action("a car passes", {
+export const pass = m.action(Traffic, "a car passes", {
 	when: (s) => s.cars < 9,
-	then: (s) => ({ cars: s.cars + 1 }),
+	changes: (s) => ({ cars: s.cars + 1 }),
 });
 
-export const counted = Traffic.rule({
-	says: "At most nine cars have passed",
-	holds: (s) => s.cars <= 9,
-});
+export const counted = m.rule(Traffic, "At most nine cars have passed", (s) => s.cars <= 9);

@@ -4,19 +4,13 @@ export const Climb = m.model("Climb", {
 	n: m.int(0, 3).initial(0),
 });
 
-export const inc = Climb.action("the count goes up", {
+export const inc = m.action(Climb, "the count goes up", {
 	when: (s) => s.n < 3,
-	then: (s) => ({ n: s.n + 1 }),
+	changes: (s) => ({ n: s.n + 1 }),
 });
 
-export const top = Climb.end({
-	says: "The count is at the top",
-	when: (s) => s.n === 3,
-});
+export const top = m.end(Climb, "The count is at the top", (s) => s.n === 3);
 
 const Alias = Climb;
 
-export const low = Alias.rule({
-	says: "The count stays at most one",
-	holds: (s: { n: number }) => s.n <= 1,
-});
+export const low = m.rule(Alias, "The count stays at most one", (s: { n: number }) => s.n <= 1);

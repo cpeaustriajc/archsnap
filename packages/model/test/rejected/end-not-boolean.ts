@@ -9,6 +9,4 @@ export const Cart = m.model("Cart", {
   count: m.int(0, 3).initial(0),
 });
 
-export const press = Cart.action("the buyer presses Add", {
-  when: (s) => s.cta === "Add",
-});
+export const added = m.end(Cart, "The item is in the cart", (s) => s.cta);

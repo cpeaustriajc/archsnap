@@ -9,8 +9,8 @@ export const Cart = m.model("Cart", {
   count: m.int(0, 3).initial(0),
 });
 
-export const press = Cart.action("the buyer presses Add", {
-  input: { by: Press },
+export const press = m.action(Cart, "the buyer presses Add", {
   when: (_, { by }) => by === "touch",
-  then: () => ({ cta: "Adding" }),
+  changes: () => ({ cta: "Adding" }),
+  input: { by: Press },
 });

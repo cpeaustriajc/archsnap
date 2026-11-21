@@ -282,7 +282,7 @@ impl Reader<'_> {
         }
     }
 
-    fn argument<'p, 'a>(
+    pub(crate) fn argument<'p, 'a>(
         &mut self,
         call: &'p CallExpression<'a>,
         index: usize,

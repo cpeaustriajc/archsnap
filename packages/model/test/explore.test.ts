@@ -17,22 +17,25 @@ const only = (found: Exploration): Finding => {
 
 const counter = () => {
   const Counter = m.model("Counter", { count: m.int(0, 3).initial(0) });
-  const increment = Counter.action("the count goes up", {
+  const increment = m.action(Counter, "the count goes up", {
     when: (s) => s.count < 3,
-    then: (s) => ({ count: s.count + 1 }),
+    changes: (s) => ({ count: s.count + 1 }),
   });
-  const full = Counter.end({ says: "The count is full", when: (s) => s.count === 3 });
+  const full = m.end(Counter, "The count is full", (s) => s.count === 3);
   return { Counter, increment, full };
 };
 
 const hops = () => {
   const Hops = m.model("Hops", { n: m.int(0, 5).initial(0) });
-  const one = Hops.action("add one", { when: (s) => s.n < 5, then: (s) => ({ n: s.n + 1 }) });
-  const two = Hops.action("add two", { when: (s) => s.n <= 3, then: (s) => ({ n: s.n + 2 }) });
-  const belowFour = Hops.rule({ says: "n stays below four", holds: (s) => s.n < 4 });
-  const notFive = Hops.rule({ says: "n is never five", holds: (s) => s.n !== 5 });
-  const notNegative = Hops.rule({ says: "n is never negative", holds: (s) => s.n >= 0 });
-  const atFive = Hops.end({ says: "n is five", when: (s) => s.n === 5 });
+  const one = m.action(Hops, "add one", { when: (s) => s.n < 5, changes: (s) => ({ n: s.n + 1 }) });
+  const two = m.action(Hops, "add two", {
+    when: (s) => s.n <= 3,
+    changes: (s) => ({ n: s.n + 2 }),
+  });
+  const belowFour = m.rule(Hops, "n stays below four", (s) => s.n < 4);
+  const notFive = m.rule(Hops, "n is never five", (s) => s.n !== 5);
+  const notNegative = m.rule(Hops, "n is never negative", (s) => s.n >= 0);
+  const atFive = m.end(Hops, "n is five", (s) => s.n === 5);
   return { Hops, one, two, belowFour, notFive, notNegative, atFive };
 };
 
@@ -50,14 +53,14 @@ test("a counter from 0 to 3 has 4 states and passes", () => {
 test("a queue of capacity 2 over 2 messages has 1 + 2 + 4 = 7 contents", () => {
   const Message = m.enum(["ping", "pong"]);
   const Inbox = m.model("Inbox", { queue: m.queue(Message, { capacity: 2 }) });
-  Inbox.action("a message arrives", {
+  m.action(Inbox, "a message arrives", {
     input: { message: Message },
     when: (s) => !s.queue.isFull,
-    then: (s, { message }) => ({ queue: s.queue.send(message) }),
+    changes: (s, { message }) => ({ queue: s.queue.send(message) }),
   });
-  Inbox.action("a message is handled", {
+  m.action(Inbox, "a message is handled", {
     when: (s) => !s.queue.isEmpty,
-    then: (s) => ({ queue: s.queue.receive() }),
+    changes: (s) => ({ queue: s.queue.receive() }),
   });
   const found = explore(Inbox);
   expect(found.states).toBe(7);
@@ -68,21 +71,21 @@ test("a queue of capacity 2 over 2 messages has 1 + 2 + 4 = 7 contents", () => {
 test("two sets with the same members are one state", () => {
   const Letter = m.enum(["a", "b"]);
   const Seen = m.model("Seen", { seen: m.set(Letter) });
-  Seen.action("a letter is seen", {
+  m.action(Seen, "a letter is seen", {
     input: { letter: Letter },
-    then: (s, { letter }) => ({ seen: s.seen.add(letter) }),
+    changes: (s, { letter }) => ({ seen: s.seen.add(letter) }),
   });
   expect(explore(Seen).states).toBe(4);
 });
 
 test("a model with two start states searches from both", () => {
   const Lamp = m.model("Lamp", { wired: m.boolean(), level: m.int(0, 1).initial(0) });
-  const brighten = Lamp.action("the lamp brightens", {
+  const brighten = m.action(Lamp, "the lamp brightens", {
     when: (s) => s.level === 0,
-    then: () => ({ level: 1 }),
+    changes: () => ({ level: 1 }),
   });
-  const staysDim = Lamp.rule({ says: "The lamp stays dim", holds: (s) => s.level === 0 });
-  const bright = Lamp.end({ says: "The lamp is bright", when: (s) => s.level === 1 });
+  const staysDim = m.rule(Lamp, "The lamp stays dim", (s) => s.level === 0);
+  const bright = m.end(Lamp, "The lamp is bright", (s) => s.level === 1);
   const found = explore(Lamp, { exports: { brighten, staysDim, bright } });
   expect(found.states).toBe(4);
   expect(found.status).toBe("fail");
@@ -195,15 +198,15 @@ test("without exports the id of an action or a rule is its sentence", () => {
 
 test("of two actions that break a rule at the same depth, the one declared first is reported", () => {
   const Walk = m.model("Walk", { at: m.enum(["middle", "left", "right"]).initial("middle") });
-  const goRight = Walk.action("step right", {
+  const goRight = m.action(Walk, "step right", {
     when: (s) => s.at === "middle",
-    then: () => ({ at: "right" }),
+    changes: () => ({ at: "right" }),
   });
-  const goLeft = Walk.action("step left", {
+  const goLeft = m.action(Walk, "step left", {
     when: (s) => s.at === "middle",
-    then: () => ({ at: "left" }),
+    changes: () => ({ at: "left" }),
   });
-  const staysPut = Walk.rule({ says: "Nobody moves", holds: (s) => s.at === "middle" });
+  const staysPut = m.rule(Walk, "Nobody moves", (s) => s.at === "middle");
   const found = explore(Walk, { exports: { goRight, goLeft, staysPut } });
   expect(found.rules[0]?.path?.steps.map((step) => step.action)).toStrictEqual(["goRight"]);
 });
@@ -215,13 +218,13 @@ test("inputs are tried with the first input varying fastest", () => {
     y: Bit.initial(0),
     done: m.boolean().initial(false),
   });
-  const choose = Pick.action("two bits are chosen", {
+  const choose = m.action(Pick, "two bits are chosen", {
     input: { a: Bit, b: Bit },
     when: (s) => !s.done,
-    then: (_, { a, b }) => ({ x: a, y: b, done: true }),
+    changes: (_, { a, b }) => ({ x: a, y: b, done: true }),
   });
-  const even = Pick.rule({ says: "The bits agree", holds: (s) => s.x === s.y });
-  const chosen = Pick.end({ says: "The bits are chosen", when: (s) => s.done });
+  const even = m.rule(Pick, "The bits agree", (s) => s.x === s.y);
+  const chosen = m.end(Pick, "The bits are chosen", (s) => s.done);
   const found = explore(Pick, { exports: { choose, even, chosen } });
   expect(found.states).toBe(5);
   expect(found.rules[0]?.path?.steps[0]?.input).toStrictEqual([
@@ -232,9 +235,9 @@ test("inputs are tried with the first input varying fastest", () => {
 
 test("a state with no action that no end covers is stuck", () => {
   const Gate = m.model("Gate", { gate: m.enum(["locked", "open"]).initial("locked") });
-  const push = Gate.action("the visitor pushes", {
+  const push = m.action(Gate, "the visitor pushes", {
     when: (s) => s.gate === "locked",
-    then: () => ({ gate: "open" }),
+    changes: () => ({ gate: "open" }),
   });
   const found = explore(Gate, { exports: { push } });
   expect(found.states).toBe(2);
@@ -261,11 +264,11 @@ test("a state with no action that no end covers is stuck", () => {
 
 test("the same state is not stuck when an end covers it", () => {
   const Gate = m.model("Gate", { gate: m.enum(["locked", "open"]).initial("locked") });
-  Gate.action("the visitor pushes", {
+  m.action(Gate, "the visitor pushes", {
     when: (s) => s.gate === "locked",
-    then: () => ({ gate: "open" }),
+    changes: () => ({ gate: "open" }),
   });
-  Gate.end({ says: "The gate is open", when: (s) => s.gate === "open" });
+  m.end(Gate, "The gate is open", (s) => s.gate === "open");
   const found = explore(Gate);
   expect(found.states).toBe(2);
   expect(found.status).toBe("pass");
@@ -274,8 +277,8 @@ test("the same state is not stuck when an end covers it", () => {
 
 test("an end does not stop a state that still has an action", () => {
   const Loop = m.model("Loop", { on: m.boolean().initial(false) });
-  Loop.action("the switch flips", { then: (s) => ({ on: !s.on }) });
-  Loop.end({ says: "Anywhere is fine", when: () => true });
+  m.action(Loop, "the switch flips", { changes: (s) => ({ on: !s.on }) });
+  m.end(Loop, "Anywhere is fine", () => true);
   const found = explore(Loop);
   expect(found.states).toBe(2);
   expect(found.status).toBe("pass");
@@ -283,8 +286,8 @@ test("an end does not stop a state that still has an action", () => {
 
 test("a value outside its declaration is out of range, counted and not expanded", () => {
   const Climb = m.model("Climb", { n: m.int(0, 2).initial(0) });
-  const up = Climb.action("n goes up", { then: (s) => ({ n: s.n + 1 }) });
-  const small = Climb.rule({ says: "n stays below three", holds: (s) => s.n < 3 });
+  const up = m.action(Climb, "n goes up", { changes: (s) => ({ n: s.n + 1 }) });
+  const small = m.rule(Climb, "n stays below three", (s) => s.n < 3);
   const found = explore(Climb, { exports: { up, small } });
   expect(found.states).toBe(4);
   expect(found.status).toBe("fail");
@@ -302,11 +305,11 @@ test("a value outside its declaration is out of range, counted and not expanded"
 
 test("a rule is unknown when an action's when faulted and cut a branch short", () => {
   const Model = People();
-  const age = Model.action("the person ages", {
+  const age = m.action(Model, "the person ages", {
     when: (s) => assumedPresent(s.who) && s.who.age === 0,
-    then: () => ({ who: { age: 1 } }),
+    changes: () => ({ who: { age: 1 } }),
   });
-  const fine = Model.rule({ says: "Always true", holds: () => true });
+  const fine = m.rule(Model, "Always true", () => true);
   const found = explore(Model, { exports: { age, fine } });
   expect(kinds(found)).toStrictEqual(["fault"]);
   expect(found.rules.map((rule) => rule.verdict)).toStrictEqual(["unknown"]);
@@ -315,20 +318,20 @@ test("a rule is unknown when an action's when faulted and cut a branch short", (
 test("sending to a full queue, pushing past max and retrying past the most are out of range", () => {
   const Letter = m.enum(["a"]);
   const Flood = m.model("Flood", { queue: m.queue(Letter, { capacity: 1 }) });
-  Flood.action("a letter arrives", { then: (s) => ({ queue: s.queue.send("a") }) });
+  m.action(Flood, "a letter arrives", { changes: (s) => ({ queue: s.queue.send("a") }) });
   const flooded = explore(Flood);
   expect(flooded.states).toBe(3);
   expect(kinds(flooded)).toStrictEqual(["out-of-range"]);
   expect(only(flooded).path.steps[1]?.state).toStrictEqual([{ name: "queue", value: ["a", "a"] }]);
 
   const Pile = m.model("Pile", { pile: m.seq(Letter, { max: 2 }) });
-  Pile.action("a letter is piled on", { then: (s) => ({ pile: s.pile.push("a") }) });
+  m.action(Pile, "a letter is piled on", { changes: (s) => ({ pile: s.pile.push("a") }) });
   const piled = explore(Pile);
   expect(piled.states).toBe(4);
   expect(kinds(piled)).toStrictEqual(["out-of-range"]);
 
   const Stubborn = m.model("Stubborn", { tries: m.retry({ max: 1 }) });
-  Stubborn.action("it tries again", { then: (s) => ({ tries: s.tries.again() }) });
+  m.action(Stubborn, "it tries again", { changes: (s) => ({ tries: s.tries.again() }) });
   const tried = explore(Stubborn);
   expect(tried.states).toBe(3);
   expect(kinds(tried)).toStrictEqual(["out-of-range"]);
@@ -351,11 +354,12 @@ const People = () =>
 
 test("a rule that reads a field of null is a fault, and the rule is unknown, not broken", () => {
   const Model = People();
-  const adult = Model.rule({
-    says: "Whoever is there is an adult",
-    holds: (s) => assumedPresent(s.who) && s.who.age === 1,
-  });
-  const empty = Model.end({ says: "Nobody came", when: (s) => s.who === null });
+  const adult = m.rule(
+    Model,
+    "Whoever is there is an adult",
+    (s) => assumedPresent(s.who) && s.who.age === 1,
+  );
+  const empty = m.end(Model, "Nobody came", (s) => s.who === null);
   const found = explore(Model, { exports: { adult, empty } });
   expect(found.states).toBe(1);
   expect(found.status).toBe("fail");
@@ -378,27 +382,26 @@ test("only a rule that could not be evaluated somewhere and was not seen broken 
       .optional()
       .initial({ age: 0 }),
   });
-  const grow = Model.action("the guest grows up", {
+  const grow = m.action(Model, "the guest grows up", {
     when: (s) => s.who !== null && s.who.age === 0,
-    then: () => ({ who: { age: 1 } }),
+    changes: () => ({ who: { age: 1 } }),
   });
-  const leave = Model.action("the guest leaves", {
+  const leave = m.action(Model, "the guest leaves", {
     when: (s) => s.who !== null && s.who.age === 1,
-    then: () => ({ who: null }),
+    changes: () => ({ who: null }),
   });
-  const known = Model.rule({
-    says: "The guest has an age",
-    holds: (s) => assumedPresent(s.who) && s.who.age >= 0,
-  });
-  const young = Model.rule({
-    says: "The guest is young",
-    holds: (s) => assumedPresent(s.who) && s.who.age === 0,
-  });
-  const small = Model.rule({
-    says: "Nobody is older than one",
-    holds: (s) => s.who === null || s.who.age <= 1,
-  });
-  const gone = Model.end({ says: "The guest left", when: (s) => s.who === null });
+  const known = m.rule(
+    Model,
+    "The guest has an age",
+    (s) => assumedPresent(s.who) && s.who.age >= 0,
+  );
+  const young = m.rule(
+    Model,
+    "The guest is young",
+    (s) => assumedPresent(s.who) && s.who.age === 0,
+  );
+  const small = m.rule(Model, "Nobody is older than one", (s) => s.who === null || s.who.age <= 1);
+  const gone = m.end(Model, "The guest left", (s) => s.who === null);
   const found = explore(Model, { exports: { grow, leave, known, young, small, gone } });
   expect(found.states).toBe(3);
   expect(
@@ -414,24 +417,25 @@ test("only a rule that could not be evaluated somewhere and was not seen broken 
 
 test("a when that faults is a fault, and the state is not stuck", () => {
   const Model = People();
-  const age = Model.action("a year passes", {
+  const age = m.action(Model, "a year passes", {
     when: (s) => assumedPresent(s.who) && s.who.age === 0,
-    then: () => ({ who: { age: 1 } }),
+    changes: () => ({ who: { age: 1 } }),
   });
   const found = explore(Model, { exports: { age } });
   expect(found.states).toBe(1);
   expect(kinds(found)).toStrictEqual(["fault"]);
   expect(only(found).message).toBe(
-    "the `when` of the action `age` reads a value that is null in this state",
+    "the condition of the action `age` reads a value that is null in this state",
   );
 });
 
 test("an end that faults is a fault, and the state is not stuck", () => {
   const Model = People();
-  const gone = Model.end({
-    says: "Whoever was there is a newborn",
-    when: (s) => assumedPresent(s.who) && s.who.age === 0,
-  });
+  const gone = m.end(
+    Model,
+    "Whoever was there is a newborn",
+    (s) => assumedPresent(s.who) && s.who.age === 0,
+  );
   const found = explore(Model, { exports: { gone } });
   expect(found.states).toBe(1);
   expect(found.status).toBe("fail");
@@ -441,41 +445,43 @@ test("an end that faults is a fault, and the state is not stuck", () => {
 
 test("an end that faults beside an end that is true leaves the fault and no stuck state", () => {
   const Model = People();
-  const gone = Model.end({
-    says: "Whoever was there is a newborn",
-    when: (s) => assumedPresent(s.who) && s.who.age === 0,
-  });
-  const empty = Model.end({ says: "Nobody is there", when: (s) => s.who === null });
+  const gone = m.end(
+    Model,
+    "Whoever was there is a newborn",
+    (s) => assumedPresent(s.who) && s.who.age === 0,
+  );
+  const empty = m.end(Model, "Nobody is there", (s) => s.who === null);
   const found = explore(Model, { exports: { gone, empty } });
   expect(kinds(found)).toStrictEqual(["fault"]);
 });
 
 test("an end is not asked where an action can happen, so it can't fault there", () => {
   const Model = People();
-  const arrive = Model.action("someone arrives", {
+  const arrive = m.action(Model, "someone arrives", {
     when: (s) => s.who === null,
-    then: () => ({ who: { age: 1 } }),
+    changes: () => ({ who: { age: 1 } }),
   });
-  const gone = Model.end({
-    says: "Whoever is there is an adult",
-    when: (s) => assumedPresent(s.who) && s.who.age === 1,
-  });
+  const gone = m.end(
+    Model,
+    "Whoever is there is an adult",
+    (s) => assumedPresent(s.who) && s.who.age === 1,
+  );
   const found = explore(Model, { exports: { arrive, gone } });
   expect(found.states).toBe(2);
   expect(found.status).toBe("pass");
   expect(kinds(found)).toStrictEqual([]);
 });
 
-test("a then that faults gives no next state, and the state is not stuck", () => {
+test("a change that faults gives no next state, and the state is not stuck", () => {
   const Model = People();
-  const age = Model.action("a year passes", {
-    then: (s) => ({ who: assumedPresent(s.who) ? { age: s.who.age + 1 } : null }),
+  const age = m.action(Model, "a year passes", {
+    changes: (s) => ({ who: assumedPresent(s.who) ? { age: s.who.age + 1 } : null }),
   });
   const found = explore(Model, { exports: { age } });
   expect(found.states).toBe(1);
   expect(kinds(found)).toStrictEqual(["fault"]);
   expect(only(found).message).toBe(
-    "the `then` of the action `age` reads a value that is null in this state",
+    "the change of the action `age` reads a value that is null in this state",
   );
 });
 
@@ -484,21 +490,21 @@ test("a remainder by zero is a fault", () => {
     left: m.int(0, 5).initial(5),
     people: m.int(0, 2).initial(0),
   });
-  const share = Share.action("the rest is shared out", {
-    then: (s) => ({ left: s.left % s.people }),
+  const share = m.action(Share, "the rest is shared out", {
+    changes: (s) => ({ left: s.left % s.people }),
   });
   const found = explore(Share, { exports: { share } });
   expect(found.states).toBe(1);
   expect(found.status).toBe("fail");
   expect(kinds(found)).toStrictEqual(["fault"]);
   expect(only(found).message).toBe(
-    "the `then` of the action `share` takes a remainder with a negative number or a divisor below 1 in this state",
+    "the change of the action `share` takes a remainder with a negative number or a divisor below 1 in this state",
   );
 });
 
 test("a remainder of whole numbers that are not negative is not a fault", () => {
   const Clock = m.model("Clock", { hour: m.int(0, 2).initial(0) });
-  Clock.action("an hour passes", { then: (s) => ({ hour: (s.hour + 1) % 3 }) });
+  m.action(Clock, "an hour passes", { changes: (s) => ({ hour: (s.hour + 1) % 3 }) });
   const found = explore(Clock);
   expect(found.states).toBe(3);
   expect(found.status).toBe("pass");
@@ -506,31 +512,32 @@ test("a remainder of whole numbers that are not negative is not a fault", () => 
 
 test("a next state with a number past what JavaScript holds exactly is a fault", () => {
   const Grow = m.model("Grow", { n: m.int(0, 1).initial(1) });
-  const grow = Grow.action("the number doubles past 2^53", {
-    then: (s) => ({ n: s.n * 9007199254740991 * 2 }),
+  const grow = m.action(Grow, "the number doubles past 2^53", {
+    changes: (s) => ({ n: s.n * 9007199254740991 * 2 }),
   });
   const found = explore(Grow, { exports: { grow } });
   expect(found.states).toBe(1);
   expect(found.status).toBe("fail");
   expect(kinds(found)).toStrictEqual(["fault"]);
   expect(only(found).message).toBe(
-    "the `then` of the action `grow` computes a number too large to hold in this state",
+    "the change of the action `grow` computes a number too large to hold in this state",
   );
 });
 
 test("a number computed inside a rule is the one JavaScript computes, which can't be intercepted", () => {
   const Step = m.model("Step", { n: m.int(0, 1).initial(1) });
-  const exact = Step.rule({
-    says: "Adding 2^53 and taking it away keeps the number",
-    holds: (s) => s.n + 9007199254740992 - 9007199254740992 === s.n,
-  });
+  const exact = m.rule(
+    Step,
+    "Adding 2^53 and taking it away keeps the number",
+    (s) => s.n + 9007199254740992 - 9007199254740992 === s.n,
+  );
   const found = explore(Step, { exports: { exact } });
   expect(found.rules.map((rule) => rule.verdict)).toStrictEqual(["broken"]);
 });
 
 test("maxStates stops the search, which is then unfinished with unknown rules", () => {
   const { Counter, ...exports } = counter();
-  const small = Counter.rule({ says: "The count stays small", holds: (s) => s.count <= 3 });
+  const small = m.rule(Counter, "The count stays small", (s) => s.count <= 3);
   const found = explore(Counter, { maxStates: 2, exports: { ...exports, small } });
   expect(found).toStrictEqual({
     status: "unfinished",
@@ -567,7 +574,7 @@ test("a state counted at the limit has its rules judged, though the search does 
 
 test("a start state counted at the limit has its rules judged", () => {
   const Dial = m.model("Dial", { n: m.int(0, 2) });
-  const notOne = Dial.rule({ says: "n is never one", holds: (s) => s.n !== 1 });
+  const notOne = m.rule(Dial, "n is never one", (s) => s.n !== 1);
   const counted = explore(Dial, { maxStates: 2, exports: { notOne } });
   expect(counted.states).toBe(2);
   expect(counted.status).toBe("fail");
@@ -581,9 +588,12 @@ test("a start state counted at the limit has its rules judged", () => {
 
 test("a rule seen broken before the limit is broken, and the model fails", () => {
   const Long = m.model("Long", { n: m.int(0, 9).initial(0) });
-  const up = Long.action("n goes up", { when: (s) => s.n < 9, then: (s) => ({ n: s.n + 1 }) });
-  const notOne = Long.rule({ says: "n is never one", holds: (s) => s.n !== 1 });
-  const notNine = Long.rule({ says: "n is never nine", holds: (s) => s.n !== 9 });
+  const up = m.action(Long, "n goes up", {
+    when: (s) => s.n < 9,
+    changes: (s) => ({ n: s.n + 1 }),
+  });
+  const notOne = m.rule(Long, "n is never one", (s) => s.n !== 1);
+  const notNine = m.rule(Long, "n is never nine", (s) => s.n !== 9);
   const found = explore(Long, { maxStates: 3, exports: { up, notOne, notNine } });
   expect(found.states).toBe(3);
   expect(found.status).toBe("fail");
@@ -700,8 +710,8 @@ const FAULT = "takes a remainder with a negative number or a divisor below 1 in 
 
 test("a rule that takes the remainder of a negative number is unknown in explore", () => {
   const Rem = m.model("Rem", { n: m.int(0, 2).initial(0) });
-  const below = Rem.rule({ says: "Below", holds: (s) => m.rem(s.n - 1, 3) !== 99 });
-  const always = Rem.end({ says: "Always", when: () => true });
+  const below = m.rule(Rem, "Below", (s) => m.rem(s.n - 1, 3) !== 99);
+  const always = m.end(Rem, "Always", () => true);
   const found = explore(Rem, { exports: { below, always } });
   expect(found.rules.map((rule) => rule.verdict)).toStrictEqual(["unknown"]);
   expect(found.findings.map((finding) => finding.message)).toStrictEqual([
@@ -709,28 +719,31 @@ test("a rule that takes the remainder of a negative number is unknown in explore
   ]);
 });
 
-test("m.rem faults in a when, an end and a then, as the checker does", () => {
+test("m.rem faults in a when, an end and a change, as the checker does", () => {
   const Rem = m.model("Rem", { n: m.int(0, 2).initial(0) });
-  const inWhen = Rem.action("when", { when: (s) => m.rem(s.n - 1, 3) === 0, then: () => ({}) });
+  const inWhen = m.action(Rem, "when", {
+    when: (s) => m.rem(s.n - 1, 3) === 0,
+    changes: () => ({}),
+  });
   const messages = (found: Exploration) => found.findings.map((finding) => finding.message);
   expect(messages(explore(Rem, { exports: { inWhen } }))).toStrictEqual([
-    `the \`when\` of the action \`inWhen\` ${FAULT}`,
+    `the condition of the action \`inWhen\` ${FAULT}`,
   ]);
   const Ended = m.model("Ended", { n: m.int(0, 1).initial(0) });
-  const over = Ended.end({ says: "Over", when: (s) => m.rem(s.n - 1, 2) === 0 });
+  const over = m.end(Ended, "Over", (s) => m.rem(s.n - 1, 2) === 0);
   expect(messages(explore(Ended, { exports: { over } }))).toStrictEqual([
     `the end \`over\` ${FAULT}`,
   ]);
   const Then = m.model("Then", { n: m.int(0, 2).initial(0), d: m.int(0, 1).initial(0) });
-  const share = Then.action("share", { then: (s) => ({ n: m.rem(s.n, s.d) }) });
+  const share = m.action(Then, "share", { changes: (s) => ({ n: m.rem(s.n, s.d) }) });
   expect(messages(explore(Then, { exports: { share } }))).toStrictEqual([
-    `the \`then\` of the action \`share\` ${FAULT}`,
+    `the change of the action \`share\` ${FAULT}`,
   ]);
 });
 
 test("replay reports the remainder fault of an action", () => {
   const Then = m.model("Then", { n: m.int(0, 2).initial(1), d: m.int(0, 1).initial(0) });
-  const share = Then.action("share", { then: (s) => ({ n: m.rem(s.n, s.d) }) });
+  const share = m.action(Then, "share", { changes: (s) => ({ n: m.rem(s.n, s.d) }) });
   const state = (n: number) => [
     { name: "n", value: n },
     { name: "d", value: 0 },
@@ -759,10 +772,10 @@ const optional = () => {
 
 test("a number read from a null optional is a fault in a rule, as the checker says", () => {
   const { Opt } = optional();
-  const below = Opt.rule({ says: "Below", holds: (s) => m.some(s.o) < 3 });
-  const sum = Opt.rule({ says: "Sum", holds: (s) => m.some(s.o) + 1 > 0 });
-  const same = Opt.rule({ says: "Same", holds: (s) => m.some(s.o) === 7 });
-  const done = Opt.end({ says: "Done", when: () => true });
+  const below = m.rule(Opt, "Below", (s) => m.some(s.o) < 3);
+  const sum = m.rule(Opt, "Sum", (s) => m.some(s.o) + 1 > 0);
+  const same = m.rule(Opt, "Same", (s) => m.some(s.o) === 7);
+  const done = m.end(Opt, "Done", () => true);
   const found = explore(Opt, { exports: { below, sum, same, done } });
   expect(found.rules.map((rule) => rule.verdict)).toStrictEqual(["unknown", "unknown", "unknown"]);
   expect(found.findings.map((finding) => finding.message)).toStrictEqual([
@@ -770,42 +783,42 @@ test("a number read from a null optional is a fault in a rule, as the checker sa
   ]);
 });
 
-test("m.some faults in a when, an end, a then and a helper, as the checker does", () => {
+test("m.some faults in a when, an end, a change and a helper, as the checker does", () => {
   const messages = (found: Exploration) => found.findings.map((finding) => finding.message);
   const first = optional().Opt;
-  const inWhen = first.action("when", { when: (s) => m.some(s.o) > 0, then: () => ({}) });
+  const inWhen = m.action(first, "when", { when: (s) => m.some(s.o) > 0, changes: () => ({}) });
   expect(messages(explore(first, { exports: { inWhen } }))).toStrictEqual([
-    `the \`when\` of the action \`inWhen\` ${NULL_FAULT}`,
+    `the condition of the action \`inWhen\` ${NULL_FAULT}`,
   ]);
   const second = optional().Opt;
-  const over = second.end({ says: "Over", when: (s) => m.some(s.o) === 0 });
+  const over = m.end(second, "Over", (s) => m.some(s.o) === 0);
   expect(messages(explore(second, { exports: { over } }))).toStrictEqual([
     `the end \`over\` ${NULL_FAULT}`,
   ]);
   const third = optional().Opt;
-  const bump = third.action("bump", { then: (s) => ({ n: m.some(s.o) + 1 }) });
+  const bump = m.action(third, "bump", { changes: (s) => ({ n: m.some(s.o) + 1 }) });
   expect(messages(explore(third, { exports: { bump } }))).toStrictEqual([
-    `the \`then\` of the action \`bump\` ${NULL_FAULT}`,
+    `the change of the action \`bump\` ${NULL_FAULT}`,
   ]);
   const read = (s: { readonly o: number | null }) => m.some(s.o) + 1;
   const fourth = optional().Opt;
-  const viaHelper = fourth.rule({ says: "Helper", holds: (s) => read(s) > 0 });
-  const done = fourth.end({ says: "Done", when: () => true });
+  const viaHelper = m.rule(fourth, "Helper", (s) => read(s) > 0);
+  const done = m.end(fourth, "Done", () => true);
   const found = explore(fourth, { exports: { viaHelper, done } });
   expect(found.rules.map((rule) => rule.verdict)).toStrictEqual(["unknown"]);
   expect(messages(found)).toStrictEqual([`the rule \`viaHelper\` ${NULL_FAULT}`]);
 });
 
-test("a step whose then reads null is not taken", () => {
+test("a step whose change reads null is not taken", () => {
   const { Opt } = optional();
-  const bump = Opt.action("bump", { then: (s) => ({ n: m.some(s.o) + 1 }) });
+  const bump = m.action(Opt, "bump", { changes: (s) => ({ n: m.some(s.o) + 1 }) });
   const found = explore(Opt, { exports: { bump } });
   expect(found.states).toBe(1);
 });
 
 test("replay reports the null fault of an action", () => {
   const { Opt } = optional();
-  const bump = Opt.action("bump", { then: (s) => ({ n: m.some(s.o) + 1 }) });
+  const bump = m.action(Opt, "bump", { changes: (s) => ({ n: m.some(s.o) + 1 }) });
   const state = (n: number) => [
     { name: "o", value: null },
     { name: "n", value: n },

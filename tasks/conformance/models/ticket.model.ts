@@ -8,29 +8,30 @@ export const Ticket = m.model("Ticket", {
 	owner: Buyer.optional().initial(null),
 });
 
-export const move = Ticket.action("the seat moves back a row", {
+export const move = m.action(Ticket, "the seat moves back a row", {
 	when: (s) => s.seat.row < 2,
-	then: (s) => ({ seat: { ...s.seat, row: s.seat.row + 1 } }),
+	changes: (s) => ({ seat: { ...s.seat, row: s.seat.row + 1 } }),
 });
 
-export const swap = Ticket.action("the seat swaps sides", {
-	then: (s) => ({ seat: { ...s.seat, aisle: !s.seat.aisle } }),
+export const swap = m.action(Ticket, "the seat swaps sides", {
+	changes: (s) => ({ seat: { ...s.seat, aisle: !s.seat.aisle } }),
 });
 
-export const sell = Ticket.action("a buyer takes the ticket", {
+export const sell = m.action(Ticket, "a buyer takes the ticket", {
 	input: { buyer: Buyer },
 	when: (s) => s.owner === null,
-	then: (_, { buyer }) => ({ owner: buyer }),
+	changes: (_, { buyer }) => ({ owner: buyer }),
 });
 
-export const refund = Ticket.action("the buyer returns the ticket", {
+export const refund = m.action(Ticket, "the buyer returns the ticket", {
 	when: (s) => s.owner !== null,
-	then: () => ({ owner: null }),
+	changes: () => ({ owner: null }),
 });
 
-export const seated = Ticket.rule({
-	says: "A sold ticket has a seat in a real row",
-	holds: (s) => s.owner === null || (s.seat.row >= 1 && s.seat.row <= 2),
-});
+export const seated = m.rule(
+	Ticket,
+	"A sold ticket has a seat in a real row",
+	(s) => s.owner === null || (s.seat.row >= 1 && s.seat.row <= 2),
+);
 
 export type State = m.Infer<typeof Ticket>;

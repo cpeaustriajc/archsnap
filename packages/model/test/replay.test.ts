@@ -1,15 +1,19 @@
 import { assert, expect, test } from "vitest";
 import { type Named, explore, m, replay } from "@earnest/model";
 import * as cart from "./models/cart.model.ts";
+import * as turnstile from "./models/turnstile.model.ts";
 
 const n = (value: number): Named[] => [{ name: "n", value }];
 
 const hops = () => {
   const Hops = m.model("Hops", { n: m.int(0, 5).initial(0) });
-  const one = Hops.action("add one", { when: (s) => s.n < 5, then: (s) => ({ n: s.n + 1 }) });
-  const two = Hops.action("add two", { when: (s) => s.n <= 3, then: (s) => ({ n: s.n + 2 }) });
-  const belowFour = Hops.rule({ says: "n stays below four", holds: (s) => s.n < 4 });
-  const atFive = Hops.end({ says: "n is five", when: (s) => s.n === 5 });
+  const one = m.action(Hops, "add one", { when: (s) => s.n < 5, changes: (s) => ({ n: s.n + 1 }) });
+  const two = m.action(Hops, "add two", {
+    when: (s) => s.n <= 3,
+    changes: (s) => ({ n: s.n + 2 }),
+  });
+  const belowFour = m.rule(Hops, "n stays below four", (s) => s.n < 4);
+  const atFive = m.end(Hops, "n is five", (s) => s.n === 5);
   return { Hops, one, two, belowFour, atFive };
 };
 
@@ -40,6 +44,24 @@ test("a path is applied one action at a time and gives every state on the way", 
     ],
   };
   expect(replay(Hops, path, { exports })).toStrictEqual([{ n: 0 }, { n: 2 }, { n: 3 }, { n: 5 }]);
+});
+
+test("a path through the turnstile gives every state on the way", () => {
+  const state = (gate: string, paid: boolean, visitors: number): Named[] => [
+    { name: "gate", value: gate },
+    { name: "paid", value: paid },
+    { name: "visitors", value: visitors },
+  ];
+  const path = {
+    start: state("locked", false, 0),
+    steps: [
+      { action: "pay", state: state("locked", true, 0) },
+      { action: "push", state: state("open", true, 1) },
+    ],
+  };
+  const states = replay(turnstile.Turnstile, path, { exports: turnstile });
+  expect(states).toHaveLength(3);
+  expect(states.at(-1)).toStrictEqual({ gate: "open", paid: true, visitors: 1 });
 });
 
 test("a path with no steps gives its start state", () => {
@@ -85,9 +107,9 @@ test("collections come back in JSON form, and a set may be listed in any order",
     order: m.seq(Letter, { max: 2 }),
     count: m.map(Letter, m.int(0, 2)),
   });
-  const see = Seen.action("a letter is seen", {
+  const see = m.action(Seen, "a letter is seen", {
     input: { letter: Letter },
-    then: (s, { letter }) => ({
+    changes: (s, { letter }) => ({
       seen: s.seen.add(letter),
       order: s.order.push(letter),
       count: s.count.set(letter, (s.count.get(letter) ?? 0) + 1),
@@ -171,8 +193,8 @@ test("a step that names no action of the model is refused", () => {
 
 test("a label shared by two actions is refused when there are no exports to tell them apart", () => {
   const Twins = m.model("Twins", { n: m.int(0, 3).initial(0) });
-  const first = Twins.action("n changes", { then: () => ({ n: 1 }) });
-  const second = Twins.action("n changes", { then: () => ({ n: 2 }) });
+  const first = m.action(Twins, "n changes", { changes: () => ({ n: 1 }) });
+  const second = m.action(Twins, "n changes", { changes: () => ({ n: 2 }) });
   const path = { start: n(0), steps: [{ action: "second", label: "n changes", state: n(2) }] };
   expect(() => replay(Twins, path)).toThrow(/step 1 \(second\): more than one action matches/);
   expect(replay(Twins, path, { exports: { first, second } })).toStrictEqual([{ n: 0 }, { n: 2 }]);
@@ -189,7 +211,7 @@ test("a step whose when is false is refused", () => {
     ],
   };
   expect(() => replay(Hops, path, { exports })).toThrow(
-    /Hops: step 3 \(two\): the `when` of the action is false in this state/,
+    /Hops: step 3 \(two\): the condition of the action is false in this state/,
   );
 });
 
@@ -232,19 +254,19 @@ test("a step whose action can't be evaluated is refused", () => {
       .optional()
       .initial(null),
   });
-  const age = People.action("a year passes", {
-    then: (s) => ({ who: assumedPresent(s.who) ? { age: s.who.age + 1 } : null }),
+  const age = m.action(People, "a year passes", {
+    changes: (s) => ({ who: assumedPresent(s.who) ? { age: s.who.age + 1 } : null }),
   });
   const nobody: Named[] = [{ name: "who", value: null }];
   const path = { start: nobody, steps: [{ action: "age", state: nobody }] };
   expect(() => replay(People, path, { exports: { age } })).toThrow(
-    /People: step 1 \(age\): the `then` of the action reads a value that is null in this state/,
+    /People: step 1 \(age\): the change of the action reads a value that is null in this state/,
   );
 });
 
 test("a path may end out of range, and nothing can follow that state", () => {
   const Climb = m.model("Climb", { n: m.int(0, 2).initial(0) });
-  const up = Climb.action("n goes up", { then: (s) => ({ n: s.n + 1 }) });
+  const up = m.action(Climb, "n goes up", { changes: (s) => ({ n: s.n + 1 }) });
   const exports = { up };
   const [finding] = explore(Climb, { exports }).findings;
   assert.ok(finding);

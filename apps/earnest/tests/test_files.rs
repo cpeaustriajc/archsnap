@@ -13,20 +13,14 @@ export const Counter = m.model(\"Counter\", {
 \tcount: m.int(0, 3).initial(0),
 });
 
-export const increment = Counter.action(\"the counter goes up by one\", {
+export const increment = m.action(Counter, \"the counter goes up by one\", {
 \twhen: (s) => s.count < 3,
-\tthen: (s) => ({ count: s.count + 1 }),
+\tchanges: (s) => ({ count: s.count + 1 }),
 });
 
-export const bounded = Counter.rule({
-\tsays: \"The count is never above three\",
-\tholds: (s) => s.count <= 3,
-});
+export const bounded = m.rule(Counter, \"The count is never above three\", (s) => s.count <= 3);
 
-export const full = Counter.end({
-\tsays: \"The counter is full\",
-\twhen: (s) => s.count === 3,
-});
+export const full = m.end(Counter, \"The counter is full\", (s) => s.count === 3);
 ";
 const VITEST: &str = "\
 import { m } from \"@earnest/model\";

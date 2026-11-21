@@ -1,5 +1,5 @@
 use crate::Reader;
-use crate::members::MemberKind;
+use crate::members::{Member, MemberKind};
 use crate::names::LIBRARY_MODULE;
 use crate::terms::{CLASS, bare};
 use earnest_ast::{Draft, HelperDraft, HelperKind, Language, ViewDraft};
@@ -13,8 +13,10 @@ use oxc_span::GetSpan;
 const ONLY_AT_THE_TOP: &str =
     "a model file has only imports, `const` declarations, `type` and `interface`";
 const NOT_A_CONSTANT: &str = "a top-level `const` holds a model, an action, a rule, an end or a \
-    view made by calling the library or the model directly, a declaration, a helper function, \
-    or a number, text or boolean written out or computed from earlier constants";
+    view made by calling the library, a declaration, a helper function, or a number, text or \
+    boolean written out or computed from earlier constants";
+const THEN: &str = "then";
+const THEN_EXPORTED: &str = "a module with an export named `then` can't be awaited by `import()`, because JavaScript takes the module for a promise: export the constant under another name";
 
 pub(crate) enum Pending<'p, 'a> {
     Helper {
@@ -28,13 +30,7 @@ pub(crate) enum Pending<'p, 'a> {
     Refused {
         value: &'p Expression<'a>,
     },
-    Member {
-        model: usize,
-        kind: MemberKind,
-        id: String,
-        start: u32,
-        call: &'p CallExpression<'a>,
-    },
+    Member(Member<'p, 'a>),
 }
 
 #[derive(Default)]
@@ -107,6 +103,13 @@ fn callee_parts<'p>(call: &'p CallExpression<'_>) -> Option<(&'p str, &'p str)> 
     Some((root.name.as_str(), member.property.name.as_str()))
 }
 
+fn parts_are_functions(model: &str) -> String {
+    format!(
+        "a call on a model makes no part: write `m.action({model}, ...)`, \
+         `m.rule({model}, ...)`, `m.end({model}, ...)` or `m.view({model}, ...)`"
+    )
+}
+
 impl Reader<'_> {
     pub(crate) fn program(&mut self, program: &Program<'_>) -> Vec<Draft> {
         let mut top = Top {
@@ -133,16 +136,11 @@ impl Reader<'_> {
                 }
                 Pending::Constant { name, value } => constants.push((name, self.term(value))),
                 Pending::Refused { value } => self.refuse_constant(value),
-                Pending::Member {
-                    model,
-                    kind,
-                    id,
-                    start,
-                    call,
-                } => {
+                Pending::Member(member) => {
+                    let model = member.model;
                     if let Some(draft) = top.drafts.get_mut(model) {
                         self.step_places.clear();
-                        self.member_of(draft, kind, id, start, call);
+                        self.member_of(draft, member);
                         steps.extend(
                             self.step_places
                                 .drain(..)
@@ -341,38 +339,18 @@ impl Reader<'_> {
                 self.model(name, call, start, top);
                 return;
             }
-            let owner = top.owners.iter().find(|(known, _)| known == root);
-            if let Some((_, model)) = owner {
-                let unexported = !top.exported.iter().any(|known| known == name);
-                let part_kind = MemberKind::named(part);
-                if unexported
-                    && matches!(
-                        part_kind,
-                        Some(MemberKind::Action | MemberKind::Rule | MemberKind::End)
-                    )
-                {
-                    self.refuse(
-                        call.span.start,
-                        name,
-                        "a rule, an action or an end is an exported constant, because its id is \
-                         the name it is exported under: write `export const name = ...`",
-                    );
-                    return;
-                }
-                match part_kind {
-                    Some(kind) => top.pending.push(Pending::Member {
-                        model: *model,
-                        kind,
-                        id: name.to_owned(),
-                        start,
-                        call,
-                    }),
-                    None => self.refuse(
-                        call.span.start,
-                        &format!("{root}.{part}"),
-                        "a model has `action`, `rule`, `end` and `view`",
-                    ),
-                }
+            if self.is_library(root)
+                && let Some(kind) = MemberKind::named(part)
+            {
+                self.library_part(name, kind, call, start, top);
+                return;
+            }
+            if top.owners.iter().any(|(known, _)| known == root) {
+                self.refuse(
+                    call.span.start,
+                    &format!("{root}.{part}"),
+                    &parts_are_functions(root),
+                );
                 return;
             }
         }
@@ -393,6 +371,64 @@ impl Reader<'_> {
             name: name.to_owned(),
             value: init,
         });
+    }
+
+    fn library_part<'p, 'a>(
+        &mut self,
+        name: &str,
+        kind: MemberKind,
+        call: &'p CallExpression<'a>,
+        start: u32,
+        top: &mut Top<'p, 'a>,
+    ) {
+        let first = call.arguments.first().and_then(Argument::as_expression);
+        let owner = first.map(bare).and_then(|written| match written {
+            Expression::Identifier(model) => top
+                .owners
+                .iter()
+                .find(|(known, _)| known == model.name.as_str()),
+            _ => None,
+        });
+        let Some((_, model)) = owner else {
+            let (offset, feature) = first.map_or_else(
+                || (call.span.start, self.quoted(call.callee.span())),
+                |written| (written.span().start, self.quoted(written.span())),
+            );
+            self.refuse(
+                offset,
+                &feature,
+                &format!(
+                    "the first argument of `{}` is the model the part belongs to, a model \
+                     declared in this file with `m.model`",
+                    self.quoted(call.callee.span())
+                ),
+            );
+            return;
+        };
+        self.queue(
+            Member {
+                model: *model,
+                kind,
+                id: name.to_owned(),
+                start,
+                call,
+            },
+            top,
+        );
+    }
+
+    fn queue<'p, 'a>(&mut self, member: Member<'p, 'a>, top: &mut Top<'p, 'a>) {
+        let unexported = !top.exported.iter().any(|known| known == &member.id);
+        if unexported && !matches!(member.kind, MemberKind::View) {
+            self.refuse(
+                member.call.span.start,
+                &member.id,
+                "a rule, an action or an end is an exported constant, because its id is \
+                 the name it is exported under: write `export const name = ...`",
+            );
+            return;
+        }
+        top.pending.push(Pending::Member(member));
     }
 
     fn is_plain_value(&self, wrapped: &Expression<'_>) -> bool {
@@ -439,7 +475,15 @@ impl Reader<'_> {
                     if let Declaration::VariableDeclaration(variables) = &export.declaration {
                         for declarator in &variables.declarations {
                             if let BindingPattern::BindingIdentifier(name) = &declarator.id {
-                                self.export_once(&mut seen, name.name.as_str(), name.span.start);
+                                if name.name.as_str() == THEN {
+                                    self.refuse(name.span.start, THEN, THEN_EXPORTED);
+                                } else {
+                                    self.export_once(
+                                        &mut seen,
+                                        name.name.as_str(),
+                                        name.span.start,
+                                    );
+                                }
                             }
                         }
                     }
@@ -461,6 +505,10 @@ impl Reader<'_> {
         specifier: &ExportSpecifier<'_>,
     ) {
         let at = specifier.span.start;
+        if specifier.exported.name() == THEN && !specifier.export_kind.is_type() {
+            self.refuse(at, &self.quoted(specifier.span), THEN_EXPORTED);
+            return;
+        }
         if specifier.export_kind.is_type() {
             self.refuse(
                 at,
@@ -574,9 +622,9 @@ mod tests {
             "import { m } from \"@earnest/model\";\n\
              export const Porch = m.model(\"Porch\", { lit: m.boolean() });\n\
              export const Hall = m.model(\"Hall\", { level: m.int(0, 2) });\n\
-             export const turn = Hall.action(\"turn\", { then: (s) => ({ level: s.level }) });\n\
-             export const flip = Porch.action(\"flip\", { then: (s) => ({ lit: !s.lit }) });\n\
-             export const known = Hall.rule({ says: \"known\", holds: (s) => s.level < 3 });\n",
+             export const turn = m.action(Hall, \"turn\", { changes: (s) => ({ level: s.level }) });\n\
+             export const flip = m.action(Porch, \"flip\", { changes: (s) => ({ lit: !s.lit }) });\n\
+             export const known = m.rule(Hall, \"known\", (s) => s.level < 3);\n",
         );
         assert_eq!(reading.problems, [], "the file is readable");
         let names: Vec<&str> = reading
@@ -618,7 +666,7 @@ mod tests {
             "m.model.ts",
             "import { m as lib } from \"@earnest/model\";\n\
              const Inner = lib.model(\"Shown\", { on: lib.boolean() });\n\
-             const stay = Inner.end({ says: \"stay\", when: (s) => s.on });\n\
+             const stay = lib.end(Inner, \"stay\", (s) => s.on);\n\
              export { Inner, stay };\n",
         );
         assert_eq!(
@@ -750,8 +798,8 @@ mod tests {
             features(
                 "let a = 1;\n\
                  export const M = m.model(\"M\", { n: m.int(0, 1) });\n\
-                 export const go = M.action(\"go\", { then: () => ({ n: Date.now() }) });\n\
-                 export const ok = M.rule({ says: \"ok\", holds: () => fetch(\"u\") === null });\n\
+                 export const go = m.action(M, \"go\", { changes: () => ({ n: Date.now() }) });\n\
+                 export const ok = m.rule(M, \"ok\", () => fetch(\"u\") === null);\n\
                  export const odd = M.check({});\n"
             ),
             [
@@ -765,49 +813,49 @@ mod tests {
     }
 
     const CLIMB: &str = "export const Climb = m.model(\"Climb\", { n: m.int(0, 3) });\n";
-    const LOW: &str = "{ says: \"low\", holds: (s) => s.n <= 1 }";
+    const LOW: &str = "\"low\", (s) => s.n <= 1";
 
     fn climb_features(rest: &str) -> Vec<(u32, String)> {
         features(&format!("{CLIMB}{}", rest.replace("LOW", LOW)))
     }
 
     #[test]
-    fn a_rule_made_any_other_way_than_by_calling_the_model_at_the_top_is_refused() {
-        let not_a_value = |line: u32| feature(line, "`Climb`");
+    fn a_rule_made_any_other_way_than_as_the_whole_value_of_a_constant_is_refused() {
+        let not_a_value = |line: u32| feature(line, "`m.rule`");
         assert_eq!(
-            climb_features("export const low = true && Climb.rule(LOW);\n"),
+            climb_features("export const low = true && m.rule(Climb, LOW);\n"),
             [not_a_value(3)],
             "on the right of a logical and"
         );
         assert_eq!(
-            climb_features("export const low = true ? Climb.rule(LOW) : null;\n"),
+            climb_features("export const low = true ? m.rule(Climb, LOW) : null;\n"),
             [not_a_value(3)],
             "in a branch of a choice"
         );
         assert_eq!(
-            climb_features("export const low = Climb.rule.call(Climb, LOW);\n"),
-            [not_a_value(3), not_a_value(3)],
-            "with `call` on the method: the model is named twice"
+            climb_features("export const low = m.rule.call(Climb, LOW);\n"),
+            [not_a_value(3), feature(3, "`Climb`")],
+            "with `call` on the function: the function is read, and the model is named as a value"
         );
         assert_eq!(
-            climb_features("export const all = { low: Climb.rule(LOW) };\n"),
+            climb_features("export const all = { low: m.rule(Climb, LOW) };\n"),
             [not_a_value(3)],
             "inside a record"
         );
         assert_eq!(
             climb_features(
-                "const same = <T>(part: T) => part;\nexport const low = same(Climb.rule(LOW));\n"
+                "const same = <T>(part: T) => part;\nexport const low = same(m.rule(Climb, LOW));\n"
             ),
             [not_a_value(4)],
             "passed through a helper function"
         );
         assert_eq!(
-            climb_features("const make = () => Climb.rule(LOW);\n"),
+            climb_features("const make = () => m.rule(Climb, LOW);\n"),
             [not_a_value(3)],
             "inside a helper function"
         );
         assert_eq!(
-            climb_features("export const low = [Climb.rule(LOW)];\n"),
+            climb_features("export const low = [m.rule(Climb, LOW)];\n"),
             [feature(3, "`[]`")],
             "inside a list, which is refused before the model is read"
         );
@@ -822,7 +870,7 @@ mod tests {
                 .collect()
         };
         assert_eq!(
-            lines("const Alias = Climb;\nexport const low = Alias.rule(LOW);\n"),
+            lines("const Alias = Climb;\nexport const low = m.rule(Alias, LOW);\n"),
             [3, 4],
             "the other name, and the rule made through it"
         );
@@ -902,20 +950,20 @@ mod tests {
     #[test]
     fn a_constant_is_exported_under_its_own_name() {
         assert_eq!(
-            climb_features("const low = Climb.rule(LOW);\nexport { low as high };\n"),
+            climb_features("const low = m.rule(Climb, LOW);\nexport { low as high };\n"),
             [feature(4, "`low as high`")],
             "the id would be `low` here and `high` for whoever imports the file"
         );
         assert_eq!(
-            climb_features("const low = Climb.rule(LOW);\nexport { low as low };\n"),
+            climb_features("const low = m.rule(Climb, LOW);\nexport { low as low };\n"),
             [],
             "the same name on both sides"
         );
     }
 
     #[test]
-    fn a_call_on_the_model_that_stands_alone_is_refused() {
-        let found = climb_features("Climb.rule(LOW);\n");
+    fn a_part_that_stands_alone_is_refused() {
+        let found = climb_features("m.rule(Climb, LOW);\n");
         assert_eq!(found.len(), 1, "one problem: {found:?}");
         assert_eq!(found[0].0, 3, "on the line of the statement");
     }
@@ -924,15 +972,15 @@ mod tests {
     fn a_part_written_twice_is_refused_because_only_the_last_would_count() {
         assert_eq!(
             climb_features(
-                "export const low = Climb.rule({ says: \"low\", holds: (s) => s.n <= 1, \
-                 holds: () => true });\n"
+                "export const low = m.action(Climb, \"low\", { changes: () => ({ n: 1 }), \
+                 changes: () => ({ n: 2 }) });\n"
             ),
-            [feature(3, "`holds`")],
-            "the reader would check the first condition and the program would run the second"
+            [feature(3, "`changes`")],
+            "the reader would check the first function and the program would run the second"
         );
         assert_eq!(
             climb_features(
-                "export const inc = Climb.action(\"inc\", { then: (s) => ({ n: 1, n: s.n }) });\n"
+                "export const inc = m.action(Climb, \"inc\", { changes: (s) => ({ n: 1, n: s.n }) });\n"
             ),
             [feature(3, "`n`")],
             "a field of a record"

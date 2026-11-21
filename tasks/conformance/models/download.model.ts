@@ -5,29 +5,23 @@ export const Download = m.model("Download", {
 	saved: m.boolean().initial(false),
 });
 
-export const start = Download.action("the user starts the download", {
+export const start = m.action(Download, "the user starts the download", {
 	when: (s) => s.phase === "Idle",
-	then: () => ({ phase: "Loading" }),
+	changes: () => ({ phase: "Loading" }),
 });
 
-export const finish = Download.action("the last byte arrives", {
+export const finish = m.action(Download, "the last byte arrives", {
 	when: (s) => s.phase === "Loading",
-	then: () => ({ phase: "Done", saved: true }),
+	changes: () => ({ phase: "Done", saved: true }),
 });
 
-export const fail = Download.action("the connection drops", {
+export const fail = m.action(Download, "the connection drops", {
 	when: (s) => s.phase === "Loading",
-	then: () => ({ phase: "Failed" }),
+	changes: () => ({ phase: "Failed" }),
 });
 
-export const whole = Download.rule({
-	says: "Only a finished download is saved",
-	holds: (s) => !s.saved || s.phase === "Done",
-});
+export const whole = m.rule(Download, "Only a finished download is saved", (s) => !s.saved || s.phase === "Done");
 
-export const done = Download.end({
-	says: "The file is on disk",
-	when: (s) => s.phase === "Done",
-});
+export const done = m.end(Download, "The file is on disk", (s) => s.phase === "Done");
 
 export type State = m.Infer<typeof Download>;

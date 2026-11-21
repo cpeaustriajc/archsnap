@@ -528,11 +528,11 @@ mod tests {
         \tlevel: m.int(0, 3).initial(0),\n\
         \tvalve: m.enum([\"shut\", \"open\"]).optional().initial(null),\n\
         });\n\
-        export const fill = Tank.action(\"the tank fills\", {\n\
+        export const fill = m.action(Tank, \"the tank fills\", {\n\
         \twhen: (s) => s.level < TOP,\n\
-        \tthen: (s) => ({ level: s.level + 1 }),\n\
+        \tchanges: (s) => ({ level: s.level + 1 }),\n\
         });\n\
-        export const full = Tank.end({ says: \"full\", when: (s) => s.level === TOP });\n";
+        export const full = m.end(Tank, \"full\", (s) => s.level === TOP);\n";
 
     fn tank(rules: &[(&str, &str, &str)]) -> Draft {
         tank_with("", rules)
@@ -545,7 +545,7 @@ mod tests {
         for (id, says, holds) in rules {
             writeln!(
                 source,
-                "export const {id} = Tank.rule({{ says: \"{says}\", holds: {holds} }});"
+                "export const {id} = m.rule(Tank, \"{says}\", {holds});"
             )
             .unwrap();
         }
@@ -894,7 +894,7 @@ mod tests {
     fn one_rule_model(name: &str, rule: &str) -> String {
         format!(
             "export const {name} = m.model(\"{name}\", {{ on: m.boolean().initial(false) }});\n\
-             export const {rule} = {name}.rule({{ says: \"{rule} of {name}\", holds: (s) => !s.on }});\n"
+             export const {rule} = m.rule({name}, \"{rule} of {name}\", (s) => !s.on);\n"
         )
     }
 

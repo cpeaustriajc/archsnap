@@ -93,8 +93,8 @@ impl Search<'_> {
                 "the rule `{}`",
                 model.rules.get(rule).map_or("", |found| &found.id)
             ),
-            Whence::Guard(action) => format!("the `when` of the action `{}`", action_id(action)),
-            Whence::Update(action) => format!("the `then` of the action `{}`", action_id(action)),
+            Whence::Guard(action) => format!("the condition of the action `{}`", action_id(action)),
+            Whence::Update(action) => format!("the change of the action `{}`", action_id(action)),
             Whence::End(end) => format!(
                 "the end `{}`",
                 model.ends.get(end).map_or("", |found| &found.id)

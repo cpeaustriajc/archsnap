@@ -5,9 +5,9 @@ export const Split = m.model("Split", {
 	q: m.int(0, 3).initial(0),
 });
 
-export const cut = Split.action("the number is cut", {
+export const cut = m.action(Split, "the number is cut", {
 	input: { by: m.int(0, 2) },
-	then: (s, { by }) => ({ q: m.div(s.n, by) }),
+	changes: (s, { by }) => ({ q: m.div(s.n, by) }),
 });
 
 export const Below = m.model("Below", {
@@ -15,6 +15,6 @@ export const Below = m.model("Below", {
 	q: m.int(-1, 1).initial(0),
 });
 
-export const slice = Below.action("the number is cut", {
-	then: (s) => ({ q: m.div(s.n, 1) }),
+export const slice = m.action(Below, "the number is cut", {
+	changes: (s) => ({ q: m.div(s.n, 1) }),
 });

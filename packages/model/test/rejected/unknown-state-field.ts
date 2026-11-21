@@ -9,7 +9,4 @@ export const Cart = m.model("Cart", {
   count: m.int(0, 3).initial(0),
 });
 
-export const counted = Cart.rule({
-  says: "The basket is never negative",
-  holds: (s) => s.basket >= 0,
-});
+export const counted = m.rule(Cart, "The basket is never negative", (s) => s.basket >= 0);

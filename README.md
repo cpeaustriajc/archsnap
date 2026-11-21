@@ -261,9 +261,9 @@ unreadable  src/clock.model.ts
   state, and a rule that was not seen broken is `unknown`. `explore` in the TypeScript library
   does the same.
 - Anything the model asks that can't be evaluated in a state is a `fault` in that state: a rule,
-  the `when` or the `then` of an action, or the `when` of an end, for example because it reads a
-  field of `null`. A state is `stuck` only when the `when` of every action is false and every
-  end is false. A state where a `when` or an end can't be evaluated is a fault and is not stuck.
+  the condition or the change of an action, or the `when` of an end, for example because it reads a
+  field of `null`. A state is `stuck` only when the condition of every action is false and every
+  end is false. A state where a condition or an end can't be evaluated is a fault and is not stuck.
   An end is asked only in a state where no action can happen. `explore` in the TypeScript
   library follows the same rule.
 - A model that stops at `--max-states` or `--time-limit` with nothing broken found is
@@ -417,7 +417,7 @@ in Rust, so moving white space is not a change.
 ### Statechart and report
 
 `earnest chart` prints one fenced `mermaid` block holding a `stateDiagram-v2` chart. States and
-arrows carry the labels from the model's view, which a TypeScript model writes with `Model.view`
+arrows carry the labels from the model's view, which a TypeScript model writes with `m.view`
 and a Rust model with a `#[view]` block (see "Writing a model in Rust"). A Rust model and its
 TypeScript twin with the same view give the same chart, text for text. A state that breaks a
 rule has the class `broken`.
@@ -506,23 +506,21 @@ export const AddToCartFocus = m.model("AddToCartFocus", {
 	keyboardAdd: m.boolean().initial(false),
 });
 
-export const press = AddToCartFocus.action("the buyer presses Add", {
+export const press = m.action(AddToCartFocus, "the buyer presses Add", {
 	input: { by: Press },
 	when: (s, { by }) => s.cta === "Add" && (by === "mouse" || s.focus === "Add"),
-	then: (_, { by }) => ({ cta: "Adding", pressBy: by, keyboardAdd: by === "keyboard" }),
+	changes: (_, { by }) => ({ cta: "Adding", pressBy: by, keyboardAdd: by === "keyboard" }),
 });
 
-export const focusLandsOnInCart = AddToCartFocus.rule({
-	says: "After a keyboard add lands, focus is on In cart",
-	holds: (s) => s.pressBy !== "keyboard" || s.cta !== "InCart" || s.focus === "InCart",
-});
+export const focusLandsOnInCart = m.rule(
+	AddToCartFocus,
+	"After a keyboard add lands, focus is on In cart",
+	(s) => s.pressBy !== "keyboard" || s.cta !== "InCart" || s.focus === "InCart",
+);
 
-export const inCart = AddToCartFocus.end({
-	says: "The item is in the cart",
-	when: (s) => s.cta === "InCart",
-});
+export const inCart = m.end(AddToCartFocus, "The item is in the cart", (s) => s.cta === "InCart");
 
-export const view = AddToCartFocus.view({
+export const view = m.view(AddToCartFocus, {
 	title: "Add to cart focus",
 	state: (s) => `${s.cta}, focus on ${s.focus}`,
 	group: (s) => s.surface,
@@ -537,11 +535,13 @@ export type State = m.Infer<typeof AddToCartFocus>;
   field without it starts at every value it declares, so `surface` above gives two start states.
   A set, map, sequence, queue, lock, timer, request or retry field without it starts empty, free,
   idle or at zero.
-- An action has a sentence, an optional `input`, an optional `when` and a `then`. The checker
+- An action has a sentence, an optional `input`, an optional `when` and a `changes`, which may
+  be written in any order. The checker
   tries every value of every input, with the first input changing fastest: for inputs `a` and
   `b` it tries (a1, b1), (a2, b1), (a1, b2), and so on. `explore` in the TypeScript library and
   `steps()` of a Rust model try them in the same order, so the path the checker shows to a state
-  is the one found by walking `steps()` breadth first. `then` gives back only the fields that change.
+  is the one found by walking `steps()` breadth first. `changes` gives back only the fields that
+  change.
 - The id of an action, rule or end is the name of its exported constant. A rule, action or end
   bound to a constant that is not exported, by `export const` or by an `export { name }`, makes
   the file unreadable. So does an export that JavaScript refuses or that erases the name: the
@@ -564,11 +564,12 @@ export type State = m.Infer<typeof AddToCartFocus>;
 - Top-level `const` declarations of declarations (`m.enum(...)`), numbers, text, booleans and
   helper functions written as arrow functions. A number, text or boolean is written out, or
   computed from constants declared before it with the operators below.
-- A model, an action, a rule, an end or a view, each made by calling `m.model` or the model
-  itself as the whole value of a top-level `const`: `export const low = Cart.rule({ ... })`.
-  The model's name is refused anywhere else, so a rule can't be made through another name, in
-  a condition, in a record, in a list or inside a function. A constant is exported under its
-  own name.
+- A model, an action, a rule, an end or a view, each made by calling `m.model`, `m.action`,
+  `m.rule`, `m.end` or `m.view` as the whole value of a top-level `const`:
+  `export const low = m.rule(Cart, "The total is not negative", (s) => s.total >= 0)`. The model's
+  name is refused anywhere else than as the first argument of one of those calls and in a type,
+  so a rule can't be made through another name, in a condition, in a record, in a list or inside
+  a function. A constant is exported under its own name.
 - `type` and `interface` declarations.
 - In a function: literals, `null`, field and input reads, `===`, `!==`, `<`, `<=`, `>`, `>=`,
   `&&`, `||`, `!`, `+`, `-` (also as a sign: `-1`), `*`, `m.rem(a, b)`, `m.div(a, b)`, the `? :` choice, the `!` after a
@@ -583,7 +584,7 @@ export type State = m.Infer<typeof AddToCartFocus>;
   a name of an outer scope.
 - A name means what TypeScript says it means. In an action, an input is in scope only in a
   function that takes it, as `(s, { by })` or as a field of the whole input, `(s, input) =>
-  input.by`; `when` and `then` may take different ones. Where a function does not take it, the
+  input.by`; `when` and `changes` may take different ones. Where a function does not take it, the
   same name is the top-level constant. A `const` in a block is in scope in the whole block, so
   a name that is read before its declaration, or in its own initializer (`const a = a + 1;`),
   is refused: in JavaScript it is the block's own constant with no value yet, and the file
@@ -591,7 +592,7 @@ export type State = m.Infer<typeof AddToCartFocus>;
 - A number is a JavaScript number, so it is exact from -9007199254740991 to 9007199254740991.
   A literal outside that is refused, so are the bounds of an `m.int` and the numbers of an
   `m.oneOf` outside it (the library throws on them too), and a number a model computes past it
-  is a fault, "computes a number too large to hold", in a rule, an end, a `when`, a `then` and
+  is a fault, "computes a number too large to hold", in a rule, an end, a `when`, a `changes` and
   a helper. A sum or a product past it would be rounded when the file runs, so it is no value
   to judge a rule by.
 - An expression is read to a depth of 1000, counted as the brackets, prefix operators,
@@ -751,7 +752,7 @@ impl Turnstile {
   a model (a test module, a function, a plain `impl` block) may be `#[cfg(test)]`, and it is
   skipped.
 - The statechart labels are a second `impl` block with `#[view(...)]`, the Rust form of
-  `Model.view({ ... })`, with the same parts, the same labels and the same refusals:
+  `m.view(Model, { ... })`, with the same parts, the same labels and the same refusals:
 
   ```rust
   #[view(
@@ -1259,7 +1260,8 @@ check`, `cargo machete`, the tests and the Verus proofs (`cargo verus focus`). I
 version of each. The lint table in `Cargo.toml` and the settings in `clippy.toml` are
 [BeautifulRust](https://github.com/morganlinton/BeautifulRust)'s `lints/lints.toml` and
 `lints/clippy.toml`, taken whole; update them from there, never by hand. The tests also need Node
-22.18 or newer, bun and `tsc` on your `PATH`. `just fix` formats the code and applies clippy's fixes.
+22.18 or newer and bun on your `PATH`, and the `tsrs` that `bun install` puts in
+`packages/model/node_modules`. `just fix` formats the code and applies clippy's fixes.
 
 The JavaScript side is one bun workspace: the root `package.json` lists `packages/*` and the
 platform packages in `packages/cli/platforms/*`, and `bun.lock` is its one lockfile. After

@@ -7,17 +7,11 @@ export const Flag = m.model("Flag", {
 	inbox: m.queue(Letter, { capacity: 1 }),
 });
 
-export const deliver = Flag.action("the postman delivers a bill", {
+export const deliver = m.action(Flag, "the postman delivers a bill", {
 	when: (s) => !s.inbox.isFull,
-	then: (s) => ({ inbox: s.inbox.send("Bill"), isFull: true }),
+	changes: (s) => ({ inbox: s.inbox.send("Bill"), isFull: true }),
 });
 
-export const agree = Flag.rule({
-	says: "The flag says whether the inbox is full",
-	holds: (s) => s.isFull === s.inbox.isFull,
-});
+export const agree = m.rule(Flag, "The flag says whether the inbox is full", (s) => s.isFull === s.inbox.isFull);
 
-export const full = Flag.end({
-	says: "The inbox is full",
-	when: (s) => s.inbox.isFull,
-});
+export const full = m.end(Flag, "The inbox is full", (s) => s.inbox.isFull);

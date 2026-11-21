@@ -7,21 +7,19 @@ export const Bound = m.model("Bound", {
 	chosen: Item.optional().initial(null),
 });
 
-export const pick = Bound.action("a guest picks an item", {
+export const pick = m.action(Bound, "a guest picks an item", {
 	input: { g: Guest },
 	when: (s) => s.chosen === null,
-	then: (_, { g }) => {
+	changes: (_, { g }) => {
 		const fresh = { qty: 0, who: g };
 		return { chosen: { ...fresh, qty: 1 } };
 	},
 });
 
-export const one = Bound.rule({
-	says: "A chosen item is one item with a name on it",
-	holds: (s) => s.chosen === null || (s.chosen.qty === 1 && s.chosen.who !== null),
-});
+export const one = m.rule(
+	Bound,
+	"A chosen item is one item with a name on it",
+	(s) => s.chosen === null || (s.chosen.qty === 1 && s.chosen.who !== null),
+);
 
-export const picked = Bound.end({
-	says: "An item is chosen",
-	when: (s) => s.chosen !== null,
-});
+export const picked = m.end(Bound, "An item is chosen", (s) => s.chosen !== null);

@@ -8,18 +8,19 @@ export const Seats = m.model("Seats", {
 	owner: Buyer.optional(),
 });
 
-export const sell = Seats.action("a buyer takes the seat", {
+export const sell = m.action(Seats, "a buyer takes the seat", {
 	input: { buyer: Buyer },
 	when: (s) => s.owner === null,
-	then: (_, { buyer }) => ({ owner: buyer }),
+	changes: (_, { buyer }) => ({ owner: buyer }),
 });
 
-export const refund = Seats.action("the buyer returns the seat", {
+export const refund = m.action(Seats, "the buyer returns the seat", {
 	when: (s) => s.owner !== null,
-	then: () => ({ owner: null }),
+	changes: () => ({ owner: null }),
 });
 
-export const seated = Seats.rule({
-	says: "A sold seat is in a real row",
-	holds: (s) => s.owner === null || (s.seat.row >= 1 && s.seat.row <= 3),
-});
+export const seated = m.rule(
+	Seats,
+	"A sold seat is in a real row",
+	(s) => s.owner === null || (s.seat.row >= 1 && s.seat.row <= 3),
+);

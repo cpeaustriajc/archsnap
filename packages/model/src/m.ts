@@ -18,7 +18,7 @@ export {
   set,
   timer,
 } from "./declarations.ts";
-export { model } from "./model.ts";
+export { action, end, model, rule, view } from "./model.ts";
 export { div, mapOf, rem, seqOf, setOf, some } from "./values.ts";
 
 /**

@@ -33,33 +33,34 @@ export const Turnstile = m.model("Turnstile", {
   visitors: m.int(0, 3).initial(0),
 });
 
-export const pay = Turnstile.action("the visitor pays", {
+export const pay = m.action(Turnstile, "the visitor pays", {
   when: (s) => !s.paid,
-  then: () => ({ paid: true }),
+  changes: () => ({ paid: true }),
 });
 
-export const push = Turnstile.action("the visitor pushes", {
+export const push = m.action(Turnstile, "the visitor pushes", {
   when: (s) => s.paid && s.visitors < 3,
-  then: (s) => ({ gate: "open", visitors: s.visitors + 1 }),
+  changes: (s) => ({ gate: "open", visitors: s.visitors + 1 }),
 });
 
-export const staysLocked = Turnstile.rule({
-  says: "The gate stays locked until the visitor pays",
-  holds: (s) => s.gate === "locked" || s.paid,
-});
+export const staysLocked = m.rule(
+  Turnstile,
+  "The gate stays locked until the visitor pays",
+  (s) => s.gate === "locked" || s.paid,
+);
 
-export const full = Turnstile.end({
-  says: "Three visitors went through",
-  when: (s) => s.visitors === 3,
-});
+export const full = m.end(Turnstile, "Three visitors went through", (s) => s.visitors === 3);
 
 export type State = m.Infer<typeof Turnstile>;
 ```
 
 - Nothing is annotated. `s` is the state type the fields declare, an action's second parameter is
-  typed from its `input`, and `then` gives back only the fields that change. A wrong literal
-  (`gate: "ajar"`), a field the model does not have, or a value of the wrong kind in `then` is a
-  compile error. In an action, write `input` before `when` and `then`.
+  typed from its `input`, and `changes` gives back only the fields that change. A wrong literal
+  (`gate: "ajar"`), a field the model does not have, or a value of the wrong kind in `changes` is
+  a compile error. In an action, `input`, `when` and `changes` may be written in any order.
+- `m.action`, `m.rule`, `m.end` and `m.view` take the model as their first argument. A rule or an
+  end then has its sentence and a condition. An action has its sentence and an object with
+  `input`, `when` and `changes`. A view has an object.
 - Declarations are plain values. `.optional()` and `.initial(value)` give back a new declaration,
   so one `const Press = m.enum([...])` can be a field in two models and an input of an action.
 - State is read-only, and every operation on a set, map, sequence, queue, lock, timer, request or
@@ -133,8 +134,8 @@ one of each kind. `reason` is `null`, or why the search is unfinished.
   field order with the first field varying slowest, actions in declaration order, inputs with
   the first input varying fastest, and states judged in the order they were found.
 - Anything the model asks that can't be evaluated in a state is a `fault` there: a rule, the
-  `when` or the `then` of an action, or the `when` of an end. A state is `stuck` only when the
-  `when` of every action is false and every end is false, so a state where a `when` or an end
+  condition or the change of an action, or the `when` of an end. A state is `stuck` only when the
+  condition of every action is false and every end is false, so a state where a condition or an end
   faults is not stuck. An end is asked only in a state where no action can happen.
 - A state that is out of range is counted, is not checked against the rules and is not searched
   from.
@@ -150,7 +151,7 @@ by its `label`, the action's sentence.
 
 - Arithmetic past 2^53 - 1 is a fault in the checker, "computes a number too large to hold",
   wherever a model computes it. In Node the library sees only the numbers it is given back: a
-  next state that holds one is the same fault in the `then` of its action. A number computed
+  next state that holds one is the same fault in the change of its action. A number computed
   inside a rule, an end or a `when`, or by a helper on the way to a value that is not a number,
   is the rounded value JavaScript computes, so `s.n + 9007199254740992 - 9007199254740992 ===
   s.n` is judged by what JavaScript makes of it. `m.int` throws on a bound outside the safe
@@ -192,7 +193,7 @@ bun run test        # vitest run
 - `typecheck` is one project: `tsconfig.json` covers `src/`, `scripts/` and `test/` and excludes
   `test/rejected/`. It sets `types` to `node` so the tests can import `node:` modules.
 - `test/types.ts` only has to compile: it holds the type-level proofs, such as what `m.Infer`
-  gives and which values a `then` rejects.
+  gives and which values `changes` rejects.
 - `test/rejected/` holds one program for each mistake the compiler must catch, and `accepted.ts`,
   which it must not complain about. `test/rejected.test.ts` runs `tsrs` on the folder and checks
   that each bad program gets exactly one error, on the expected line. The folder is excluded from

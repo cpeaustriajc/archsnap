@@ -2,11 +2,11 @@ import { m } from "@earnest/model";
 
 export const Split = m.model("First line\nSecond line", { n: m.int(0, 2).initial(0) });
 
-export const inc = Split.action("one up", {
+export const inc = m.action(Split, "one up", {
 	when: (s) => s.n < 2,
-	then: (s) => ({ n: s.n + 1 }),
+	changes: (s) => ({ n: s.n + 1 }),
 });
 
-export const top = Split.end({ says: "The count is two", when: (s) => s.n === 2 });
+export const top = m.end(Split, "The count is two", (s) => s.n === 2);
 
-export const low = Split.rule({ says: "The count stays at most one", holds: (s) => s.n <= 1 });
+export const low = m.rule(Split, "The count stays at most one", (s) => s.n <= 1);

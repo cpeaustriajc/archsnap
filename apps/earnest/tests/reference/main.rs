@@ -235,7 +235,7 @@ fn no_finding_of_the_checker_is_left_out_of_the_comparison() {
         "rules": [{ "id": "floor", "says": "x", "verdict": "holds", "path": null }],
         "findings": [
             { "kind": "stuck", "message": "no action can happen here", "path": {} },
-            { "kind": "fault", "message": "the `when` of the action `refill` takes a remainder with a negative number or a divisor below 1 in this state", "path": {} },
+            { "kind": "fault", "message": "the condition of the action `refill` takes a remainder with a negative number or a divisor below 1 in this state", "path": {} },
         ],
     });
     assert_eq!(
@@ -251,7 +251,7 @@ fn no_finding_of_the_checker_is_left_out_of_the_comparison() {
         "states": 4,
         "rules": [],
         "findings": [
-            { "kind": "fault", "message": "the `then` of the action `price` reads a value that is null in this state", "path": {} },
+            { "kind": "fault", "message": "the change of the action `price` reads a value that is null in this state", "path": {} },
         ],
     });
     assert_eq!(

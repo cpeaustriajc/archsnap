@@ -8,32 +8,26 @@ export const Votes = m.model("Votes", {
 	no: m.int(0, 3).initial(0),
 });
 
-export const open = Votes.action("the chair opens the vote", {
+export const open = m.action(Votes, "the chair opens the vote", {
 	when: (s) => s.phase === "Idle",
-	then: () => ({ phase: "Voting" }),
+	changes: () => ({ phase: "Voting" }),
 });
 
-export const voteYes = Votes.action("a member votes yes", {
+export const voteYes = m.action(Votes, "a member votes yes", {
 	when: (s) => s.phase === "Voting" && s.yes + s.no < 3,
-	then: (s) => ({ yes: s.yes + 1 }),
+	changes: (s) => ({ yes: s.yes + 1 }),
 });
 
-export const voteNo = Votes.action("a member votes no", {
+export const voteNo = m.action(Votes, "a member votes no", {
 	when: (s) => s.phase === "Voting" && s.yes + s.no < 3,
-	then: (s) => ({ no: s.no + 1 }),
+	changes: (s) => ({ no: s.no + 1 }),
 });
 
-export const close = Votes.action("the chair closes the vote", {
+export const close = m.action(Votes, "the chair closes the vote", {
 	when: (s) => s.phase === "Voting",
-	then: () => ({ phase: "Done" }),
+	changes: () => ({ phase: "Done" }),
 });
 
-export const few = Votes.rule({
-	says: "At most three votes are cast",
-	holds: (s) => s.yes + s.no <= 3,
-});
+export const few = m.rule(Votes, "At most three votes are cast", (s) => s.yes + s.no <= 3);
 
-export const decided = Votes.end({
-	says: "The vote is closed",
-	when: (s) => s.phase === "Done",
-});
+export const decided = m.end(Votes, "The vote is closed", (s) => s.phase === "Done");
