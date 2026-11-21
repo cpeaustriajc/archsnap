@@ -51,6 +51,7 @@ struct RowKit {
     base: Vec<u64>,
     row: Vec<u64>,
     met: HashTable<usize>,
+    met_words: HashTable<u64>,
     met_raw: FxHashSet<Box<[Value]>>,
 }
 
@@ -110,6 +111,9 @@ impl PartSink<'_> {
     }
 
     fn offer_unseen(&mut self, action: usize, hash: u64) -> bool {
+        if let [word] = self.kit.row.as_slice() {
+            return self.offer_unseen_word(action, *word, hash);
+        }
         let words = self.store.layout().words();
         let (rows, hashes, row) = (&self.part.rows, &self.part.hashes, &self.kit.row);
         let met = self.kit.met.entry(
@@ -124,6 +128,26 @@ impl PartSink<'_> {
             return false;
         }
         vacant.insert(hashes.len());
+        self.add_fresh(action, hash);
+        true
+    }
+}
+
+impl PartSink<'_> {
+    fn offer_unseen_word(&mut self, action: usize, word: u64, hash: u64) -> bool {
+        let layout = self.store.layout();
+        let met = self.kit.met_words.entry(
+            hash,
+            |earlier| *earlier == word,
+            |earlier| layout.hash(&[*earlier]),
+        );
+        let hashbrown::hash_table::Entry::Vacant(vacant) = met else {
+            return false;
+        };
+        if !self.merge_finds_known && self.store.find(&[word], hash).is_some() {
+            return false;
+        }
+        vacant.insert(word);
         self.add_fresh(action, hash);
         true
     }
@@ -233,6 +257,7 @@ impl Search<'_> {
     ) -> Part {
         let expand = self.expand(deadline, asked);
         kit.rows.met.clear();
+        kit.rows.met_words.clear();
         kit.rows.met_raw.clear();
         let (fresh_before, states_before) = kit.fresh_per_state;
         let expected = (ids.len() * fresh_before)
