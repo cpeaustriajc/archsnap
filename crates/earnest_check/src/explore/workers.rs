@@ -70,7 +70,7 @@ impl Search<'_> {
         }
         let shared = Shared::default();
         std::thread::scope(|scope| {
-            for _ in 0..own.min(parts) {
+            for _ in 1..own.min(parts) {
                 self.start_worker(scope, &level, &shared, None);
             }
             for _ in 0..parts.saturating_sub(own) {
@@ -82,6 +82,7 @@ impl Search<'_> {
                 };
                 self.start_worker(scope, &level, &shared, Some(loan));
             }
+            self.work(scope, &level, &shared, None);
         });
         if let Some(panic) = shared
             .panic
@@ -125,27 +126,35 @@ impl Search<'_> {
     ) {
         std::thread::Builder::new()
             .stack_size(WORKER_STACK)
-            .spawn_scoped(scope, move || {
-                let running = shared
-                    .running
-                    .fetch_add(1, Ordering::SeqCst)
-                    .saturating_add(1);
-                shared.peak.fetch_max(running, Ordering::SeqCst);
-                let outcome = catch_unwind(AssertUnwindSafe(|| {
-                    self.take_parts(scope, level, shared);
-                }));
-                drop(loan);
-                shared.running.fetch_sub(1, Ordering::SeqCst);
-                if let Err(panic) = outcome {
-                    shared.stopped.store(true, Ordering::SeqCst);
-                    shared
-                        .panic
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .get_or_insert(panic);
-                }
-            })
+            .spawn_scoped(scope, move || self.work(scope, level, shared, loan))
             .expect("a worker thread starts");
+    }
+
+    fn work<'scope, 'env>(
+        &'env self,
+        scope: &'scope Scope<'scope, 'env>,
+        level: &'env Level,
+        shared: &'env Shared,
+        loan: Option<Loan<'env>>,
+    ) {
+        let running = shared
+            .running
+            .fetch_add(1, Ordering::SeqCst)
+            .saturating_add(1);
+        shared.peak.fetch_max(running, Ordering::SeqCst);
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            self.take_parts(scope, level, shared);
+        }));
+        drop(loan);
+        shared.running.fetch_sub(1, Ordering::SeqCst);
+        if let Err(panic) = outcome {
+            shared.stopped.store(true, Ordering::SeqCst);
+            shared
+                .panic
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get_or_insert(panic);
+        }
     }
 
     fn take_parts<'scope, 'env>(
