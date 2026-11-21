@@ -60,9 +60,9 @@ fn typescript_with_rule(condition: &str) -> String {
 
 export const Bad = m.model("Bad", {{ n: m.int(0, 1).initial(0) }});
 
-export const top = Bad.end({{ says: "Always", when: () => true }});
+export const top = m.end(Bad, "Always", () => true);
 
-export const clock = Bad.rule({{ says: "The clock is read", holds: () => {condition} }});
+export const clock = m.rule(Bad, "The clock is read", () => {condition});
 "#
     )
 }

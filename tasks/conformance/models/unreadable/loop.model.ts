@@ -7,15 +7,12 @@ export const Pile = m.model("Pile", {
 	waiting: m.set(Size),
 });
 
-export const stack = Pile.action("the mover stacks what is waiting", {
+export const stack = m.action(Pile, "the mover stacks what is waiting", {
 	when: (s) => s.height < 2,
-	then: (s) => {
+	changes: (s) => {
 		for (const size of s.waiting) return { height: s.height + size };
 		return { height: s.height };
 	},
 });
 
-export const low = Pile.rule({
-	says: "The pile is never above three",
-	holds: (s) => s.height <= 3,
-});
+export const low = m.rule(Pile, "The pile is never above three", (s) => s.height <= 3);

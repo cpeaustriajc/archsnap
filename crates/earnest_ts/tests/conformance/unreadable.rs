@@ -22,14 +22,14 @@ const OUTSIDE: &[Outside] = &[
         fixture: "unreadable/clock.model.ts",
         model: "Stamp",
         line: 8,
-        column: 31,
+        column: 34,
         feature: "`Date.now`",
     },
     Outside {
         fixture: "unreadable/dice.model.ts",
         model: "Dice",
         line: 10,
-        column: 25,
+        column: 28,
         feature: "`Math.random`",
     },
     Outside {

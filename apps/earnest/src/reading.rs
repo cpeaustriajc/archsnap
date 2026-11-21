@@ -198,10 +198,7 @@ export const Counter = m.model(\"Counter\", {
 \tcount: m.int(0, 3).initial(0),
 });
 
-export const bounded = Counter.rule({
-\tsays: \"The count is never above three\",
-\tholds: (s) => s.count <= LIMIT,
-});
+export const bounded = m.rule(Counter, \"The count is never above three\", (s) => s.count <= LIMIT);
 ";
 
     fn loaded(path: &str, language: Language, source: &str) -> ModelFile {
@@ -238,7 +235,7 @@ export const bounded = Counter.rule({
             .map(|problem| problem.feature.as_str())
             .collect();
         assert_eq!(features, ["`LIMIT`"], "the undefined name in backticks");
-        assert_eq!(problems[0].line, 9, "the line of the name");
+        assert_eq!(problems[0].line, 7, "the line of the name");
         assert_eq!(problems[0].file, "src/counter.model.ts", "the file");
     }
 
@@ -372,10 +369,10 @@ export const Pick = m.model(\"Pick\", {
 \tchosen: Item.optional().initial(null),
 });
 
-export const pick = Pick.action(\"a guest picks an item\", {
+export const pick = m.action(Pick, \"a guest picks an item\", {
 \tinput: { g: Guest },
 \twhen: (s) => s.chosen === null,
-\tthen: (_, { g }) => THEN,
+\tchanges: (_, { g }) => THEN,
 });
 ";
 

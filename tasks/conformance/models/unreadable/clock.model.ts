@@ -4,11 +4,8 @@ export const Stamp = m.model("Stamp", {
 	parity: m.int(0, 1).initial(0),
 });
 
-export const mark = Stamp.action("the app stamps the time", {
-	then: () => ({ parity: m.rem(Date.now(), 2) }),
+export const mark = m.action(Stamp, "the app stamps the time", {
+	changes: () => ({ parity: m.rem(Date.now(), 2) }),
 });
 
-export const binary = Stamp.rule({
-	says: "The parity is zero or one",
-	holds: (s) => s.parity <= 1,
-});
+export const binary = m.rule(Stamp, "The parity is zero or one", (s) => s.parity <= 1);

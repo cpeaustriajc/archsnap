@@ -5,18 +5,15 @@ export const Lamp = m.model("Lamp", {
 	level: m.int(0, 2).initial(0),
 });
 
-export const toggle = Lamp.action("someone flips the switch", {
-	then: (s) => ({ power: !s.power }),
+export const toggle = m.action(Lamp, "someone flips the switch", {
+	changes: (s) => ({ power: !s.power }),
 });
 
-export const brighten = Lamp.action("someone turns the dial up", {
+export const brighten = m.action(Lamp, "someone turns the dial up", {
 	when: (s) => s.power && s.level < 2,
-	then: (s) => ({ level: s.level + 1 }),
+	changes: (s) => ({ level: s.level + 1 }),
 });
 
-export const dim = Lamp.rule({
-	says: "The dial is never at full while the lamp is off",
-	holds: (s) => s.power || s.level < 2,
-});
+export const dim = m.rule(Lamp, "The dial is never at full while the lamp is off", (s) => s.power || s.level < 2);
 
 export type State = m.Infer<typeof Lamp>;

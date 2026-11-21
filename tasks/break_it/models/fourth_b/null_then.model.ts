@@ -5,11 +5,11 @@ export const Bump = m.model("Bump", {
 	n: m.int(0, 3).initial(0),
 });
 
-export const bump = Bump.action("the count takes the number plus one", {
+export const bump = m.action(Bump, "the count takes the number plus one", {
 	when: (s) => s.n < 3,
-	then: (s) => ({ n: m.some(s.o) + 1 }),
+	changes: (s) => ({ n: m.some(s.o) + 1 }),
 });
 
-export const settled = Bump.end({ says: "The count is at least one", when: (s) => s.n >= 1 });
+export const settled = m.end(Bump, "The count is at least one", (s) => s.n >= 1);
 
-export const small = Bump.rule({ says: "The count is at most three", holds: (s) => s.n <= 3 });
+export const small = m.rule(Bump, "The count is at most three", (s) => s.n <= 3);

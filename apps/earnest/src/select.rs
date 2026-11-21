@@ -165,9 +165,9 @@ mod tests {
             for rule in *rules {
                 writeln!(
                     source,
-                    "export const {rule} = {name}.rule({{ says: \"{rule} of {name}\", holds: (s) => !s.on }});"
-                    )
-                    .unwrap();
+                    "export const {rule} = m.rule({name}, \"{rule} of {name}\", (s) => !s.on);"
+                )
+                .unwrap();
             }
         }
         let loaded = load(Found::model(path, Language::TypeScript, &source));
@@ -274,7 +274,7 @@ mod tests {
         let source = format!(
             "import {{ m }} from \"@earnest/model\";\n\
              export const {declares} = m.model(\"{declares}\", {{ on: m.boolean().initial(false) }});\n\
-             export const lit = {declares}.rule({{ says: \"lit\", holds: (s) => s.on === Date.now() }});\n"
+             export const lit = m.rule({declares}, \"lit\", (s) => s.on === Date.now());\n"
         );
         let loaded = load(Found::model(path, Language::TypeScript, &source));
         assert!(!loaded.problems().is_empty(), "the test file is unreadable");

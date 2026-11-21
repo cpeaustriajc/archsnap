@@ -8,34 +8,31 @@ export const Ledger = m.model("Ledger", {
 	tally: Tally.initial({ a: 0, b: 0 }),
 });
 
-export const deliver = Ledger.action("a letter arrives", {
+export const deliver = m.action(Ledger, "a letter arrives", {
 	input: { letter: Letter },
 	when: (s) => !s.inbox.isFull,
-	then: (s, { letter }) => ({ inbox: s.inbox.send(letter) }),
+	changes: (s, { letter }) => ({ inbox: s.inbox.send(letter) }),
 });
 
-export const read = Ledger.action("the oldest letter is read", {
+export const read = m.action(Ledger, "the oldest letter is read", {
 	when: (s) => !s.inbox.isEmpty,
-	then: (s) => ({ inbox: s.inbox.receive() }),
+	changes: (s) => ({ inbox: s.inbox.receive() }),
 });
 
-export const bumpA = Ledger.action("the first count goes up", {
+export const bumpA = m.action(Ledger, "the first count goes up", {
 	when: (s) => s.tally.a < 9,
-	then: (s) => ({ tally: { ...s.tally, a: s.tally.a + 1 } }),
+	changes: (s) => ({ tally: { ...s.tally, a: s.tally.a + 1 } }),
 });
 
-export const bumpB = Ledger.action("the second count goes up", {
+export const bumpB = m.action(Ledger, "the second count goes up", {
 	when: (s) => s.tally.b < 9,
-	then: (s) => ({ tally: { ...s.tally, b: s.tally.b + 1 } }),
+	changes: (s) => ({ tally: { ...s.tally, b: s.tally.b + 1 } }),
 });
 
-export const consistent = Ledger.rule({
-	says: "The inbox is within its capacity and the counts are on their dials",
-	holds: (s) =>
-		s.inbox.size <= 5 &&
-		s.inbox.every((letter) => s.inbox.includes(letter)) &&
-		s.tally.a <= 9 &&
-		s.tally.b <= 9,
-});
+export const consistent = m.rule(
+	Ledger,
+	"The inbox is within its capacity and the counts are on their dials",
+	(s) => s.inbox.size <= 5 && s.inbox.every((letter) => s.inbox.includes(letter)) && s.tally.a <= 9 && s.tally.b <= 9,
+);
 
 export type State = m.Infer<typeof Ledger>;

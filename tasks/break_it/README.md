@@ -28,12 +28,12 @@ states and no rule at all.
 
 | File | How the rule is made | Test |
 |---|---|---|
-| `dropped/alias.model.ts` | `const Alias = Climb;` then `Alias.rule({...})` | `a_rule_made_through_another_name_for_the_model_is_not_dropped` |
-| `dropped/and.model.ts` | `true && Climb.rule({...})` | `a_rule_made_on_the_right_of_a_logical_and_is_not_dropped` |
-| `dropped/ternary.model.ts` | `true ? Climb.rule({...}) : null` | `a_rule_made_in_a_branch_of_a_choice_is_not_dropped` |
-| `dropped/call.model.ts` | `Climb.rule.call(Climb, {...})` | `a_rule_made_with_call_on_the_method_is_not_dropped` |
-| `dropped/record.model.ts` | `{ low: Climb.rule({...}) }` | `a_rule_made_inside_a_record_constant_is_not_dropped` |
-| `dropped/wrapped.model.ts` | `same(Climb.rule({...}))` with the helper `same = (part) => part` | `a_rule_passed_through_a_helper_function_is_not_dropped` |
+| `dropped/alias.model.ts` | `const Alias = Climb;` then `m.rule(Alias, ...)` | `a_rule_made_through_another_name_for_the_model_is_not_dropped` |
+| `dropped/and.model.ts` | `true && m.rule(Climb, ...)` | `a_rule_made_on_the_right_of_a_logical_and_is_not_dropped` |
+| `dropped/ternary.model.ts` | `true ? m.rule(Climb, ...) : null` | `a_rule_made_in_a_branch_of_a_choice_is_not_dropped` |
+| `dropped/call.model.ts` | `m.rule.call(m, Climb, ...)` | `a_rule_made_with_call_on_the_method_is_not_dropped` |
+| `dropped/record.model.ts` | `{ low: m.rule(Climb, ...) }` | `a_rule_made_inside_a_record_constant_is_not_dropped` |
+| `dropped/wrapped.model.ts` | `same(m.rule(Climb, ...))` with the helper `same = (part) => part` | `a_rule_passed_through_a_helper_function_is_not_dropped` |
 
 The same holds for an action or an end made in any of these ways.
 
@@ -48,7 +48,7 @@ as the input, tries 0, 1 and 2, stops at `n = 2` and reports `pass` with 3 state
 holding. The right result is `fail`, 6 states, `low` broken after 3 steps, or `unreadable` as the
 reader already answers when an input is taken under another name.
 
-| File | `when` | `then` | Test |
+| File | `when` | `changes` | Test |
 |---|---|---|---|
 | `shadow/neither.model.ts` | `(s) => s.n < limit` | `(s) => ...` | `a_constant_is_not_replaced_by_an_input_of_the_same_name_that_no_function_takes` |
 | `shadow/then_only.model.ts` | `(s) => s.n < limit` | `(s, { limit }) => ...` | `a_constant_in_when_is_not_replaced_by_an_input_that_only_then_takes` |
@@ -397,7 +397,7 @@ a state where it is `null`", so `small` is `unknown` with a fault in the start s
 what the checker reports. `explore` runs `null <= 3` as JavaScript, gets `true`, and reports
 `holds` with no finding. `packages/model/README.md` does not list this among the places where Node
 and the checker differ. The same holds for `null + 1`, `null * 0`, `n - null` and `null < n` in
-a rule, a `when`, an end and a helper, and in a `then`: `({ pick: s.pick! + 1 })` gives Node the
+a rule, a `when`, an end and a helper, and in a `changes`: `({ pick: s.pick! + 1 })` gives Node the
 value 1 and a model that passes with 4 states, where the checker reports a fault and 1 state.
 Test: `explore_in_node_gives_unknown_for_a_rule_that_compares_a_null_number`.
 
@@ -475,7 +475,7 @@ is missing.
 | File | Model | By hand | Today | Test |
 |---|---|---|---|---|
 | `fourth_b/null_compare.model.ts` | `Opt`: `o` is `null`, then 0, 1 or 2 after `set` (4 states, `done` marks `o !== null`) | `below` is `s.o! < 3`, `sum` is `s.o! + 1 > 0` and `remainder` is `m.rem(s.o!, 5) >= 0`. The root `README.md` says a number compared or added with an optional number "is a fault in a state where it is null", and that `explore` follows the same rule. In the start state `o` is `null`, so each rule is `unknown` and there is a fault after 0 steps. Elsewhere each holds | The checker says exactly that. `explore` runs the file as JavaScript, where `null < 3` is true and `null + 1` is 1: `pass`, 4 states, all three rules `holds`, no finding | `explore_in_node_gives_unknown_for_a_number_read_from_null_by_order_sum_or_remainder` |
-| `fourth_b/null_then.model.ts` | `Bump`: `o` is `null` in every state and `n` is 0 | The `then` of `bump` is `{ n: s.o! + 1 }`, which reads a number from `null`: a fault in the start state, and no state follows. 1 state, a fault after 0 steps | The checker says that. `explore` gets 1 from `null + 1`, takes the step to `n = 1` and stops there: `pass`, 2 states | `explore_in_node_does_not_take_a_step_whose_then_reads_null` |
+| `fourth_b/null_then.model.ts` | `Bump`: `o` is `null` in every state and `n` is 0 | The `changes` of `bump` is `{ n: s.o! + 1 }`, which reads a number from `null`: a fault in the start state, and no state follows. 1 state, a fault after 0 steps | The checker says that. `explore` gets 1 from `null + 1`, takes the step to `n = 1` and stops there: `pass`, 2 states | `explore_in_node_does_not_take_a_step_whose_then_reads_null` |
 
 `explore` only turns a `TypeError` into a fault, and JavaScript throws none for an order, a sum
 or a remainder of `null`, nor when `null` is passed to a primitive (`s.sq.includes(s.o!)`,
@@ -555,7 +555,7 @@ unique).
   input fastest (it gives `(A, 2)` first). A path of the checker and the first path found by
   walking `steps()` therefore differ, which `packages/model/README.md` states for `explore` and the
   root `README.md` does not state for Rust.
-- A constant that is not exported (`const low = Cnt.rule({...})`) is the id `low` in the checker
+- A constant that is not exported (`const low = m.rule(Cnt, ...)`) is the id `low` in the checker
   and the sentence in `explore`, which only knows the exported names. The contract says the id is
   the name of the exported constant, so it does not say what an unexported one is.
 - A file named exactly `.ts`, `.mts`, `.tsx` or `.rs` is not found, also when named, with no
@@ -682,7 +682,7 @@ result: `passes_on.model.ts` unreadable, or `Climb` checked with `low` broken. T
 | File | By hand | Today | Test |
 |---|---|---|---|
 | `fifth_a/cast.model.ts` | `Opt`: `o` is `null`, then 0, 1 or 2 (4 states). The rule is `(s.o as number) < 3`, which `tsc` accepts. `as` changes nothing in JavaScript, so this is `null < 3` in the start state, as `s.o! < 3` was in the fourth pass; `!` is now refused for that reason and `as` is not. Right result: `unreadable`, or the checker and `explore` give one verdict | The checker: a fault in the start state, `below` `unknown`, `fail`. `explore`: `holds`, `pass`, no finding | `explore_and_the_checker_agree_on_a_null_number_read_through_as` |
-| `fifth_a/inline_type.model.ts` | `const low = Climb.rule(...)` and `export { type low };`. The `type` modifier erases the export from the JavaScript, as `export type { low }` does, which is refused as a rule bound to a constant that is not exported. Right result: `unreadable` | Read, with the rule id `low`; `explore` knows no export of it and names the rule by its sentence | `a_rule_exported_only_as_a_type_is_unreadable` |
+| `fifth_a/inline_type.model.ts` | `const low = m.rule(Climb, ...)` and `export { type low };`. The `type` modifier erases the export from the JavaScript, as `export type { low }` does, which is refused as a rule bound to a constant that is not exported. Right result: `unreadable` | Read, with the rule id `low`; `explore` knows no export of it and names the rule by its sentence | `a_rule_exported_only_as_a_type_is_unreadable` |
 | `fifth_a/inputs.rs` | `Post`: `deliver(letter: Option<Letter>)` once, then `place(spot: Spot)` once, where `Spot` is a record of `row` (0 or 1) and `lit`. States: the start, 3 after `deliver`, 3 times 4 after `place`: 16. `kept` breaks where nothing came and the post is in the lit spot of row 1: `deliver` with `letter = null`, then `place` with `spot = {row: 1, lit: true}`, 2 steps, which is what the checker reports | `replay` with the inputs written as the report prints them refuses step 1: `steps()` lists the inputs as `Debug` prints them (`None`, `Some(Bill)`, `Spot { row: 1, lit: true }`), and `Move` matches only that text or a text in quotes. The contract says an input is written as the report prints it | `replay_takes_an_optional_and_a_record_input_as_the_report_prints_them` |
 | `fifth_a/quoted.rs` | The view's state label is `format!("{:?} by {:?}", self.mode, if self.mode == Mode::On { self.who } else { "Kim" })`, where `who` is a `#[one_of("Kim", "Lee")]` text. When the file runs, `state_label()` is `Off by "Kim"` and then `On by "Lee"`: `Debug` puts a text in quotes. Right result: the chart's boxes read as Rust prints them, or `unreadable` as `{:?}` of a text field is | The chart draws `Off by Kim` and `On by Lee`: the refusal looks only at a `{:?}` whose value is a plain field read | `a_debug_hole_on_a_text_gives_the_chart_the_label_rust_prints` |
 
@@ -744,7 +744,7 @@ are tested in `crates/earnest/tests/model/replays.rs`.
   a glob, a grouped `pub use {..}`, `pub extern crate earnest` and `extern crate earnest as
   kit` are refused; `use earnest::model::forall as _` is read.
 - TypeScript: `%` in a view's template and in a sentence's template is refused; `m.some(x)!`,
-  `Climb.rule(...)!`, `export default`, `export { low as high }`, `export let`, `export var`,
+  `m.rule(Climb, ...)!`, `export default`, `export { low as high }`, `export let`, `export var`,
   `let x!: T`, `export declare const`, `export type { low }` and `export * from` are refused.
 - `earnest confirm --tlc`: texts with quotes, `Option` and record inputs, `#[one_of]` on an
   `Option<u8>`, an `i8` sum past its type in a rule, `u32`, `i64` and `u64` with small ranges,

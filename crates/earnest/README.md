@@ -28,7 +28,7 @@ TypeScript. A model needs no `pub` and no documentation: `#[derive(Model)]` uses
 | `Domain` | The derive for an enum or a record, and the trait it implements: `Type::values()` lists every value |
 | `model` | The attribute for the `impl` block. It reads `#[action("...")]`, `#[rule("...")]` and `#[end("...")]` and implements `Behavior` |
 | `Behavior` | `state.steps()`, `state.rules()` and `state.ends()`: every action tried with every input, and every rule and end judged, as `Step` and `Claim` values |
-| `view` | The attribute for a second `impl` block: `#[view(title = "...", step(action = "..."), colors(broken = "#c62828"))]` with a `#[state]` and a `#[group]` method, each `fn(&self) -> String`. It is the Rust form of the TypeScript `Model.view`, and `earnest chart` and `earnest report` draw the labels it gives |
+| `view` | The attribute for a second `impl` block: `#[view(title = "...", step(action = "..."), colors(broken = "#c62828"))]` with a `#[state]` and a `#[group]` method, each `fn(&self) -> String`. It is the Rust form of the TypeScript `m.view`, and `earnest chart` and `earnest report` draw the labels it gives |
 | `View` | `state.state_label()`, `state.group_label()`, `Type::title()`, `Type::step_labels()` and `Type::colors()`: what the `#[view]` block says, as the chart shows it |
 | `replay(&start, &path)`, `Move` | Walks a path from `earnest verify --json` one step at a time and gives back every state, the start first. A `Move::new("deliver").with("letter", "Bill")` is one step: the action's id and each input as the report prints it. A step that can't happen is a `Mismatch` with its number and the steps that can |
 | `require!` | `require!(condition);` in an action: the action returns `None` when the condition is false |

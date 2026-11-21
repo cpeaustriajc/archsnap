@@ -13,14 +13,14 @@ const GOOD_MODEL: &str = r#"import { m } from "@earnest/model";
 
 export const Good = m.model("Good", { n: m.int(0, 2).initial(0) });
 
-export const inc = Good.action("one up", {
+export const inc = m.action(Good, "one up", {
 	when: (s) => s.n < 2,
-	then: (s) => ({ n: s.n + 1 }),
+	changes: (s) => ({ n: s.n + 1 }),
 });
 
-export const top = Good.end({ says: "The count is two", when: (s) => s.n === 2 });
+export const top = m.end(Good, "The count is two", (s) => s.n === 2);
 
-export const low = Good.rule({ says: "The count is at most two", holds: (s) => s.n <= 2 });
+export const low = m.rule(Good, "The count is at most two", (s) => s.n <= 2);
 "#;
 
 fn checked_typescript(source: &str) -> Report {
@@ -37,14 +37,14 @@ fn typescript_with_rule(condition: &str) -> String {
 
 export const Deep = m.model("Deep", {{ n: m.int(0, 3).initial(0) }});
 
-export const inc = Deep.action("one up", {{
+export const inc = m.action(Deep, "one up", {{
 	when: (s) => s.n < 3,
-	then: (s) => ({{ n: s.n + 1 }}),
+	changes: (s) => ({{ n: s.n + 1 }}),
 }});
 
-export const top = Deep.end({{ says: "The count is three", when: (s) => s.n === 3 }});
+export const top = m.end(Deep, "The count is three", (s) => s.n === 3);
 
-export const low = Deep.rule({{ says: "The count is at most three", holds: (s) => {condition} }});
+export const low = m.rule(Deep, "The count is at most three", (s) => {condition});
 "#
     )
 }

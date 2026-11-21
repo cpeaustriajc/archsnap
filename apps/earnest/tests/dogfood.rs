@@ -15,39 +15,27 @@ export const Oven = m.model(\"Oven\", {
 \theat: m.int(0, 5).initial(0),
 });
 
-export const warm = Oven.action(\"the oven warms up\", {
+export const warm = m.action(Oven, \"the oven warms up\", {
 \twhen: (s) => s.heat < 5,
-\tthen: (s) => ({ heat: s.heat + 1 }),
+\tchanges: (s) => ({ heat: s.heat + 1 }),
 });
 
-export const withinRange = Oven.rule({
-\tsays: \"The heat stays within range\",
-\tholds: (s) => s.heat <= 5,
-});
+export const withinRange = m.rule(Oven, \"The heat stays within range\", (s) => s.heat <= 5);
 
-export const hot = Oven.end({
-\tsays: \"The oven is hot\",
-\twhen: (s) => s.heat === 5,
-});
+export const hot = m.end(Oven, \"The oven is hot\", (s) => s.heat === 5);
 
 export const Stove = m.model(\"Stove\", {
 \tring: m.int(0, 3).initial(0),
 });
 
-export const glow = Stove.action(\"the ring glows\", {
+export const glow = m.action(Stove, \"the ring glows\", {
 \twhen: (s) => s.ring < 3,
-\tthen: (s) => ({ ring: s.ring + 1 }),
+\tchanges: (s) => ({ ring: s.ring + 1 }),
 });
 
-export const ringWithinRange = Stove.rule({
-\tsays: \"The ring stays within range\",
-\tholds: (s) => s.ring <= 3,
-});
+export const ringWithinRange = m.rule(Stove, \"The ring stays within range\", (s) => s.ring <= 3);
 
-export const lit = Stove.end({
-\tsays: \"The ring is lit\",
-\twhen: (s) => s.ring === 3,
-});
+export const lit = m.end(Stove, \"The ring is lit\", (s) => s.ring === 3);
 ";
 
 const LAMP: &str = "\
@@ -78,10 +66,7 @@ import { m } from \"@earnest/model\";
 
 export const Clock = m.model(\"Clock\", { time: m.int(0, 3).initial(0) });
 
-export const early = Clock.rule({
-\tsays: \"The time is early\",
-\tholds: (s) => s.time <= Date.now(),
-});
+export const early = m.rule(Clock, \"The time is early\", (s) => s.time <= Date.now());
 ";
 
 const PANEL: &str = "\
@@ -93,20 +78,14 @@ export const Panel = m.model(\"Panel\", {
 \tmode: m.oneOf([\"Idle\", \"Busy\"]).initial(\"Idle\"),
 });
 
-export const press = Panel.action(\"someone presses the button\", {
+export const press = m.action(Panel, \"someone presses the button\", {
 \twhen: (s) => s.presses < 3,
-\tthen: (s) => ({ lit: true, presses: s.presses + 1 }),
+\tchanges: (s) => ({ lit: true, presses: s.presses + 1 }),
 });
 
-export const dark = Panel.rule({
-\tsays: \"The panel is never lit\",
-\tholds: (s) => !s.lit,
-});
+export const dark = m.rule(Panel, \"The panel is never lit\", (s) => !s.lit);
 
-export const done = Panel.end({
-\tsays: \"The button was pressed three times\",
-\twhen: (s) => s.presses === 3,
-});
+export const done = m.end(Panel, \"The button was pressed three times\", (s) => s.presses === 3);
 ";
 
 const CLIMB: &str = "\
@@ -114,14 +93,14 @@ import { m } from \"@earnest/model\";
 
 export const Climb = m.model(\"Climb\", { n: m.int(0, 30).initial(0) });
 
-export const up = Climb.action(\"climbs\", {
+export const up = m.action(Climb, \"climbs\", {
 \twhen: (s) => s.n < 30,
-\tthen: (s) => ({ n: s.n + 1 }),
+\tchanges: (s) => ({ n: s.n + 1 }),
 });
 
-export const low = Climb.rule({ says: \"stays low\", holds: (s) => s.n < 3 });
+export const low = m.rule(Climb, \"stays low\", (s) => s.n < 3);
 
-export const top = Climb.end({ says: \"top\", when: (s) => s.n === 30 });
+export const top = m.end(Climb, \"top\", (s) => s.n === 30);
 ";
 
 struct Run {
@@ -361,7 +340,10 @@ fn a_path_ends_with_one_line_holding_the_whole_state_it_ends_in() {
 
 #[test]
 fn a_path_of_no_step_has_no_end_line() {
-    let at_start = PANEL.replace("holds: (s) => !s.lit", "holds: (s) => s.lit");
+    let at_start = PANEL.replace(
+        "\"The panel is never lit\", (s) => !s.lit",
+        "\"The panel is never lit\", (s) => s.lit",
+    );
     let folder = folder_with(&[("panel.model.ts", &at_start)]);
     let run = earnest(folder.path(), &["verify", "--no-cache", "panel.model.ts"]);
     assert!(run.stdout.contains("start  lit = false"), "{}", run.stdout);

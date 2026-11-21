@@ -5,24 +5,25 @@ export const Turnstile = m.model("Turnstile", {
 	paid: m.boolean().initial(false),
 });
 
-export const pay = Turnstile.action("the visitor pays", {
+export const pay = m.action(Turnstile, "the visitor pays", {
 	when: (s) => !s.paid && s.gate === "Locked",
-	then: () => ({ paid: true }),
+	changes: () => ({ paid: true }),
 });
 
-export const push = Turnstile.action("the visitor pushes", {
+export const push = m.action(Turnstile, "the visitor pushes", {
 	when: (s) => s.gate === "Locked",
-	then: () => ({ gate: "Open" }),
+	changes: () => ({ gate: "Open" }),
 });
 
-export const enter = Turnstile.action("the visitor walks through", {
+export const enter = m.action(Turnstile, "the visitor walks through", {
 	when: (s) => s.gate === "Open",
-	then: () => ({ gate: "Locked", paid: false }),
+	changes: () => ({ gate: "Locked", paid: false }),
 });
 
-export const locked = Turnstile.rule({
-	says: "The gate stays locked until the visitor pays",
-	holds: (s) => s.gate === "Locked" || s.paid,
-});
+export const locked = m.rule(
+	Turnstile,
+	"The gate stays locked until the visitor pays",
+	(s) => s.gate === "Locked" || s.paid,
+);
 
 export type State = m.Infer<typeof Turnstile>;

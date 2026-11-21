@@ -7,18 +7,16 @@ export const Either = m.model("Either", {
 	chosen: Item.optional().initial(null),
 });
 
-export const pick = Either.action("a guest picks an item", {
+export const pick = m.action(Either, "a guest picks an item", {
 	input: { g: Guest },
 	when: (s) => s.chosen === null,
-	then: (_, { g }) => ({ chosen: g === "ann" ? { qty: 0, who: g } : { qty: 1, who: null } }),
+	changes: (_, { g }) => ({ chosen: g === "ann" ? { qty: 0, who: g } : { qty: 1, who: null } }),
 });
 
-export const named = Either.rule({
-	says: "A chosen item has a name on it",
-	holds: (s) => s.chosen === null || s.chosen.who !== null,
-});
+export const named = m.rule(
+	Either,
+	"A chosen item has a name on it",
+	(s) => s.chosen === null || s.chosen.who !== null,
+);
 
-export const picked = Either.end({
-	says: "An item is chosen",
-	when: (s) => s.chosen !== null,
-});
+export const picked = m.end(Either, "An item is chosen", (s) => s.chosen !== null);

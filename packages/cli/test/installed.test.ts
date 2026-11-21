@@ -23,14 +23,14 @@ const PASSING = `import { m } from "@earnest/model";
 
 export const Counter = m.model("Counter", { count: m.int(0, 2).initial(0) });
 
-export const increment = Counter.action("the count goes up", {
+export const increment = m.action(Counter, "the count goes up", {
   when: (s) => s.count < 2,
-  then: (s) => ({ count: s.count + 1 }),
+  changes: (s) => ({ count: s.count + 1 }),
 });
 
-export const bounded = Counter.rule({ says: "The count stays small", holds: (s) => s.count <= 2 });
+export const bounded = m.rule(Counter, "The count stays small", (s) => s.count <= 2);
 
-export const full = Counter.end({ says: "The count is full", when: (s) => s.count === 2 });
+export const full = m.end(Counter, "The count is full", (s) => s.count === 2);
 `;
 
 const FAILING = `import { m } from "@earnest/model";
@@ -40,25 +40,26 @@ export const Turnstile = m.model("Turnstile", {
   paid: m.boolean().initial(false),
 });
 
-export const pay = Turnstile.action("the visitor pays", {
+export const pay = m.action(Turnstile, "the visitor pays", {
   when: (s) => !s.paid && s.gate === "Locked",
-  then: () => ({ paid: true }),
+  changes: () => ({ paid: true }),
 });
 
-export const push = Turnstile.action("the visitor pushes", {
+export const push = m.action(Turnstile, "the visitor pushes", {
   when: (s) => s.gate === "Locked",
-  then: () => ({ gate: "Open" }),
+  changes: () => ({ gate: "Open" }),
 });
 
-export const enter = Turnstile.action("the visitor walks through", {
+export const enter = m.action(Turnstile, "the visitor walks through", {
   when: (s) => s.gate === "Open",
-  then: () => ({ gate: "Locked", paid: false }),
+  changes: () => ({ gate: "Locked", paid: false }),
 });
 
-export const locked = Turnstile.rule({
-  says: "The gate stays locked until the visitor pays",
-  holds: (s) => s.gate === "Locked" || s.paid,
-});
+export const locked = m.rule(
+  Turnstile,
+  "The gate stays locked until the visitor pays",
+  (s) => s.gate === "Locked" || s.paid,
+);
 `;
 
 interface Outcome {

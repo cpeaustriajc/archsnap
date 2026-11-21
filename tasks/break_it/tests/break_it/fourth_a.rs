@@ -8,14 +8,14 @@ const GOOD_MODEL: &str = r#"import { m } from "@earnest/model";
 
 export const Good = m.model("Good", { n: m.int(0, 2).initial(0) });
 
-export const inc = Good.action("one up", {
+export const inc = m.action(Good, "one up", {
 	when: (s) => s.n < 2,
-	then: (s) => ({ n: s.n + 1 }),
+	changes: (s) => ({ n: s.n + 1 }),
 });
 
-export const top = Good.end({ says: "The count is two", when: (s) => s.n === 2 });
+export const top = m.end(Good, "The count is two", (s) => s.n === 2);
 
-export const low = Good.rule({ says: "The count is at most two", holds: (s) => s.n <= 2 });
+export const low = m.rule(Good, "The count is at most two", (s) => s.n <= 2);
 "#;
 
 fn climb_with_sentence(sentence: &str) -> String {
@@ -24,14 +24,14 @@ fn climb_with_sentence(sentence: &str) -> String {
 
 export const Climb = m.model("Climb", {{ n: m.int(0, 3).initial(0) }});
 
-export const inc = Climb.action("{sentence}", {{
+export const inc = m.action(Climb, "{sentence}", {{
 	when: (s) => s.n < 3,
-	then: (s) => ({{ n: s.n + 1 }}),
+	changes: (s) => ({{ n: s.n + 1 }}),
 }});
 
-export const top = Climb.end({{ says: "The count is three", when: (s) => s.n === 3 }});
+export const top = m.end(Climb, "The count is three", (s) => s.n === 3);
 
-export const low = Climb.rule({{ says: "The count stays at most one", holds: (s) => s.n <= 1 }});
+export const low = m.rule(Climb, "The count stays at most one", (s) => s.n <= 1);
 "#
     )
 }
