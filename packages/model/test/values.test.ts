@@ -293,8 +293,9 @@ test("forall and exists range over a declaration or a collection", () => {
 test("texts are walked by code point, as Rust and the checker walk them", () => {
   const letters = m.setOf<string>("\u{1f600}", "\u{ff5e}", "z", "\u{e9}", "B", "b", "a");
   expect([...letters]).toStrictEqual(["B", "a", "b", "z", "\u{e9}", "\u{ff5e}", "\u{1f600}"]);
-  expect(compareText("\u{1f600}", "\u{ff5e}")).toBeGreaterThan(0);
-  expect("\u{1f600}" < "\u{ff5e}").toBe(true);
+  const [grin, tilde] = ["\u{1f600}", "\u{ff5e}"];
+  expect(compareText(grin, tilde)).toBeGreaterThan(0);
+  expect(grin < tilde).toBe(true);
   expect(compareText("ab", "a")).toBeGreaterThan(0);
   expect(compareText("a", "a")).toBe(0);
 });

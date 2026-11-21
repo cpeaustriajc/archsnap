@@ -8,7 +8,7 @@ export const flip = m.action(Porch, "someone flips the porch switch", {
 	changes: (s) => ({ lit: !s.lit }),
 });
 
-export const porchKnown = m.rule(Porch, "The porch light is on or off", (s) => s.lit || !s.lit);
+export const porchKnown = m.rule(Porch, "The porch light is on or off", (s) => s.lit === true || s.lit === false);
 
 export const Hall = m.model("Hall", {
 	level: m.int(0, 2).initial(0),

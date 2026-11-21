@@ -155,7 +155,7 @@ test("the two tarballs hold the launcher, the binary and no install script", () 
   expect(Object.values(dependencies).every((range) => range === launcher.version)).toBe(true);
   for (const fields of [launcher, platform]) {
     const scripts = Object.keys((fields.scripts ?? {}) as Record<string, string>);
-    expect(scripts.filter((name) => /install$/.test(name))).toEqual([]);
+    expect(scripts.filter((name) => name.endsWith("install"))).toEqual([]);
   }
   const files = (tarball: string): string[] =>
     execFileSync("tar", ["--list", "--file", join(packed, tarball)], { encoding: "utf8" })
