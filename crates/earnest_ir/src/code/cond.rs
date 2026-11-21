@@ -19,6 +19,13 @@ impl Wanted {
         }
     }
 
+    fn compares(self, found: &Value, constant: &Value) -> bool {
+        match self {
+            Self::Equal => is(found, constant),
+            Self::Different => !is(found, constant),
+        }
+    }
+
     fn of_other_kinds(self) -> bool {
         matches!(self, Self::Different)
     }
@@ -203,7 +210,7 @@ impl Cond {
                 place,
                 value,
                 wanted,
-            } => Ok(wanted.judge(place.find(frame)?, value)),
+            } => Ok(wanted.compares(place.find(frame)?, value)),
             Self::Alike(places, wanted) => {
                 let first = places.0.find(frame)?;
                 let second = places.1.find(frame)?;
@@ -238,6 +245,15 @@ impl Cond {
             }
             Self::Value(inner) => as_bool(&inner.eval(frame)?),
         }
+    }
+}
+
+fn is(found: &Value, constant: &Value) -> bool {
+    match constant {
+        Value::Null => matches!(found, Value::Null),
+        Value::Str(name) => matches!(found, Value::Str(other) if other == name),
+        Value::Bool(flag) => matches!(found, Value::Bool(other) if other == flag),
+        _ => found == constant,
     }
 }
 
