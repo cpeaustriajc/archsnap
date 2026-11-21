@@ -1,4 +1,5 @@
 use super::num::{Operand, Stop, int_at, pair};
+use super::shared::Shared;
 use super::val::{Binding, Place, Val, plain};
 use crate::eval::{as_bool, compare};
 use crate::{Expr, Fault, Frame, Op, Order};
@@ -58,39 +59,42 @@ pub(super) enum Cond {
 }
 
 impl Cond {
-    pub(super) fn of(expr: &Expr) -> Self {
-        if let Some(cond) = Self::shaped(expr) {
+    pub(super) fn of(expr: &Expr, shared: &Shared) -> Self {
+        if let Some(cond) = Self::shaped(expr, shared) {
             return cond;
         }
         match expr {
             Expr::Const(Value::Bool(flag)) => Self::Const(*flag),
-            Expr::Choose(test, yes, no) => {
-                Self::Choose(Box::new((Self::of(test), Self::of(yes), Self::of(no))))
-            }
+            Expr::Choose(test, yes, no) => Self::Choose(Box::new((
+                Self::of(test, shared),
+                Self::of(yes, shared),
+                Self::of(no, shared),
+            ))),
             _ => match Place::of(expr) {
                 Some(place) => Self::Read(place),
-                None => Self::Value(Box::new(Val::of(expr))),
+                None => Self::Value(Box::new(Val::of(expr, shared))),
             },
         }
     }
 
-    pub(super) fn shaped(expr: &Expr) -> Option<Self> {
+    pub(super) fn shaped(expr: &Expr, shared: &Shared) -> Option<Self> {
         match expr {
             Expr::And(..) => {
                 let mut parts = Vec::new();
-                every_part(expr, &mut parts);
+                every_part(expr, &mut parts, shared);
                 Some(Self::All(parts.into_boxed_slice()))
             }
             Expr::Or(..) => {
                 let mut parts = Vec::new();
-                any_part(expr, &mut parts);
+                any_part(expr, &mut parts, shared);
                 Some(Self::Any(parts.into_boxed_slice()))
             }
-            Expr::Bind { slot, value, body } => Some(Self::Bind(Box::new(Binding {
-                slot: *slot,
-                value: Val::of(value),
-                body: Self::of(body),
-            }))),
+            Expr::Bind { slot, value, body } => Some(Self::Bind(Binding::of(
+                *slot,
+                value,
+                Self::of(body, shared),
+                shared,
+            ))),
             Expr::Apply(op, arguments) => match (op, arguments.as_slice()) {
                 (Op::Order(order), [Expr::Field(field), Expr::Const(Value::Int(number))]) => {
                     Some(Self::FieldOrder {
@@ -101,30 +105,34 @@ impl Cond {
                 }
                 (Op::Order(order), [left, right]) => Some(Self::Order {
                     order: *order,
-                    left: Operand::of(left),
-                    right: Operand::of(right),
+                    left: Operand::of(left, shared),
+                    right: Operand::of(right, shared),
                 }),
-                (Op::Equal, [left, right]) => Some(Self::equality(left, right, Wanted::Equal)),
-                (Op::Differ, [left, right]) => Some(Self::equality(left, right, Wanted::Different)),
-                (Op::Not, [inner]) => Some(Self::Not(Box::new(Self::of(inner)))),
+                (Op::Equal, [left, right]) => {
+                    Some(Self::equality(left, right, Wanted::Equal, shared))
+                }
+                (Op::Differ, [left, right]) => {
+                    Some(Self::equality(left, right, Wanted::Different, shared))
+                }
+                (Op::Not, [inner]) => Some(Self::Not(Box::new(Self::of(inner, shared)))),
                 _ => None,
             },
             _ => None,
         }
     }
 
-    fn equality(left: &Expr, right: &Expr, wanted: Wanted) -> Self {
+    fn equality(left: &Expr, right: &Expr, wanted: Wanted, shared: &Shared) -> Self {
         match (left, right) {
             (_, Expr::Const(Value::Int(number))) => {
                 return Self::Is {
-                    operand: Operand::of(left),
+                    operand: Operand::of(left, shared),
                     number: *number,
                     wanted,
                 };
             }
             (Expr::Const(Value::Int(number)), _) => {
                 return Self::Is {
-                    operand: Operand::of(right),
+                    operand: Operand::of(right, shared),
                     number: *number,
                     wanted,
                 };
@@ -139,7 +147,10 @@ impl Cond {
                 wanted,
             },
             (Some(first), Some(second), _, _) => Self::Alike(Box::new((first, second)), wanted),
-            _ => Self::Same(Box::new((Val::of(left), Val::of(right))), wanted),
+            _ => Self::Same(
+                Box::new((Val::of(left, shared), Val::of(right, shared))),
+                wanted,
+            ),
         }
     }
 
@@ -225,20 +236,20 @@ impl Cond {
     }
 }
 
-fn every_part(expr: &Expr, parts: &mut Vec<Cond>) {
+fn every_part(expr: &Expr, parts: &mut Vec<Cond>, shared: &Shared) {
     if let Expr::And(left, right) = expr {
-        every_part(left, parts);
-        every_part(right, parts);
+        every_part(left, parts, shared);
+        every_part(right, parts, shared);
     } else {
-        parts.push(Cond::of(expr));
+        parts.push(Cond::of(expr, shared));
     }
 }
 
-fn any_part(expr: &Expr, parts: &mut Vec<Cond>) {
+fn any_part(expr: &Expr, parts: &mut Vec<Cond>, shared: &Shared) {
     if let Expr::Or(left, right) = expr {
-        any_part(left, parts);
-        any_part(right, parts);
+        any_part(left, parts, shared);
+        any_part(right, parts, shared);
     } else {
-        parts.push(Cond::of(expr));
+        parts.push(Cond::of(expr, shared));
     }
 }

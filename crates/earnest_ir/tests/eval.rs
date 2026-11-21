@@ -1153,3 +1153,156 @@ proptest! {
         both_truths(&state, &locals, &expr);
     }
 }
+
+const CODES: usize = 4;
+const SHARED_BINDINGS: usize = 3;
+
+#[derive(Clone, Debug)]
+enum Step {
+    Value(usize),
+    Truth(usize),
+    Apart(usize),
+    Other(usize),
+    Put(usize, Value),
+}
+
+fn any_step() -> impl Strategy<Value = Step> {
+    prop_oneof![
+        3 => (0..CODES).prop_map(Step::Value),
+        3 => (0..CODES).prop_map(Step::Truth),
+        1 => (0..CODES).prop_map(Step::Apart),
+        1 => (0..CODES).prop_map(Step::Other),
+        1 => (0..SLOTS, any_value()).prop_map(|(slot, value)| Step::Put(slot, value)),
+    ]
+}
+
+fn wrapped(body: Expr, bindings: &[(usize, Expr)], chosen: &[bool]) -> Expr {
+    bindings
+        .iter()
+        .zip(chosen)
+        .rev()
+        .filter(|(_, wanted)| **wanted)
+        .fold(body, |inner, ((slot, value), _)| Expr::Bind {
+            slot: *slot,
+            value: Box::new(value.clone()),
+            body: Box::new(inner),
+        })
+}
+
+fn any_unit() -> impl Strategy<Value = Vec<Expr>> {
+    let bindings = proptest::collection::vec((0..SLOTS, any_expr()), 1..=SHARED_BINDINGS);
+    let parts = proptest::collection::vec(
+        (
+            any_expr(),
+            any_expr(),
+            proptest::collection::vec(any::<bool>(), SHARED_BINDINGS),
+            any::<bool>(),
+        ),
+        CODES,
+    );
+    (bindings, parts).prop_map(|(bindings, parts)| {
+        parts
+            .into_iter()
+            .map(|(body, test, chosen, behind_a_test)| {
+                let shared = wrapped(body, &bindings, &chosen);
+                if behind_a_test {
+                    Expr::Choose(Box::new(test.clone()), Box::new(shared), Box::new(test))
+                } else {
+                    shared
+                }
+            })
+            .collect()
+    })
+}
+
+fn slots_of(frame: &mut Frame<'_>) -> Vec<Result<Value, Fault>> {
+    (0..SLOTS)
+        .map(|slot| eval(&Expr::Local(slot), frame))
+        .collect()
+}
+
+struct Units<'e> {
+    exprs: &'e [Expr],
+    others: &'e [Expr],
+    together: Vec<Code>,
+    apart: Vec<Code>,
+    other: Vec<Code>,
+}
+
+impl Units<'_> {
+    fn chosen(&self, step: &Step) -> Option<(&Expr, &Code)> {
+        let (exprs, codes, at) = match step {
+            Step::Value(at) | Step::Truth(at) => (self.exprs, &self.together, at),
+            Step::Apart(at) => (self.exprs, &self.apart, at),
+            Step::Other(at) => (self.others, &self.other, at),
+            Step::Put(..) => return None,
+        };
+        Some((exprs.get(*at)?, codes.get(*at)?))
+    }
+}
+
+fn agreed_in_turn(
+    state: &[Value],
+    locals: &[Value],
+    (exprs, others): (&[Expr], &[Expr]),
+    steps: &[Step],
+) {
+    let units = Units {
+        exprs,
+        others,
+        together: Code::together(exprs.iter().cloned()),
+        apart: exprs.iter().cloned().map(Code::new).collect(),
+        other: Code::together(others.iter().cloned()),
+    };
+    let mut reference = Frame::new(state, SLOTS);
+    let mut prepared = Frame::new(state, SLOTS);
+    for (slot, value) in locals.iter().enumerate() {
+        reference.put(slot, value.clone());
+        prepared.put(slot, value.clone());
+    }
+    for step in steps {
+        if let Step::Put(slot, value) = step {
+            reference.put(*slot, value.clone());
+            prepared.put(*slot, value.clone());
+        } else if let Some((expr, code)) = units.chosen(step) {
+            if matches!(step, Step::Truth(_)) {
+                assert_eq!(
+                    truth(expr, &mut reference),
+                    code.truth(&mut prepared),
+                    "the same truth or fault at {step:?}"
+                );
+            } else {
+                assert_eq!(
+                    eval(expr, &mut reference),
+                    code.eval(&mut prepared),
+                    "the same value or fault at {step:?}"
+                );
+            }
+        }
+        assert_eq!(
+            reference.computed_beyond_32_bits(),
+            prepared.computed_beyond_32_bits(),
+            "the same mark for numbers beyond 32 bits after {step:?}"
+        );
+        assert_eq!(
+            slots_of(&mut reference),
+            slots_of(&mut prepared),
+            "the same slots after {step:?}"
+        );
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(4096))]
+
+    #[test]
+    fn codes_prepared_together_agree_with_the_reference_walk_in_any_order(
+        exprs in any_unit(),
+        others in any_unit(),
+        state in proptest::collection::vec(any_value(), FIELDS),
+        locals in proptest::collection::vec(any_value(), SLOTS),
+        steps in proptest::collection::vec(any_step(), 1..12),
+    ) {
+        agreed_in_turn(&state, &locals, (&exprs, &others), &steps);
+    }
+}

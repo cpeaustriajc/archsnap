@@ -1,5 +1,6 @@
 use super::cond::Cond;
 use super::num::{Num, Stop};
+use super::shared::Shared;
 use crate::eval::{
     Test, applied, changed, each, field_of, fields_of, mapped, named, wrong_or_null,
 };
@@ -47,15 +48,33 @@ pub(super) fn plain(expr: &Expr) -> &Expr {
 
 #[derive(Clone, Debug)]
 pub(super) struct Binding<T> {
-    pub(super) slot: usize,
-    pub(super) value: Val,
+    slot: usize,
+    unit: u64,
+    keeps: bool,
+    value: Val,
     pub(super) body: T,
 }
 
 impl<T> Binding<T> {
+    pub(super) fn of(slot: usize, value: &Expr, body: T, shared: &Shared) -> Box<Self> {
+        Box::new(Self {
+            slot,
+            unit: shared.unit(),
+            keeps: shared.keeps(slot),
+            value: Val::of(value, shared),
+            body,
+        })
+    }
+
     pub(super) fn enter(&self, frame: &mut Frame<'_>) -> Result<(), Fault> {
+        if self.keeps && frame.kept(self.unit, self.slot) {
+            return Ok(());
+        }
         let bound = self.value.eval(frame)?;
-        frame.put(self.slot, bound);
+        frame.write(self.unit, self.slot, bound);
+        if self.keeps {
+            frame.keep(self.slot);
+        }
         Ok(())
     }
 }
@@ -65,6 +84,7 @@ pub(super) struct Sweeping {
     sweep: Sweep,
     shelf: Shelf,
     slot: usize,
+    unit: u64,
     source: Val,
     body: Cond,
 }
@@ -87,44 +107,47 @@ pub(super) enum Val {
     Sweep(Box<Sweeping>),
 }
 
-fn all_of(items: &[Expr]) -> Box<[Val]> {
-    items.iter().map(Val::of).collect()
+fn all_of(items: &[Expr], shared: &Shared) -> Box<[Val]> {
+    items.iter().map(|item| Val::of(item, shared)).collect()
 }
 
-fn all_named(fields: &[(Sym, Expr)]) -> Box<[(Sym, Val)]> {
+fn all_named(fields: &[(Sym, Expr)], shared: &Shared) -> Box<[(Sym, Val)]> {
     fields
         .iter()
-        .map(|(name, inner)| (*name, Val::of(inner)))
+        .map(|(name, inner)| (*name, Val::of(inner, shared)))
         .collect()
 }
 
 impl Val {
-    pub(super) fn of(expr: &Expr) -> Self {
-        match plain(expr) {
+    pub(super) fn of(expr: &Expr, shared: &Shared) -> Self {
+        let expr = plain(expr);
+        match expr {
             Expr::Const(Value::Bool(flag)) => Self::Cond(Cond::Const(*flag)),
             Expr::Const(value) => Self::Const(value.clone()),
             Expr::Field(index) => Self::Read(Place::Field(*index)),
             Expr::Local(slot) => Self::Read(Place::Local(*slot)),
             Expr::Get(inner, name) => match Place::of(inner) {
                 Some(place) => Self::Read(Place::Get(Box::new(place), *name)),
-                None => Self::Get(Box::new(Self::of(inner)), *name),
+                None => Self::Get(Box::new(Self::of(inner, shared)), *name),
             },
-            Expr::Choose(test, yes, no) => {
-                Self::Choose(Box::new((Cond::of(test), Self::of(yes), Self::of(no))))
+            Expr::Choose(test, yes, no) => Self::Choose(Box::new((
+                Cond::of(test, shared),
+                Self::of(yes, shared),
+                Self::of(no, shared),
+            ))),
+            Expr::Bind { slot, value, body } => {
+                Self::Bind(Binding::of(*slot, value, Self::of(body, shared), shared))
             }
-            Expr::Bind { slot, value, body } => Self::Bind(Box::new(Binding {
-                slot: *slot,
-                value: Self::of(value),
-                body: Self::of(body),
-            })),
-            Expr::Record(fields) => Self::Record(all_named(fields)),
-            Expr::With(base, changes) => Self::With(Box::new(Self::of(base)), all_named(changes)),
-            Expr::SetOf(items) => Self::SetOf(all_of(items)),
-            Expr::SeqOf(items) => Self::SeqOf(all_of(items)),
+            Expr::Record(fields) => Self::Record(all_named(fields, shared)),
+            Expr::With(base, changes) => {
+                Self::With(Box::new(Self::of(base, shared)), all_named(changes, shared))
+            }
+            Expr::SetOf(items) => Self::SetOf(all_of(items, shared)),
+            Expr::SeqOf(items) => Self::SeqOf(all_of(items, shared)),
             Expr::MapOf(entries) => Self::MapOf(
                 entries
                     .iter()
-                    .map(|(key, value)| (Self::of(key), Self::of(value)))
+                    .map(|(key, value)| (Self::of(key, shared), Self::of(value, shared)))
                     .collect(),
             ),
             Expr::Sweep {
@@ -137,17 +160,18 @@ impl Val {
                 sweep: *sweep,
                 shelf: *shelf,
                 slot: *slot,
-                source: Self::of(source),
-                body: Cond::of(body),
+                unit: shared.unit(),
+                source: Self::of(source, shared),
+                body: Cond::of(body, shared),
             })),
-            shaped @ (Expr::And(..) | Expr::Or(..)) => Self::Cond(Cond::of(shaped)),
-            shaped @ Expr::Apply(op, arguments) => {
-                if let Some(num) = Num::shaped(shaped) {
+            Expr::And(..) | Expr::Or(..) => Self::Cond(Cond::of(expr, shared)),
+            Expr::Apply(op, arguments) => {
+                if let Some(num) = Num::shaped(expr, shared) {
                     Self::Num(num)
-                } else if let Some(cond) = Cond::shaped(shaped) {
+                } else if let Some(cond) = Cond::shaped(expr, shared) {
                     Self::Cond(cond)
                 } else {
-                    Self::Apply(*op, all_of(arguments))
+                    Self::Apply(*op, all_of(arguments, shared))
                 }
             }
         }
@@ -188,6 +212,7 @@ impl Val {
                     shelf: sweeping.shelf,
                     slot: sweeping.slot,
                     body: &sweeping.body,
+                    unit: sweeping.unit,
                 };
                 test.over(&sweeping.source.eval(frame)?, frame, Cond::eval)
             }

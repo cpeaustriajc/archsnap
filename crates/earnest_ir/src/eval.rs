@@ -5,6 +5,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 const TICKS_BETWEEN_CLOCK_READS: u32 = 1024;
+const NO_ROUND: u64 = 0;
+const FIRST_ROUND: u64 = 1;
+pub(crate) const NO_UNIT: u64 = 0;
 
 /// Why an expression has no value in a state.
 ///
@@ -69,6 +72,9 @@ pub struct Frame<'a> {
     ticks: u32,
     expired: bool,
     beyond_32_bits: bool,
+    round: u64,
+    writer: u64,
+    kept_in: Vec<u64>,
 }
 
 impl<'a> Frame<'a> {
@@ -84,6 +90,9 @@ impl<'a> Frame<'a> {
             ticks: 0,
             expired: false,
             beyond_32_bits: false,
+            round: FIRST_ROUND,
+            writer: NO_UNIT,
+            kept_in: Vec::new(),
         }
     }
 
@@ -125,6 +134,40 @@ impl<'a> Frame<'a> {
     /// Puts `value` in `slot`, as the search does with an action's inputs. A slot the frame
     /// does not have is left out, and reading it later is [`Fault::WrongKind`].
     pub fn put(&mut self, slot: usize, value: Value) {
+        self.writer = NO_UNIT;
+        self.fill(slot, value);
+    }
+
+    pub(crate) fn write(&mut self, unit: u64, slot: usize, value: Value) {
+        self.enter(unit);
+        self.fill(slot, value);
+    }
+
+    pub(crate) fn kept(&mut self, unit: u64, slot: usize) -> bool {
+        self.enter(unit);
+        self.kept_in.get(slot) == Some(&self.round)
+    }
+
+    pub(crate) fn keep(&mut self, slot: usize) {
+        if slot >= self.locals.len() {
+            return;
+        }
+        if self.kept_in.len() < self.locals.len() {
+            self.kept_in.resize(self.locals.len(), NO_ROUND);
+        }
+        if let Some(round) = self.kept_in.get_mut(slot) {
+            *round = self.round;
+        }
+    }
+
+    fn enter(&mut self, unit: u64) {
+        if self.writer != unit {
+            self.writer = unit;
+            self.round = self.round.wrapping_add(1);
+        }
+    }
+
+    fn fill(&mut self, slot: usize, value: Value) {
         if let Some(place) = self.locals.get_mut(slot) {
             *place = value;
         }
@@ -179,6 +222,7 @@ pub fn eval(expr: &Expr, frame: &mut Frame<'_>) -> Result<Value, Fault> {
                 shelf: *shelf,
                 slot: *slot,
                 body: &**body,
+                unit: NO_UNIT,
             };
             test.over(&eval(source, frame)?, frame, truth)
         }
@@ -260,6 +304,7 @@ pub(crate) struct Test<'b, B> {
     pub(crate) shelf: Shelf,
     pub(crate) slot: usize,
     pub(crate) body: &'b B,
+    pub(crate) unit: u64,
 }
 
 impl<B> Test<'_, B> {
@@ -287,7 +332,7 @@ impl<B> Test<'_, B> {
             if frame.out_of_time() {
                 return Err(Fault::Stopped);
             }
-            frame.put(self.slot, item.clone());
+            frame.write(self.unit, self.slot, item.clone());
             let passed = judge(self.body, frame)?;
             match self.sweep {
                 Sweep::Every if !passed => return Ok(Value::Bool(false)),

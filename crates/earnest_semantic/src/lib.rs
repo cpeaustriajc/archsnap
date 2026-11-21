@@ -308,15 +308,21 @@ impl Lowerer<'_> {
         };
         self.enter(&draft.change, &mut scope)?;
         let updates = self.changes(&draft.change.term, &mut scope)?;
+        let changed: Vec<bool> = updates.iter().map(Option::is_some).collect();
+        let mut prepared =
+            Code::together(std::iter::once(guard).chain(updates.into_iter().flatten())).into_iter();
+        let guard = prepared
+            .next()
+            .expect("the guard is prepared first, before the updates");
         Ok(Action {
             id: draft.id.clone(),
             label: draft.label.clone(),
             line: draft.place.line,
             inputs,
-            guard: Code::new(guard),
-            updates: updates
+            guard,
+            updates: changed
                 .into_iter()
-                .map(|update| update.map(Code::new))
+                .map(|present| if present { prepared.next() } else { None })
                 .collect(),
             slots: scope.slots,
         })

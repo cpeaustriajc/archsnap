@@ -1,3 +1,4 @@
+use super::shared::Shared;
 use super::val::Val;
 use crate::eval::{arithmetic, is_safe, wrong_or_null};
 use crate::{Expr, Fault, Frame, Math, Op};
@@ -70,12 +71,12 @@ pub(super) enum Num {
 }
 
 impl Operand {
-    pub(super) fn of(expr: &Expr) -> Self {
+    pub(super) fn of(expr: &Expr, shared: &Shared) -> Self {
         match expr {
             Expr::Const(Value::Int(number)) => Self::Int(*number),
             Expr::Field(index) => Self::Field(*index),
             Expr::Local(slot) => Self::Local(*slot),
-            _ => Self::Num(Box::new(Num::of(expr))),
+            _ => Self::Num(Box::new(Num::of(expr, shared))),
         }
     }
 
@@ -116,11 +117,11 @@ pub(super) fn pair(
 }
 
 impl Num {
-    fn of(expr: &Expr) -> Self {
-        Self::shaped(expr).unwrap_or_else(|| Self::Value(Box::new(Val::of(expr))))
+    fn of(expr: &Expr, shared: &Shared) -> Self {
+        Self::shaped(expr, shared).unwrap_or_else(|| Self::Value(Box::new(Val::of(expr, shared))))
     }
 
-    pub(super) fn shaped(expr: &Expr) -> Option<Self> {
+    pub(super) fn shaped(expr: &Expr, shared: &Shared) -> Option<Self> {
         let Expr::Apply(op, arguments) = expr else {
             return None;
         };
@@ -136,18 +137,18 @@ impl Num {
             (Op::Math(math), [left, right]) => Self::Math {
                 math: *math,
                 bound: Bound::Any,
-                left: Operand::of(left),
-                right: Operand::of(right),
+                left: Operand::of(left, shared),
+                right: Operand::of(right, shared),
             },
-            (Op::Safe, [inner]) => Self::bounded(Bound::Safe, inner),
-            (Op::Fit(ty), [inner]) => Self::bounded(Bound::Fit(*ty), inner),
-            (Op::Negate, [inner]) => Self::Negate(Operand::of(inner)),
+            (Op::Safe, [inner]) => Self::bounded(Bound::Safe, inner, shared),
+            (Op::Fit(ty), [inner]) => Self::bounded(Bound::Fit(*ty), inner, shared),
+            (Op::Negate, [inner]) => Self::Negate(Operand::of(inner, shared)),
             _ => return None,
         })
     }
 
-    fn bounded(bound: Bound, inner: &Expr) -> Self {
-        match Self::shaped(inner) {
+    fn bounded(bound: Bound, inner: &Expr, shared: &Shared) -> Self {
+        match Self::shaped(inner, shared) {
             Some(Self::Math {
                 math,
                 bound: Bound::Any,
@@ -171,7 +172,7 @@ impl Num {
                 number,
             },
             Some(other) => Self::Bounded(bound, Operand::Num(Box::new(other))),
-            None => Self::Bounded(bound, Operand::of(inner)),
+            None => Self::Bounded(bound, Operand::of(inner, shared)),
         }
     }
 

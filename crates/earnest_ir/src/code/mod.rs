@@ -1,18 +1,20 @@
 mod cond;
 mod num;
+mod shared;
 mod val;
 
 use crate::{Expr, Fault, Frame};
 use cond::Cond;
 use earnest_value::Value;
 use num::Stop;
+use shared::Shared;
 use std::fmt;
 use val::Val;
 
 /// An expression together with the form the search evaluates it in.
 ///
 /// Build one with [`Code::new`] once, before the search, and evaluate it in every state with
-/// [`Code::eval`] or [`Code::truth`]. Both give the value or the [`Fault`] that [`eval`] and
+/// [`Code::eval`] or [`Code::truth`]. Both give the value or the [`Fault`] that [`crate::eval`] and
 /// [`crate::truth`] give for [`Code::expr`], with the same effects on the frame; they are faster
 /// because numbers and booleans are computed, and fields and records are read where they are,
 /// without building a [`Value`] for each step.
@@ -27,8 +29,32 @@ impl Code {
     /// Prepares `expr` for evaluation. The cost is one walk over the expression.
     #[must_use]
     pub fn new(expr: Expr) -> Self {
-        let value = Val::of(&expr);
-        let test = Cond::of(&expr);
+        Self::together([expr])
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| unreachable!())
+    }
+
+    /// Prepares expressions that are evaluated one after another in one frame, such as an
+    /// action's guard and updates, and gives their codes in the order given.
+    ///
+    /// A binding that several of them repeat, with the same slot and the same value, is
+    /// computed once and then read from its slot, until [`Frame::put`] or a code prepared apart
+    /// writes to the frame. Each code still gives what [`crate::eval`] gives for its expression, with
+    /// the same effects on the frame, whatever order the codes run in.
+    #[must_use]
+    pub fn together(exprs: impl IntoIterator<Item = Expr>) -> Vec<Self> {
+        let exprs: Vec<Expr> = exprs.into_iter().collect();
+        let shared = Shared::of(&exprs);
+        exprs
+            .into_iter()
+            .map(|expr| Self::prepared(expr, &shared))
+            .collect()
+    }
+
+    fn prepared(expr: Expr, shared: &Shared) -> Self {
+        let value = Val::of(&expr, shared);
+        let test = Cond::of(&expr, shared);
         Self { expr, value, test }
     }
 
