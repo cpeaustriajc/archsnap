@@ -162,11 +162,118 @@ pub(crate) enum Placed {
     Full,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Parent {
-    pub(crate) state: usize,
-    pub(crate) action: usize,
-    pub(crate) input: usize,
+trait Id: Copy + Eq {
+    const NONE: Self;
+    fn from_index(id: usize) -> Option<Self>;
+    fn index(self) -> usize;
+}
+
+impl Id for u32 {
+    const NONE: Self = Self::MAX;
+
+    fn from_index(id: usize) -> Option<Self> {
+        Self::try_from(id)
+            .ok()
+            .filter(|narrow| *narrow != Self::NONE)
+    }
+
+    fn index(self) -> usize {
+        usize::try_from(self).unwrap_or(usize::MAX)
+    }
+}
+
+impl Id for usize {
+    const NONE: Self = Self::MAX;
+
+    fn from_index(id: usize) -> Option<Self> {
+        Some(id).filter(|wide| *wide != Self::NONE)
+    }
+
+    fn index(self) -> usize {
+        self
+    }
+}
+
+#[derive(Debug)]
+struct Links<T> {
+    parents: Vec<T>,
+    shards: Vec<HashTable<T>>,
+}
+
+impl<T: Id> Links<T> {
+    fn new() -> Self {
+        Self {
+            parents: Vec::new(),
+            shards: (0..SHARD_COUNT).map(|_| HashTable::new()).collect(),
+        }
+    }
+
+    fn parent(&self, id: usize) -> Option<usize> {
+        self.parents
+            .get(id)
+            .copied()
+            .filter(|parent| *parent != T::NONE)
+            .map(Id::index)
+    }
+
+    fn push_parent(&mut self, parent: Option<usize>) {
+        self.parents
+            .push(parent.and_then(T::from_index).unwrap_or(T::NONE));
+    }
+
+    fn find(&self, rows: &[u64], words: usize, row: &[u64], hash: u64) -> Option<usize> {
+        self.shards
+            .get(shard_of(hash))?
+            .find(hash, |id| same_row(row_at(rows, words, id.index()), row))
+            .map(|id| id.index())
+    }
+
+    fn place(&mut self, rows: &mut Vec<u64>, at: Place<'_>) -> Placed {
+        let Some(shard) = self.shards.get_mut(shard_of(at.hash)) else {
+            return Placed::Full;
+        };
+        let words = at.words;
+        let entry = shard.entry(
+            at.hash,
+            |id| same_row(row_at(rows, words, id.index()), at.row),
+            |id| hash_row(row_at(rows, words, id.index())),
+        );
+        match entry {
+            hashbrown::hash_table::Entry::Occupied(found) => Placed::Known(found.get().index()),
+            hashbrown::hash_table::Entry::Vacant(vacant) => {
+                let Some(id) = T::from_index(at.count).filter(|_| at.count < at.most) else {
+                    return Placed::Full;
+                };
+                vacant.insert(id);
+                rows.extend_from_slice(at.row);
+                self.push_parent(at.parent);
+                Placed::New(at.count)
+            }
+        }
+    }
+
+    fn truncate(&mut self, kept: usize) {
+        self.parents.truncate(kept);
+        for shard in &mut self.shards {
+            shard.retain(|id| id.index() < kept);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Place<'a> {
+    row: &'a [u64],
+    hash: u64,
+    words: usize,
+    count: usize,
+    most: usize,
+    parent: Option<usize>,
+}
+
+#[derive(Debug)]
+enum Ids {
+    Narrow(Links<u32>),
+    Wide(Links<usize>),
 }
 
 #[derive(Debug)]
@@ -175,8 +282,7 @@ pub(crate) struct Store {
     words: usize,
     rows: Vec<u64>,
     count: usize,
-    parents: Vec<Option<Parent>>,
-    shards: Vec<HashTable<usize>>,
+    ids: Ids,
     grown: Vec<usize>,
     wide: FxHashMap<usize, Box<[Value]>>,
     wide_ids: FxHashMap<Box<[Value]>, usize>,
@@ -204,7 +310,7 @@ pub(crate) fn row_at(rows: &[u64], words: usize, id: usize) -> &[u64] {
 }
 
 impl Store {
-    pub(crate) fn new(fields: &[Field]) -> Self {
+    pub(crate) fn new(fields: &[Field], most: usize) -> Self {
         let mut codecs = Vec::with_capacity(fields.len());
         let mut word = 0;
         let mut used = 0;
@@ -235,8 +341,11 @@ impl Store {
             words,
             rows: Vec::new(),
             count: 0,
-            parents: Vec::new(),
-            shards: (0..SHARD_COUNT).map(|_| HashTable::new()).collect(),
+            ids: if u32::from_index(most).is_some() {
+                Ids::Narrow(Links::new())
+            } else {
+                Ids::Wide(Links::new())
+            },
             wide: FxHashMap::default(),
             wide_ids: FxHashMap::default(),
         }
@@ -264,8 +373,11 @@ impl Store {
         self.wide.get(&id).map(AsRef::as_ref)
     }
 
-    pub(crate) fn parent(&self, id: usize) -> Option<Parent> {
-        self.parents.get(id).copied().flatten()
+    pub(crate) fn parent(&self, id: usize) -> Option<usize> {
+        match &self.ids {
+            Ids::Narrow(links) => links.parent(id),
+            Ids::Wide(links) => links.parent(id),
+        }
     }
 
     pub(crate) fn state(&self, id: usize) -> Vec<Value> {
@@ -337,47 +449,41 @@ impl Store {
     }
 
     pub(crate) fn find(&self, row: &[u64], hash: u64) -> Option<usize> {
-        let (rows, words) = (&self.rows, self.words);
-        self.shards
-            .get(shard_of(hash))?
-            .find(hash, |id| same_row(row_at(rows, words, *id), row))
-            .copied()
+        match &self.ids {
+            Ids::Narrow(links) => links.find(&self.rows, self.words, row, hash),
+            Ids::Wide(links) => links.find(&self.rows, self.words, row, hash),
+        }
     }
 
     pub(crate) fn place(
         &mut self,
         row: &[u64],
         hash: u64,
-        parent: Option<Parent>,
+        parent: Option<usize>,
         most: usize,
     ) -> Placed {
-        let Some(shard) = self.shards.get_mut(shard_of(hash)) else {
-            return Placed::Full;
-        };
-        let (rows, words) = (&self.rows, self.words);
-        let entry = shard.entry(
+        let at = Place {
+            row,
             hash,
-            |id| same_row(row_at(rows, words, *id), row),
-            |id| hash_row(row_at(rows, words, *id)),
-        );
-        match entry {
-            hashbrown::hash_table::Entry::Occupied(found) => Placed::Known(*found.get()),
-            hashbrown::hash_table::Entry::Vacant(_) if self.count >= most => Placed::Full,
-            hashbrown::hash_table::Entry::Vacant(vacant) => {
-                let id = self.count;
-                vacant.insert(id);
-                self.rows.extend_from_slice(row);
-                self.parents.push(parent);
-                self.count += 1;
-                Placed::New(id)
-            }
+            words: self.words,
+            count: self.count,
+            most,
+            parent,
+        };
+        let placed = match &mut self.ids {
+            Ids::Narrow(links) => links.place(&mut self.rows, at),
+            Ids::Wide(links) => links.place(&mut self.rows, at),
+        };
+        if matches!(placed, Placed::New(_)) {
+            self.count += 1;
         }
+        placed
     }
 
     pub(crate) fn place_values(
         &mut self,
         values: Box<[Value]>,
-        parent: Option<Parent>,
+        parent: Option<usize>,
         most: usize,
     ) -> Placed {
         let mut row = Vec::with_capacity(self.words);
@@ -394,7 +500,10 @@ impl Store {
         let id = self.count;
         self.rows
             .resize(self.rows.len().saturating_add(self.words), 0);
-        self.parents.push(parent);
+        match &mut self.ids {
+            Ids::Narrow(links) => links.push_parent(parent),
+            Ids::Wide(links) => links.push_parent(parent),
+        }
         self.wide.insert(id, values.clone());
         self.wide_ids.insert(values, id);
         self.count += 1;
@@ -407,11 +516,11 @@ impl Store {
         }
         self.count = kept;
         self.rows.truncate(kept.saturating_mul(self.words));
-        self.parents.truncate(kept);
+        match &mut self.ids {
+            Ids::Narrow(links) => links.truncate(kept),
+            Ids::Wide(links) => links.truncate(kept),
+        }
         self.wide.retain(|id, _| *id < kept);
         self.wide_ids.retain(|_, id| *id < kept);
-        for shard in &mut self.shards {
-            shard.retain(|id| *id < kept);
-        }
     }
 }

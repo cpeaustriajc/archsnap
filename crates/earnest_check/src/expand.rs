@@ -101,6 +101,10 @@ pub(crate) trait Successors {
         state: &[Value],
         updates: &[(usize, Value)],
     ) -> bool;
+
+    fn done(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Default)]
@@ -210,7 +214,7 @@ impl<S: Successors> Expansion<'_, '_, S> {
                 self.found.clock = Clock::Stopped;
                 break;
             }
-            if self.offered > self.budget.successors {
+            if self.offered > self.budget.successors || self.sink.done() {
                 break;
             }
             set_inputs(action, input, &mut self.frame);
@@ -320,6 +324,9 @@ impl Expand<'_> {
             moving.unsure |= each.unsure;
             if expansion.found.clock == Clock::Stopped {
                 return expansion.found;
+            }
+            if expansion.sink.done() {
+                break;
             }
         }
         if !moving.enabled {

@@ -2,7 +2,7 @@ use crate::cut::cut_points;
 use crate::expand::{Asked, Budget, Clock, Expand, Mark, Scratch, Successors, Whence, Width};
 use crate::helpers::{Helpers, Loan};
 use crate::outcome::Outcome;
-use crate::store::{Parent, Placed, Store, hash_row, row_at, same_row};
+use crate::store::{Placed, Store, hash_row, row_at, same_row};
 use earnest_ir::{Fault, Field, Model};
 use earnest_value::Value;
 use hashbrown::HashTable;
@@ -112,7 +112,6 @@ enum Target {
 struct Entry {
     from: usize,
     action: usize,
-    input: usize,
     target: Target,
 }
 
@@ -166,7 +165,7 @@ pub fn explore(model: &Model, limits: &Limits) -> Outcome {
         model,
         limits,
         slots,
-        store: Store::new(&model.fields),
+        store: Store::new(&model.fields, limits.max_states),
         notes: Vec::new(),
         arrows: Vec::new(),
         first_broken: vec![None; model.rules.len()],
@@ -290,11 +289,10 @@ struct PartSink<'a> {
 }
 
 impl PartSink<'_> {
-    fn push(&mut self, action: usize, input: usize, target: Target) {
+    fn push(&mut self, action: usize, target: Target) {
         self.part.entries.push(Entry {
             from: self.from,
             action,
-            input,
             target,
         });
     }
@@ -320,7 +318,7 @@ impl Successors for PartSink<'_> {
     fn offer(
         &mut self,
         action: usize,
-        input: usize,
+        _: usize,
         state: &[Value],
         updates: &[(usize, Value)],
     ) -> bool {
@@ -328,7 +326,7 @@ impl Successors for PartSink<'_> {
             let next = with_updates(state, updates);
             if let Some(to) = self.store.find_values(&next) {
                 if self.graph {
-                    self.push(action, input, Target::Known(to));
+                    self.push(action, Target::Known(to));
                 }
                 return true;
             }
@@ -336,13 +334,13 @@ impl Successors for PartSink<'_> {
                 return false;
             }
             self.part.raws.push(next);
-            self.push(action, input, Target::Raw);
+            self.push(action, Target::Raw);
             return true;
         }
         let hash = hash_row(&self.row);
         if let Some(to) = self.store.find(&self.row, hash) {
             if self.graph {
-                self.push(action, input, Target::Known(to));
+                self.push(action, Target::Known(to));
             }
             return true;
         }
@@ -351,7 +349,7 @@ impl Successors for PartSink<'_> {
         }
         self.part.rows.extend_from_slice(&self.row);
         self.part.hashes.push(hash);
-        self.push(action, input, Target::Fresh);
+        self.push(action, Target::Fresh);
         true
     }
 }
@@ -399,7 +397,7 @@ impl Successors for HereSink<'_> {
     fn offer(
         &mut self,
         action: usize,
-        input: usize,
+        _: usize,
         state: &[Value],
         updates: &[(usize, Value)],
     ) -> bool {
@@ -414,11 +412,7 @@ impl Successors for HereSink<'_> {
             };
             return self.after_the_limit(known, next);
         }
-        let parent = Some(Parent {
-            state: self.from,
-            action,
-            input,
-        });
+        let parent = Some(self.from);
         let placed = if encoded {
             let hash = hash_row(&self.row);
             self.store.place(&self.row, hash, parent, self.most)
@@ -443,6 +437,42 @@ impl Successors for HereSink<'_> {
             });
         }
         counted
+    }
+}
+
+struct Choice<'a> {
+    target: &'a [Value],
+    found: Option<(usize, usize)>,
+}
+
+impl Successors for Choice<'_> {
+    fn offer(
+        &mut self,
+        action: usize,
+        input: usize,
+        state: &[Value],
+        updates: &[(usize, Value)],
+    ) -> bool {
+        let mut changed = updates.iter().peekable();
+        let same = state.len() == self.target.len()
+            && state
+                .iter()
+                .zip(self.target)
+                .enumerate()
+                .all(|(position, (old, wanted))| {
+                    let value = changed
+                        .next_if(|(at, _)| *at == position)
+                        .map_or(old, |(_, new)| new);
+                    value == wanted
+                });
+        if same && self.found.is_none() {
+            self.found = Some((action, input));
+        }
+        false
+    }
+
+    fn done(&self) -> bool {
+        self.found.is_some()
     }
 }
 
@@ -499,6 +529,23 @@ impl Search<'_> {
             self.arrows
                 .retain(|arrow| arrow.from < kept && arrow.to < kept);
         }
+    }
+
+    pub(crate) fn choice(&self, from: usize, to: usize) -> Option<(usize, usize)> {
+        let state = self.store.state(from);
+        let target = self.store.state(to);
+        let mut choice = Choice {
+            target: &target,
+            found: None,
+        };
+        let outside = self.store.outside(from, &self.model.fields);
+        self.expand(None, Asked::Everything).state(
+            &state,
+            outside,
+            &mut choice,
+            &mut Scratch::default(),
+        );
+        choice.found
     }
 
     fn time_limit_reason(&self) -> String {
@@ -840,11 +887,7 @@ impl Search<'_> {
                     self.record(id, &mark);
                 }
                 self.judged = self.judged.max(entry.from.saturating_add(1));
-                let parent = Some(Parent {
-                    state: entry.from,
-                    action: entry.action,
-                    input: entry.input,
-                });
+                let parent = Some(entry.from);
                 let placed = match entry.target {
                     Target::Known(to) => Placed::Known(to),
                     Target::Fresh => {

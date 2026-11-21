@@ -7,4 +7,5 @@ mod graphs;
 mod lending;
 mod limits;
 mod rules;
+mod storage;
 mod turnstile;
