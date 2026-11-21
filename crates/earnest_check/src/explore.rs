@@ -374,11 +374,6 @@ struct HereSink<'a> {
 }
 
 impl HereSink<'_> {
-    fn begin(&mut self, id: usize) {
-        self.from = id;
-        self.base_is_row = self.store.unpack(id, &mut self.base);
-    }
-
     fn counts(&self, known: usize) -> bool {
         self.graph || known < self.level_start
     }
@@ -539,7 +534,9 @@ impl Search<'_> {
             target: &target,
             found: None,
         };
-        let outside = self.store.outside(from, &self.model.fields);
+        let mut row = Vec::new();
+        self.store.read_state(from, &mut row, &mut Vec::new());
+        let outside = self.store.outside(from, &row, &self.model.fields);
         self.expand(None, Asked::Everything).state(
             &state,
             outside,
@@ -655,10 +652,9 @@ impl Search<'_> {
                 here.stopped = true;
                 break;
             }
-            state.clear();
-            sink.store.read_state(id, &mut state);
-            let outside = sink.store.outside(id, &self.model.fields);
-            sink.begin(id);
+            sink.base_is_row = sink.store.read_state(id, &mut sink.base, &mut state);
+            let outside = sink.store.outside(id, &sink.base, &self.model.fields);
+            sink.from = id;
             let mark = expand.state(&state, outside, &mut sink, &mut scratch);
             if mark.clock == Clock::Stopped {
                 here.stopped = true;
@@ -702,11 +698,9 @@ impl Search<'_> {
                 sink.part.stopped = true;
                 return sink.part;
             }
-            state.clear();
-            self.store.read_state(id, &mut state);
-            sink.base_is_row = self.store.unpack(id, &mut sink.base);
+            sink.base_is_row = self.store.read_state(id, &mut sink.base, &mut state);
             sink.from = id;
-            let outside = self.store.outside(id, &self.model.fields);
+            let outside = self.store.outside(id, &sink.base, &self.model.fields);
             let mark = expand.state(&state, outside, &mut sink, &mut scratch);
             if mark.clock == Clock::Stopped {
                 sink.part.stopped = true;

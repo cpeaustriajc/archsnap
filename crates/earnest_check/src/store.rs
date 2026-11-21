@@ -140,11 +140,10 @@ impl Codec {
         }
     }
 
-    fn read(&self, packed: &[u8]) -> u64 {
-        word_of(packed, self.word)
-            .checked_shr(self.shift)
-            .unwrap_or(0)
-            & self.mask
+    fn read(&self, row: &[u64]) -> u64 {
+        row.get(self.word).map_or(0, |word| {
+            word.checked_shr(self.shift).unwrap_or(0) & self.mask
+        })
     }
 
     fn write(&self, row: &mut [u64], code: u64) {
@@ -301,15 +300,14 @@ pub(crate) fn hash_row(row: &[u8]) -> u64 {
     hasher.finish()
 }
 
-fn word_of(packed: &[u8], word: usize) -> u64 {
-    let start = word.saturating_mul(WORD_BYTES);
-    let mut bytes = [0; WORD_BYTES];
-    if let Some(found) = packed.get(start..) {
-        for (to, from) in bytes.iter_mut().zip(found) {
-            *to = *from;
-        }
+fn word_of(chunk: &[u8]) -> u64 {
+    if let Ok(whole) = <[u8; WORD_BYTES]>::try_from(chunk) {
+        return u64::from_le_bytes(whole);
     }
-    u64::from_le_bytes(bytes)
+    chunk
+        .iter()
+        .rev()
+        .fold(0, |word, byte| (word << u8::BITS) | u64::from(*byte))
 }
 
 fn shard_of(hash: u64) -> usize {
@@ -374,13 +372,14 @@ impl Store {
         self.stride
     }
 
-    pub(crate) fn unpack(&self, id: usize, words: &mut Vec<u64>) -> bool {
+    fn unpack(&self, id: usize, words: &mut Vec<u64>) -> bool {
         words.clear();
         if id >= self.count || self.wide_state(id).is_some() {
             return false;
         }
         let packed = row_at(&self.rows, self.stride, id);
-        words.extend((0..self.words).map(|word| word_of(packed, word)));
+        words.extend(packed.chunks(WORD_BYTES).map(word_of));
+        words.resize(self.words, 0);
         true
     }
 
@@ -408,27 +407,34 @@ impl Store {
 
     pub(crate) fn state(&self, id: usize) -> Vec<Value> {
         let mut values = Vec::with_capacity(self.codecs.len());
-        self.read_state(id, &mut values);
+        self.read_state(id, &mut Vec::new(), &mut values);
         values
     }
 
-    pub(crate) fn read_state(&self, id: usize, values: &mut Vec<Value>) {
+    pub(crate) fn read_state(
+        &self,
+        id: usize,
+        row: &mut Vec<u64>,
+        values: &mut Vec<Value>,
+    ) -> bool {
+        values.clear();
+        if self.unpack(id, row) {
+            values.extend(self.codecs.iter().map(|codec| codec.value(codec.read(row))));
+            return true;
+        }
         if let Some(full) = self.wide_state(id) {
             values.extend(full.iter().cloned());
-            return;
         }
-        let row = row_at(&self.rows, self.stride, id);
-        values.extend(self.codecs.iter().map(|codec| codec.value(codec.read(row))));
+        false
     }
 
-    pub(crate) fn outside(&self, id: usize, fields: &[Field]) -> Option<usize> {
+    pub(crate) fn outside(&self, id: usize, row: &[u64], fields: &[Field]) -> Option<usize> {
         if let Some(full) = self.wide_state(id) {
             return fields
                 .iter()
                 .zip(full.iter())
                 .position(|(field, value)| !field.domain.contains(value));
         }
-        let row = row_at(&self.rows, self.stride, id);
         self.grown.iter().copied().find(|position| {
             self.codecs
                 .get(*position)
