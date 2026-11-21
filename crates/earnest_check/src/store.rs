@@ -104,17 +104,25 @@ impl Store {
         row: &mut Vec<u64>,
         values: &mut Vec<Value>,
     ) -> bool {
-        values.clear();
         row.clear();
         if id >= self.count {
+            values.clear();
             return false;
         }
         if let Some(full) = self.wide_state(id) {
+            values.clear();
             values.extend(full.iter().cloned());
             return false;
         }
         self.rows.unpack(id, row, self.layout.words());
-        values.extend(self.codecs.iter().map(|codec| codec.value(codec.read(row))));
+        if values.len() == self.codecs.len() {
+            for (codec, slot) in self.codecs.iter().zip(values.iter_mut()) {
+                codec.read_into(row, slot);
+            }
+        } else {
+            values.clear();
+            values.extend(self.codecs.iter().map(|codec| codec.value(codec.read(row))));
+        }
         true
     }
 

@@ -111,6 +111,19 @@ impl Codec {
         }
     }
 
+    pub(super) fn read_into(&self, row: &[u64], slot: &mut Value) {
+        let code = self.read(row);
+        match (&self.kind, slot) {
+            (Kind::Int { lo, .. }, Value::Int(number))
+                if lo.checked_add_unsigned(code).is_some() =>
+            {
+                *number = lo.saturating_add_unsigned(code);
+            }
+            (Kind::Bool, Value::Bool(truth)) => *truth = code != 0,
+            (_, slot) => *slot = self.value(code),
+        }
+    }
+
     pub(super) fn inside(&self, code: u64) -> bool {
         match &self.kind {
             Kind::Grown { dict, .. } => usize::try_from(code)
