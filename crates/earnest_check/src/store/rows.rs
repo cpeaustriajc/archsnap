@@ -1,4 +1,4 @@
-use super::layout::{WORD_BYTES, hash_words};
+use super::layout::{WORD_BYTES, hash_each};
 
 #[derive(Debug)]
 pub(super) struct Rows {
@@ -60,9 +60,7 @@ impl Rows {
     }
 
     pub(super) fn hash_of(&self, id: usize) -> u64 {
-        let mut row = Vec::new();
-        self.unpack(id, &mut row, self.stride.div_ceil(WORD_BYTES));
-        hash_words(&row)
+        hash_each(self.bytes_of(id).chunks(WORD_BYTES).map(word_of))
     }
 
     pub(super) fn push(&mut self, row: &[u64]) {

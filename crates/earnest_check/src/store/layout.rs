@@ -94,9 +94,13 @@ fn mix(word: u64, at: usize) -> u64 {
 }
 
 pub(super) fn hash_words(row: &[u64]) -> u64 {
-    row.iter()
+    hash_each(row.iter().copied())
+}
+
+pub(super) fn hash_each(words: impl Iterator<Item = u64>) -> u64 {
+    words
         .enumerate()
-        .fold(0, |hash, (at, word)| hash ^ mix(*word, at))
+        .fold(0, |hash, (at, word)| hash ^ mix(word, at))
 }
 
 impl RowLayout {

@@ -275,3 +275,64 @@ impl Store {
         self.wide_ids.retain(|_, id| *id < kept);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Lookup, Placed, Store};
+    use earnest_ir::Field;
+    use earnest_value::{Domain, Symbols, Value};
+
+    fn fields(highest: i64) -> Vec<Field> {
+        let mut symbols = Symbols::default();
+        ["a", "b"]
+            .iter()
+            .map(|name| Field {
+                name: (*name).to_owned(),
+                sym: symbols.intern(name),
+                domain: Domain::Int { lo: 0, hi: highest },
+                starts: vec![Value::Int(0)],
+            })
+            .collect()
+    }
+
+    fn row(store: &Store, a: i64, b: i64) -> Vec<u64> {
+        let mut row = Vec::new();
+        assert!(
+            store.encode(&[Value::Int(a), Value::Int(b)], &mut row),
+            "both in the domain"
+        );
+        row
+    }
+
+    #[test]
+    fn every_kind_of_index_tells_known_rows_from_new_ones_and_forgets_what_is_cut() {
+        for highest in [9, 1 << 20, 1 << 40] {
+            for lookup in [Lookup::Id, Lookup::Presence] {
+                let case = format!("highest {highest}, {lookup:?}");
+                let mut store = Store::new(&fields(highest), 100, lookup);
+                for (a, b) in [(1, 2), (2, 1), (highest, highest)] {
+                    let row = row(&store, a, b);
+                    let hash = store.layout().hash(&row);
+                    assert!(
+                        matches!(store.place(&row, hash, None, 100), Placed::New(_)),
+                        "{case}"
+                    );
+                }
+                let again = row(&store, 2, 1);
+                let hash = store.layout().hash(&again);
+                let Placed::Known(found) = store.place(&again, hash, None, 100) else {
+                    panic!("{case}: a row met before is known");
+                };
+                if lookup == Lookup::Id {
+                    assert_eq!(found.id, Some(1), "{case}");
+                }
+                store.truncate(1);
+                assert!(store.find(&again, hash).is_none(), "{case}: cut away");
+                let first = row(&store, 1, 2);
+                let first_hash = store.layout().hash(&first);
+                assert!(store.find(&first, first_hash).is_some(), "{case}: kept");
+                assert_eq!(store.state(0), [Value::Int(1), Value::Int(2)], "{case}");
+            }
+        }
+    }
+}
