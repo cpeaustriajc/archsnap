@@ -134,7 +134,9 @@ impl Reader<'_> {
                 offset,
                 written,
                 "a model is not a value: its actions, rules, ends and view are made at the top \
-                 level by calling it directly, as in `export const name = Model.rule({ ... })`",
+                 level with the model as the first argument, as in `export const name = \
+                 m.rule(Model, \"sentence\", (s) => ...)`, or by calling it directly, as in \
+                 `export const name = Model.rule({ ... })`",
             );
         }
         if hidden {
@@ -551,6 +553,12 @@ impl Reader<'_> {
                     "`m.div` takes the number and the divisor: `m.div(a, b)`",
                 ),
             },
+            "action" | "rule" | "end" | "view" => self.refused(
+                call.span.start,
+                &format!("{library}.{part}"),
+                "an action, a rule, an end or a view is the whole value of a top-level `const`: \
+                 it can't be made in a function, a condition, a record or a list",
+            ),
             "forall" => self.across(Reach::Every, call),
             "exists" => self.across(Reach::Some, call),
             _ => {

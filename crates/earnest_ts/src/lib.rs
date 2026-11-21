@@ -9,6 +9,8 @@ mod bodies;
 #[cfg(test)]
 mod checks;
 mod file;
+#[cfg(test)]
+mod forms;
 mod members;
 mod names;
 mod shapes;
@@ -47,7 +49,8 @@ pub(crate) struct Reader<'s> {
 /// in `.tsx` is read as TSX and any other as TypeScript. Nothing is read from disk.
 ///
 /// A top-level `const` is read as exactly one of: a model, an action, a rule, an end or a view
-/// made by calling the library or the model directly; a declaration; a helper function; or a
+/// made by calling the library with the model as its first argument, as in `m.rule(Model, ...)`,
+/// or by calling the model directly; a declaration; a helper function; or a
 /// number, text or boolean written out or computed from earlier constants. Any other value is
 /// a problem, whether or not something reads the constant, and so is the name of a model used
 /// as a value. In an action, each function's own parameters decide which inputs it has in

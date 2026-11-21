@@ -1,5 +1,5 @@
 use crate::Reader;
-use crate::members::MemberKind;
+use crate::members::{Form, Member, MemberKind};
 use crate::names::LIBRARY_MODULE;
 use crate::terms::{CLASS, bare};
 use earnest_ast::{Draft, HelperDraft, HelperKind, Language, ViewDraft};
@@ -28,13 +28,7 @@ pub(crate) enum Pending<'p, 'a> {
     Refused {
         value: &'p Expression<'a>,
     },
-    Member {
-        model: usize,
-        kind: MemberKind,
-        id: String,
-        start: u32,
-        call: &'p CallExpression<'a>,
-    },
+    Member(Member<'p, 'a>),
 }
 
 #[derive(Default)]
@@ -133,16 +127,11 @@ impl Reader<'_> {
                 }
                 Pending::Constant { name, value } => constants.push((name, self.term(value))),
                 Pending::Refused { value } => self.refuse_constant(value),
-                Pending::Member {
-                    model,
-                    kind,
-                    id,
-                    start,
-                    call,
-                } => {
+                Pending::Member(member) => {
+                    let model = member.model;
                     if let Some(draft) = top.drafts.get_mut(model) {
                         self.step_places.clear();
-                        self.member_of(draft, kind, id, start, call);
+                        self.member_of(draft, member);
                         steps.extend(
                             self.step_places
                                 .drain(..)
@@ -341,32 +330,26 @@ impl Reader<'_> {
                 self.model(name, call, start, top);
                 return;
             }
+            if self.is_library(root)
+                && let Some(kind) = MemberKind::named(part)
+            {
+                self.library_part(name, kind, call, start, top);
+                return;
+            }
             let owner = top.owners.iter().find(|(known, _)| known == root);
             if let Some((_, model)) = owner {
-                let unexported = !top.exported.iter().any(|known| known == name);
-                let part_kind = MemberKind::named(part);
-                if unexported
-                    && matches!(
-                        part_kind,
-                        Some(MemberKind::Action | MemberKind::Rule | MemberKind::End)
-                    )
-                {
-                    self.refuse(
-                        call.span.start,
-                        name,
-                        "a rule, an action or an end is an exported constant, because its id is \
-                         the name it is exported under: write `export const name = ...`",
-                    );
-                    return;
-                }
-                match part_kind {
-                    Some(kind) => top.pending.push(Pending::Member {
-                        model: *model,
-                        kind,
-                        id: name.to_owned(),
-                        start,
-                        call,
-                    }),
+                match MemberKind::named(part) {
+                    Some(kind) => self.queue(
+                        Member {
+                            model: *model,
+                            kind,
+                            form: Form::OnModel,
+                            id: name.to_owned(),
+                            start,
+                            call,
+                        },
+                        top,
+                    ),
                     None => self.refuse(
                         call.span.start,
                         &format!("{root}.{part}"),
@@ -393,6 +376,65 @@ impl Reader<'_> {
             name: name.to_owned(),
             value: init,
         });
+    }
+
+    fn library_part<'p, 'a>(
+        &mut self,
+        name: &str,
+        kind: MemberKind,
+        call: &'p CallExpression<'a>,
+        start: u32,
+        top: &mut Top<'p, 'a>,
+    ) {
+        let first = call.arguments.first().and_then(Argument::as_expression);
+        let owner = first.map(bare).and_then(|written| match written {
+            Expression::Identifier(model) => top
+                .owners
+                .iter()
+                .find(|(known, _)| known == model.name.as_str()),
+            _ => None,
+        });
+        let Some((_, model)) = owner else {
+            let (offset, feature) = first.map_or_else(
+                || (call.span.start, self.quoted(call.callee.span())),
+                |written| (written.span().start, self.quoted(written.span())),
+            );
+            self.refuse(
+                offset,
+                &feature,
+                &format!(
+                    "the first argument of `{}` is the model the part belongs to, a model \
+                     declared in this file with `m.model`",
+                    self.quoted(call.callee.span())
+                ),
+            );
+            return;
+        };
+        self.queue(
+            Member {
+                model: *model,
+                kind,
+                form: Form::OnLibrary,
+                id: name.to_owned(),
+                start,
+                call,
+            },
+            top,
+        );
+    }
+
+    fn queue<'p, 'a>(&mut self, member: Member<'p, 'a>, top: &mut Top<'p, 'a>) {
+        let unexported = !top.exported.iter().any(|known| known == &member.id);
+        if unexported && !matches!(member.kind, MemberKind::View) {
+            self.refuse(
+                member.call.span.start,
+                &member.id,
+                "a rule, an action or an end is an exported constant, because its id is \
+                 the name it is exported under: write `export const name = ...`",
+            );
+            return;
+        }
+        top.pending.push(Pending::Member(member));
     }
 
     fn is_plain_value(&self, wrapped: &Expression<'_>) -> bool {

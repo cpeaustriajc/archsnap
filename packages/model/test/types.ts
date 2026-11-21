@@ -23,7 +23,7 @@ type Holds<Claim extends true> = Claim;
 
 type PressedBy = "keyboard" | "virtual" | "mouse";
 
-type Changes = ReturnType<typeof press.then>;
+type Changes = ReturnType<typeof press.changes>;
 
 type PressInput = Parameters<typeof press.when>[1];
 

@@ -18,6 +18,37 @@ pub(crate) enum MemberKind {
     View,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum Form {
+    OnModel,
+    OnLibrary,
+}
+
+impl Form {
+    fn leading(self) -> usize {
+        match self {
+            Self::OnModel => 0,
+            Self::OnLibrary => 1,
+        }
+    }
+
+    fn change_key(self) -> &'static str {
+        match self {
+            Self::OnModel => "then",
+            Self::OnLibrary => "changes",
+        }
+    }
+}
+
+pub(crate) struct Member<'p, 'a> {
+    pub(crate) model: usize,
+    pub(crate) kind: MemberKind,
+    pub(crate) form: Form,
+    pub(crate) id: String,
+    pub(crate) start: u32,
+    pub(crate) call: &'p CallExpression<'a>,
+}
+
 impl MemberKind {
     pub(crate) fn named(part: &str) -> Option<Self> {
         match part {
@@ -53,31 +84,32 @@ fn pick<'p, 'a>(entries: &Entries<'p, 'a>, key: &str) -> Option<&'p Expression<'
 }
 
 impl Reader<'_> {
-    pub(crate) fn member_of(
-        &mut self,
-        draft: &mut Draft,
-        kind: MemberKind,
-        id: String,
-        start: u32,
-        call: &CallExpression<'_>,
-    ) {
+    pub(crate) fn member_of(&mut self, draft: &mut Draft, member: Member<'_, '_>) {
+        let Member {
+            kind,
+            form,
+            id,
+            start,
+            call,
+            ..
+        } = member;
         match kind {
             MemberKind::Action => {
-                if let Some(action) = self.action(id, start, call) {
+                if let Some(action) = self.action(id, start, call, form) {
                     draft.actions.push(action);
                 }
             }
             MemberKind::Rule => {
-                if let Some(rule) = self.rule(id, start, call) {
+                if let Some(rule) = self.rule(id, start, call, form) {
                     draft.rules.push(rule);
                 }
             }
             MemberKind::End => {
-                if let Some(end) = self.end(id, start, call) {
+                if let Some(end) = self.end(id, start, call, form) {
                     draft.ends.push(end);
                 }
             }
-            MemberKind::View => draft.view = self.view(call),
+            MemberKind::View => draft.view = self.view(call, form),
         }
     }
 
@@ -144,11 +176,19 @@ impl Reader<'_> {
         found
     }
 
-    fn action(&mut self, id: String, start: u32, call: &CallExpression<'_>) -> Option<ActionDraft> {
-        let entries = self.parts(call, 1, &["input", "when", "then"])?;
+    fn action(
+        &mut self,
+        id: String,
+        start: u32,
+        call: &CallExpression<'_>,
+        form: Form,
+    ) -> Option<ActionDraft> {
+        let change_key = form.change_key();
+        let sentence_at = form.leading();
+        let entries = self.parts(call, sentence_at + 1, &["input", "when", change_key])?;
         let label = call
             .arguments
-            .first()
+            .get(sentence_at)
             .and_then(Argument::as_expression)
             .map(|sentence| self.sentence(sentence))?;
         let inputs: Vec<(String, Shape)> = match pick(&entries, "input") {
@@ -157,7 +197,7 @@ impl Reader<'_> {
         };
         let when = pick(&entries, "when").and_then(|written| self.arrow(written));
         let then = self
-            .needed(&entries, "then", call)
+            .needed(&entries, change_key, call)
             .and_then(|written| self.arrow(written));
         let guard = when.map(|arrow| self.action_body(arrow));
         let change = then.map(|arrow| self.action_body(arrow))?;
@@ -269,14 +309,55 @@ impl Reader<'_> {
         })
     }
 
-    fn rule(&mut self, id: String, start: u32, call: &CallExpression<'_>) -> Option<RuleDraft> {
-        let entries = self.parts(call, 0, &["says", "holds"])?;
-        let says = self
-            .needed(&entries, "says", call)
-            .map(|sentence| self.sentence(sentence));
-        let holds = self
-            .needed(&entries, "holds", call)
-            .and_then(|written| self.state_function(written));
+    fn sentence_and_function(
+        &mut self,
+        call: &CallExpression<'_>,
+        form: Form,
+        key: &str,
+    ) -> (Option<String>, Option<StateFunction>) {
+        match form {
+            Form::OnModel => {
+                let Some(entries) = self.parts(call, 0, &["says", key]) else {
+                    return (None, None);
+                };
+                let says = self
+                    .needed(&entries, "says", call)
+                    .map(|sentence| self.sentence(sentence));
+                let function = self
+                    .needed(&entries, key, call)
+                    .and_then(|written| self.state_function(written));
+                (says, function)
+            }
+            Form::OnLibrary => {
+                let sentence = call.arguments.get(1).and_then(Argument::as_expression);
+                let function = call.arguments.get(2).and_then(Argument::as_expression);
+                let (Some(sentence), Some(function), 3) =
+                    (sentence, function, call.arguments.len())
+                else {
+                    let callee = self.quoted(call.callee.span());
+                    self.refuse(
+                        call.span.start,
+                        &callee,
+                        &format!(
+                            "its model, its sentence and its condition are needed here, as in \
+                             `{callee}(Model, \"sentence\", (s) => ...)`"
+                        ),
+                    );
+                    return (None, None);
+                };
+                (Some(self.sentence(sentence)), self.state_function(function))
+            }
+        }
+    }
+
+    fn rule(
+        &mut self,
+        id: String,
+        start: u32,
+        call: &CallExpression<'_>,
+        form: Form,
+    ) -> Option<RuleDraft> {
+        let (says, holds) = self.sentence_and_function(call, form, "holds");
         let condition = holds?;
         Some(RuleDraft {
             id,
@@ -288,14 +369,14 @@ impl Reader<'_> {
         })
     }
 
-    fn end(&mut self, id: String, start: u32, call: &CallExpression<'_>) -> Option<EndDraft> {
-        let entries = self.parts(call, 0, &["says", "when"])?;
-        let says = self
-            .needed(&entries, "says", call)
-            .map(|sentence| self.sentence(sentence));
-        let when = self
-            .needed(&entries, "when", call)
-            .and_then(|written| self.state_function(written));
+    fn end(
+        &mut self,
+        id: String,
+        start: u32,
+        call: &CallExpression<'_>,
+        form: Form,
+    ) -> Option<EndDraft> {
+        let (says, when) = self.sentence_and_function(call, form, "when");
         let condition = when?;
         Some(EndDraft {
             id,
@@ -306,9 +387,9 @@ impl Reader<'_> {
         })
     }
 
-    fn view(&mut self, call: &CallExpression<'_>) -> ViewDraft {
+    fn view(&mut self, call: &CallExpression<'_>, form: Form) -> ViewDraft {
         let allowed = ["title", "state", "group", "step", "colors"];
-        let Some(entries) = self.parts(call, 0, &allowed) else {
+        let Some(entries) = self.parts(call, form.leading(), &allowed) else {
             return ViewDraft::default();
         };
         ViewDraft {

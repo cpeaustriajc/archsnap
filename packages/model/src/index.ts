@@ -15,6 +15,7 @@ export type {
   RuleRunner,
   RuleSpec,
   Runners,
+  ThenActionSpec,
   View,
   ViewSpec,
 } from "./model.ts";

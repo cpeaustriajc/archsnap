@@ -184,7 +184,7 @@ const stateLimit = (maxStates: number): number => {
  * JavaScript to hold exactly is a fault.
  */
 export const nextState = (action: ActionRunner, state: Row, input: Row): Attempt<Row> => {
-  const tried = attempt(() => action.then(state, input));
+  const tried = attempt(() => action.changes(state, input));
   if (tried.fault !== null) {
     return tried;
   }
