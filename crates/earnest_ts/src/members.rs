@@ -7,7 +7,6 @@ use earnest_ast::{
 };
 use oxc_ast::ast::{
     Argument, ArrowFunctionExpression, BindingPattern, CallExpression, Expression, ObjectPattern,
-    ObjectPropertyKind,
 };
 use oxc_span::GetSpan;
 
@@ -39,10 +38,6 @@ impl MemberKind {
     }
 }
 
-const CHANGES_NOT_THEN: &str = "an object with a `then` is a promise to JavaScript, and an action \
-    that was exported would hang an `async` function: write `changes`";
-const CONDITION_KEYS: [&str; 3] = ["says", "holds", "when"];
-
 const SENTENCE: usize = 1;
 const FUNCTION: usize = 2;
 const ACTION_OBJECT: usize = 2;
@@ -68,22 +63,6 @@ fn pick<'p, 'a>(entries: &Entries<'p, 'a>, key: &str) -> Option<&'p Expression<'
         .iter()
         .find(|(name, _, _)| name == key)
         .map(|(_, _, value)| *value)
-}
-
-fn has_condition_key(wrapped: &Expression<'_>) -> bool {
-    let Expression::ObjectExpression(object) = bare(wrapped) else {
-        return false;
-    };
-    object.properties.iter().any(|property| {
-        matches!(
-            property,
-            ObjectPropertyKind::ObjectProperty(written)
-                if written
-                    .key
-                    .static_name()
-                    .is_some_and(|name| CONDITION_KEYS.contains(&name.as_ref()))
-        )
-    })
 }
 
 impl Reader<'_> {
@@ -131,7 +110,6 @@ impl Reader<'_> {
         call: &'p CallExpression<'a>,
         index: usize,
         allowed: &[&str],
-        renamed: &[(&str, &str)],
     ) -> Option<Entries<'p, 'a>> {
         let expected = index + 1;
         let found = call.arguments.get(index).and_then(Argument::as_expression);
@@ -148,9 +126,7 @@ impl Reader<'_> {
         };
         let entries = self.entries(object);
         for (name, start, _) in &entries {
-            if let Some((_, message)) = renamed.iter().find(|(key, _)| key == name) {
-                self.refuse(*start, name, message);
-            } else if !allowed.contains(&name.as_str()) {
+            if !allowed.contains(&name.as_str()) {
                 self.refuse(
                     *start,
                     name,
@@ -165,12 +141,7 @@ impl Reader<'_> {
     }
 
     fn action(&mut self, id: String, start: u32, call: &CallExpression<'_>) -> Option<ActionDraft> {
-        let entries = self.parts(
-            call,
-            ACTION_OBJECT,
-            &["input", "when", "changes"],
-            &[("then", CHANGES_NOT_THEN)],
-        )?;
+        let entries = self.parts(call, ACTION_OBJECT, &["input", "when", "changes"])?;
         let sentence = self.argument(
             call,
             SENTENCE,
@@ -183,7 +154,7 @@ impl Reader<'_> {
         };
         let when = pick(&entries, "when").and_then(|written| self.arrow(written));
         let changes = pick(&entries, "changes");
-        if changes.is_none() && pick(&entries, "then").is_none() {
+        if changes.is_none() {
             self.refuse(
                 call.span.start,
                 &self.quoted(call.callee.span()),
@@ -313,28 +284,6 @@ impl Reader<'_> {
             .arguments
             .get(FUNCTION)
             .and_then(Argument::as_expression);
-        let keyed = [sentence, function]
-            .into_iter()
-            .flatten()
-            .find(|written| has_condition_key(written));
-        if let Some(object) = keyed {
-            let written = self.quoted(object.span());
-            let callee = self.quoted(call.callee.span());
-            let model = call
-                .arguments
-                .first()
-                .map(|first| self.quoted(first.span()))
-                .unwrap_or_default();
-            self.refuse(
-                object.span().start,
-                &written,
-                &format!(
-                    "the sentence and the function are arguments, not keys: write \
-                     `{callee}({model}, \"sentence\", (s) => condition)`"
-                ),
-            );
-            return (None, None);
-        }
         let (Some(sentence), Some(function), 3) = (sentence, function, call.arguments.len()) else {
             let callee = self.quoted(call.callee.span());
             self.refuse(
@@ -377,7 +326,7 @@ impl Reader<'_> {
 
     fn view(&mut self, call: &CallExpression<'_>) -> ViewDraft {
         let allowed = ["title", "state", "group", "step", "colors"];
-        let Some(entries) = self.parts(call, VIEW_OBJECT, &allowed, &[]) else {
+        let Some(entries) = self.parts(call, VIEW_OBJECT, &allowed) else {
             return ViewDraft::default();
         };
         ViewDraft {

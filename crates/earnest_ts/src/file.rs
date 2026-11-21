@@ -17,7 +17,6 @@ const NOT_A_CONSTANT: &str = "a top-level `const` holds a model, an action, a ru
     boolean written out or computed from earlier constants";
 const THEN: &str = "then";
 const THEN_EXPORTED: &str = "a module with an export named `then` can't be awaited by `import()`, because JavaScript takes the module for a promise: export the constant under another name";
-const NO_METHODS: &str = "a model has no methods: write";
 
 pub(crate) enum Pending<'p, 'a> {
     Helper {
@@ -104,26 +103,11 @@ fn callee_parts<'p>(call: &'p CallExpression<'_>) -> Option<(&'p str, &'p str)> 
     Some((root.name.as_str(), member.property.name.as_str()))
 }
 
-fn old_form(model: &str, part: &str) -> String {
-    match part {
-        "action" => format!(
-            "{NO_METHODS} `m.action({model}, \"sentence\", {{ when: ..., changes: ... }})`, with \
-             `changes` where an action had `then`"
-        ),
-        "rule" => format!(
-            "{NO_METHODS} `m.rule({model}, \"sentence\", (s) => condition)`, with the sentence \
-             and the condition as arguments in place of `says` and `holds`"
-        ),
-        "end" => format!(
-            "{NO_METHODS} `m.end({model}, \"sentence\", (s) => condition)`, with the sentence \
-             and the condition as arguments in place of `says` and `when`"
-        ),
-        "view" => format!("{NO_METHODS} `m.view({model}, {{ ... }})`"),
-        _ => format!(
-            "a model has no methods: its parts are made with `m.action({model}, ...)`, \
-             `m.rule({model}, ...)`, `m.end({model}, ...)` and `m.view({model}, ...)`"
-        ),
-    }
+fn parts_are_functions(model: &str) -> String {
+    format!(
+        "a call on a model makes no part: write `m.action({model}, ...)`, \
+         `m.rule({model}, ...)`, `m.end({model}, ...)` or `m.view({model}, ...)`"
+    )
 }
 
 impl Reader<'_> {
@@ -365,7 +349,7 @@ impl Reader<'_> {
                 self.refuse(
                     call.span.start,
                     &format!("{root}.{part}"),
-                    &old_form(root, part),
+                    &parts_are_functions(root),
                 );
                 return;
             }
