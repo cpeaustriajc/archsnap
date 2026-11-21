@@ -110,8 +110,63 @@ pub(crate) trait Successors {
 #[derive(Debug, Default)]
 pub(crate) struct Scratch {
     updates: Vec<(usize, Value)>,
-    seen_values: Vec<Value>,
-    seen: HashTable<usize>,
+    seen: Seen,
+    tried: Trials,
+}
+
+#[derive(Debug, Default)]
+struct Seen {
+    values: Vec<Value>,
+    at: HashTable<usize>,
+}
+
+#[derive(Debug, Default)]
+struct Trials {
+    of_action: Vec<Option<Tried>>,
+}
+
+impl Trials {
+    fn skipping(&mut self, position: usize, action: &Action) -> Option<&[Vec<bool>]> {
+        if self.of_action.len() <= position {
+            self.of_action
+                .resize_with(position.saturating_add(1), || None);
+        }
+        match self
+            .of_action
+            .get_mut(position)?
+            .get_or_insert_with(|| Tried::of(action))
+        {
+            Tried::Every => None,
+            Tried::FirstOfEach(told) => Some(told),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum Tried {
+    Every,
+    FirstOfEach(Vec<Vec<bool>>),
+}
+
+impl Tried {
+    fn of(action: &Action) -> Self {
+        let told = action.told_apart();
+        if told.iter().flatten().all(|apart| *apart) {
+            Self::Every
+        } else {
+            Self::FirstOfEach(told)
+        }
+    }
+}
+
+fn told_apart_from_earlier(action: &Action, told: &[Vec<bool>], input: usize) -> bool {
+    let mut rest = input;
+    action.inputs.iter().zip(told).all(|(each, apart)| {
+        let count = each.values.len();
+        let digit = rest.checked_rem(count);
+        rest = rest.checked_div(count).unwrap_or(0);
+        digit.and_then(|at| apart.get(at)).copied().unwrap_or(true)
+    })
 }
 
 fn hash_values(values: &[Value]) -> u64 {
@@ -120,13 +175,13 @@ fn hash_values(values: &[Value]) -> u64 {
     hasher.finish()
 }
 
-impl Scratch {
-    fn first_time(&mut self) -> bool {
-        let width = self.updates.len();
-        let start = self.seen_values.len();
-        self.seen_values
-            .extend(self.updates.iter().map(|(_, value)| value.clone()));
-        let (seen, values) = (&mut self.seen, &self.seen_values);
+impl Seen {
+    fn first_time(&mut self, updates: &[(usize, Value)]) -> bool {
+        let width = updates.len();
+        let start = self.values.len();
+        self.values
+            .extend(updates.iter().map(|(_, value)| value.clone()));
+        let (seen, values) = (&mut self.at, &self.values);
         let tuple = |at: usize| values.get(at..at.saturating_add(width)).unwrap_or(&[]);
         let Some(candidate) = values.get(start..) else {
             return false;
@@ -138,7 +193,7 @@ impl Scratch {
             |at| hash_values(tuple(*at)),
         ) {
             hashbrown::hash_table::Entry::Occupied(_) => {
-                self.seen_values.truncate(start);
+                self.values.truncate(start);
                 false
             }
             hashbrown::hash_table::Entry::Vacant(vacant) => {
@@ -149,8 +204,8 @@ impl Scratch {
     }
 
     fn forget(&mut self) {
-        self.seen.clear();
-        self.seen_values.clear();
+        self.at.clear();
+        self.values.clear();
     }
 }
 
@@ -208,7 +263,12 @@ impl<S: Successors> Expansion<'_, '_, S> {
         let mut stopping = Stopping::default();
         let combinations = input_count(action);
         let repeats = combinations > 1;
-        self.scratch.forget();
+        self.scratch.seen.forget();
+        let skipping = if repeats {
+            self.scratch.tried.skipping(position, action)
+        } else {
+            None
+        };
         for input in 0..combinations {
             if self.frame.out_of_time() {
                 self.found.clock = Clock::Stopped;
@@ -216,6 +276,11 @@ impl<S: Successors> Expansion<'_, '_, S> {
             }
             if self.offered > self.budget.successors || self.sink.done() {
                 break;
+            }
+            if let Some(told) = skipping
+                && !told_apart_from_earlier(action, told, input)
+            {
+                continue;
             }
             set_inputs(action, input, &mut self.frame);
             match action.guard.truth(&mut self.frame) {
@@ -235,7 +300,7 @@ impl<S: Successors> Expansion<'_, '_, S> {
                 &mut self.scratch.updates,
             ) {
                 Ok(()) => {
-                    if (!repeats || self.scratch.first_time())
+                    if (!repeats || self.scratch.seen.first_time(&self.scratch.updates))
                         && self
                             .sink
                             .offer(position, input, self.state, &self.scratch.updates)
@@ -341,7 +406,7 @@ impl Expand<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{chosen, input_count};
+    use super::{chosen, input_count, told_apart_from_earlier};
     use earnest_ir::{Action, Expr, Input};
     use earnest_value::{Domain, Value};
 
@@ -408,5 +473,22 @@ mod tests {
             .map(|pair| numbers(pair))
             .collect();
         assert_eq!(all, expected);
+    }
+
+    #[test]
+    fn a_combination_is_tried_only_when_each_of_its_values_is_told_apart_from_earlier_ones() {
+        let two_by_three = action(vec![
+            input("a", 0, numbers(&[1, 2])),
+            input("b", 1, numbers(&[10, 20, 30])),
+        ]);
+        let told = [vec![true, true], vec![true, false, true]];
+        let tried: Vec<usize> = (0..6)
+            .filter(|combination| told_apart_from_earlier(&two_by_three, &told, *combination))
+            .collect();
+        assert_eq!(
+            tried,
+            vec![0, 1, 4, 5],
+            "the combinations with b at 20 repeat those with b at 10"
+        );
     }
 }
