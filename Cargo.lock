@@ -374,6 +374,7 @@ dependencies = [
  "earnest_ir",
  "earnest_semantic",
  "earnest_value",
+ "hashbrown",
  "rustc-hash",
  "serde",
  "serde_json",

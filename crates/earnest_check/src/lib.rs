@@ -12,6 +12,7 @@ mod graph;
 mod helpers;
 mod outcome;
 mod report;
+mod store;
 
 pub use explore::{Limits, WORKER_STACK, explore, stopped_by_time_limit};
 pub use graph::{Edge, Graph, Node};

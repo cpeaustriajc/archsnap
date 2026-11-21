@@ -1,8 +1,9 @@
 use crate::expand::{Whence, chosen};
-use crate::explore::{Parent, Search};
+use crate::explore::Search;
 use crate::outcome::{
     Change, Finding, FindingKind, Named, Outcome, Path, RuleOutcome, Shown, Status, Step, Verdict,
 };
+use crate::store::Parent;
 use earnest_value::Value;
 
 const STUCK: &str = "no action can happen here, and the model does not mark it as an end";
@@ -64,22 +65,21 @@ impl Search<'_> {
     fn path_to(&self, target: usize) -> Path {
         let mut chain = vec![target];
         let mut at = target;
-        while let Some(Some(parent)) = self.parents.get(at) {
+        while let Some(parent) = self.store.parent(at) {
             chain.push(parent.state);
             at = parent.state;
         }
         chain.reverse();
         let start = chain
             .first()
-            .and_then(|id| self.states.get(*id))
-            .map(|state| self.named(state))
+            .map(|id| self.named(&self.store.state(*id)))
             .unwrap_or_default();
         let steps = chain
             .windows(2)
             .filter_map(|pair| {
                 let [from, to] = pair else { return None };
-                let parent = (*self.parents.get(*to)?)?;
-                self.step(parent, self.states.get(*from)?, self.states.get(*to)?)
+                let parent = self.store.parent(*to)?;
+                self.step(parent, &self.store.state(*from), &self.store.state(*to))
             })
             .collect();
         Path { start, steps }
@@ -165,7 +165,7 @@ impl Search<'_> {
         };
         Outcome {
             status,
-            states: self.states.len(),
+            states: self.store.len(),
             rules,
             findings,
             reason: self.reason.clone(),

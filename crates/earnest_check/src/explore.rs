@@ -1,15 +1,17 @@
 use crate::cut::cut_points;
-use crate::expand::{
-    Asked, Budget, Clock, Expanded, Index, Key, Known, State, Whence, Width, expand_state,
-};
+use crate::expand::{Asked, Budget, Clock, Expand, Mark, Scratch, Successors, Whence, Width};
 use crate::helpers::{Helpers, Loan};
 use crate::outcome::Outcome;
+use crate::store::{Parent, Placed, Store, hash_row, row_at};
 use earnest_ir::{Fault, Field, Model};
 use earnest_value::Value;
+use hashbrown::HashTable;
+use rustc_hash::FxHashSet;
 use std::any::Any;
+use std::ops::Range;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Mutex, PoisonError};
 use std::thread::Scope;
 use std::time::{Duration, Instant};
 
@@ -66,13 +68,6 @@ const MOST_PARTS: usize = 64;
 const WORTH_SPREADING: Duration = Duration::from_millis(1);
 const STATES_BETWEEN_CLOCK_READS: usize = 64;
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Parent {
-    pub(crate) state: usize,
-    pub(crate) action: usize,
-    pub(crate) input: usize,
-}
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Note {
     pub(crate) end: bool,
@@ -92,9 +87,7 @@ pub(crate) struct Search<'a> {
     pub(crate) model: &'a Model,
     pub(crate) limits: &'a Limits,
     slots: usize,
-    pub(crate) states: Vec<State>,
-    index: Index,
-    pub(crate) parents: Vec<Option<Parent>>,
+    pub(crate) store: Store,
     pub(crate) notes: Vec<Note>,
     pub(crate) arrows: Vec<Arrow>,
     pub(crate) first_broken: Vec<Option<usize>>,
@@ -108,8 +101,35 @@ pub(crate) struct Search<'a> {
     judged: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum Target {
+    Known(usize),
+    Fresh,
+    Raw,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Entry {
+    from: usize,
+    action: usize,
+    input: usize,
+    target: Target,
+}
+
+#[derive(Default)]
+struct Part {
+    first: usize,
+    expanded: usize,
+    marks: Vec<(usize, Mark)>,
+    entries: Vec<Entry>,
+    rows: Vec<u64>,
+    hashes: Vec<u64>,
+    raws: Vec<Box<[Value]>>,
+    stopped: bool,
+}
+
 struct Expansion {
-    done: Vec<Expanded>,
+    parts: Vec<Part>,
     stopped: bool,
     workers: usize,
 }
@@ -146,9 +166,7 @@ pub fn explore(model: &Model, limits: &Limits) -> Outcome {
         model,
         limits,
         slots,
-        states: Vec::new(),
-        index: Index::default(),
-        parents: Vec::new(),
+        store: Store::new(&model.fields),
         notes: Vec::new(),
         arrows: Vec::new(),
         first_broken: vec![None; model.rules.len()],
@@ -165,8 +183,8 @@ pub fn explore(model: &Model, limits: &Limits) -> Outcome {
     search.outcome()
 }
 
-struct Level<'a> {
-    frontier: &'a [usize],
+struct Level {
+    frontier: Range<usize>,
     cuts: Vec<usize>,
     deadline: Option<Instant>,
     asked: Asked,
@@ -178,7 +196,7 @@ struct Shared {
     stopped: AtomicBool,
     running: AtomicUsize,
     peak: AtomicUsize,
-    done: Mutex<Vec<(usize, Expansion)>>,
+    done: Mutex<Vec<(usize, Part)>>,
     panic: Mutex<Option<Box<dyn Any + Send>>>,
 }
 
@@ -231,6 +249,210 @@ impl Iterator for Starts<'_> {
     }
 }
 
+fn with_updates(state: &[Value], updates: &[(usize, Value)]) -> Box<[Value]> {
+    let mut next = state.to_vec();
+    for (position, value) in updates {
+        if let Some(place) = next.get_mut(*position) {
+            *place = value.clone();
+        }
+    }
+    next.into_boxed_slice()
+}
+
+fn encode_next(
+    store: &Store,
+    base: Option<&[u64]>,
+    row: &mut Vec<u64>,
+    state: &[Value],
+    updates: &[(usize, Value)],
+) -> bool {
+    match base {
+        Some(base) => {
+            row.clear();
+            row.extend_from_slice(base);
+            updates
+                .iter()
+                .all(|(position, value)| store.encode_update(row, *position, value))
+        }
+        None => store.encode(&with_updates(state, updates), row),
+    }
+}
+
+struct PartSink<'a> {
+    store: &'a Store,
+    graph: bool,
+    base: Option<&'a [u64]>,
+    from: usize,
+    row: Vec<u64>,
+    met: HashTable<usize>,
+    met_raw: FxHashSet<Box<[Value]>>,
+    part: Part,
+}
+
+impl PartSink<'_> {
+    fn push(&mut self, action: usize, input: usize, target: Target) {
+        self.part.entries.push(Entry {
+            from: self.from,
+            action,
+            input,
+            target,
+        });
+    }
+
+    fn first_in_part(&mut self, hash: u64) -> bool {
+        let words = self.store.words();
+        let (rows, row) = (&self.part.rows, &self.row);
+        match self.met.entry(
+            hash,
+            |at| row_at(rows, words, *at) == row.as_slice(),
+            |at| hash_row(row_at(rows, words, *at)),
+        ) {
+            hashbrown::hash_table::Entry::Occupied(_) => false,
+            hashbrown::hash_table::Entry::Vacant(vacant) => {
+                vacant.insert(self.part.hashes.len());
+                true
+            }
+        }
+    }
+}
+
+impl Successors for PartSink<'_> {
+    fn offer(
+        &mut self,
+        action: usize,
+        input: usize,
+        state: &[Value],
+        updates: &[(usize, Value)],
+    ) -> bool {
+        if !encode_next(self.store, self.base, &mut self.row, state, updates) {
+            let next = with_updates(state, updates);
+            if let Some(to) = self.store.find_values(&next) {
+                if self.graph {
+                    self.push(action, input, Target::Known(to));
+                }
+                return true;
+            }
+            if !self.graph && !self.met_raw.insert(next.clone()) {
+                return false;
+            }
+            self.part.raws.push(next);
+            self.push(action, input, Target::Raw);
+            return true;
+        }
+        let hash = hash_row(&self.row);
+        if let Some(to) = self.store.find(&self.row, hash) {
+            if self.graph {
+                self.push(action, input, Target::Known(to));
+            }
+            return true;
+        }
+        if !self.graph && !self.first_in_part(hash) {
+            return false;
+        }
+        self.part.rows.extend_from_slice(&self.row);
+        self.part.hashes.push(hash);
+        self.push(action, input, Target::Fresh);
+        true
+    }
+}
+
+struct HereSink<'a> {
+    store: &'a mut Store,
+    arrows: &'a mut Vec<Arrow>,
+    graph: bool,
+    base: Vec<u64>,
+    base_is_row: bool,
+    from: usize,
+    level_start: usize,
+    most: usize,
+    full: bool,
+    row: Vec<u64>,
+    after_full: FxHashSet<Box<[Value]>>,
+}
+
+impl HereSink<'_> {
+    fn begin(&mut self, id: usize) {
+        self.from = id;
+        self.base.clear();
+        match self.store.row(id) {
+            Some(row) => {
+                self.base.extend_from_slice(row);
+                self.base_is_row = true;
+            }
+            None => self.base_is_row = false,
+        }
+    }
+
+    fn counts(&self, known: usize) -> bool {
+        self.graph || known < self.level_start
+    }
+
+    fn after_the_limit(&mut self, known: Option<usize>, next: Box<[Value]>) -> bool {
+        match known {
+            Some(to) => self.counts(to),
+            None => self.graph || self.after_full.insert(next),
+        }
+    }
+}
+
+impl Successors for HereSink<'_> {
+    fn offer(
+        &mut self,
+        action: usize,
+        input: usize,
+        state: &[Value],
+        updates: &[(usize, Value)],
+    ) -> bool {
+        let base = self.base_is_row.then_some(self.base.as_slice());
+        let encoded = encode_next(self.store, base, &mut self.row, state, updates);
+        if self.full {
+            let next = with_updates(state, updates);
+            let known = if encoded {
+                self.store.find(&self.row, hash_row(&self.row))
+            } else {
+                self.store.find_values(&next)
+            };
+            return self.after_the_limit(known, next);
+        }
+        let parent = Some(Parent {
+            state: self.from,
+            action,
+            input,
+        });
+        let placed = if encoded {
+            let hash = hash_row(&self.row);
+            self.store.place(&self.row, hash, parent, self.most)
+        } else {
+            self.store
+                .place_values(with_updates(state, updates), parent, self.most)
+        };
+        let (to, counted) = match placed {
+            Placed::Known(to) => (to, self.counts(to)),
+            Placed::New(to) => (to, true),
+            Placed::Full => {
+                self.full = true;
+                self.after_full.insert(with_updates(state, updates));
+                return true;
+            }
+        };
+        if self.graph {
+            self.arrows.push(Arrow {
+                from: self.from,
+                to,
+                action,
+            });
+        }
+        counted
+    }
+}
+
+struct Here {
+    stopped: bool,
+    full: bool,
+    marks: Vec<(usize, Mark)>,
+    through: usize,
+}
+
 impl Search<'_> {
     fn run(&mut self) {
         let began = Instant::now();
@@ -239,18 +461,20 @@ impl Search<'_> {
             .time_limit
             .and_then(|limit| began.checked_add(limit));
         let mut per_state = Duration::ZERO;
-        let mut frontier = Vec::new();
         for start in Starts::new(&self.model.fields) {
-            if let Some(id) = self.insert(Key::new(Arc::from(start)), None) {
-                frontier.push(id);
-            }
-            if self.reason.is_some() {
+            let placed =
+                self.store
+                    .place_values(start.into_boxed_slice(), None, self.limits.max_states);
+            if placed == Placed::Full {
+                self.reason = Some(self.limit_reason());
                 break;
             }
         }
+        let mut frontier = 0..self.store.len();
         while !frontier.is_empty() && self.reason.is_none() {
             let level_began = Instant::now();
-            let level = self.expand_level(&frontier, deadline, Asked::Everything, per_state);
+            let found_before = self.store.len();
+            let level = self.level(frontier.clone(), deadline, Asked::Everything, per_state);
             per_state = level_began
                 .elapsed()
                 .saturating_mul(u32::try_from(level.workers).unwrap_or(u32::MAX))
@@ -260,22 +484,18 @@ impl Search<'_> {
                 self.reason = Some(self.time_limit_reason());
                 break;
             }
-            frontier = self.merge(&frontier, level.done);
+            frontier = found_before..self.store.len();
         }
         self.judge_the_rest(deadline);
     }
 
     fn judge_the_rest(&mut self, deadline: Option<Instant>) {
-        let unjudged: Vec<usize> = (self.judged..self.states.len()).collect();
-        let level = self.expand_level(&unjudged, deadline, Asked::RulesOnly, Duration::ZERO);
-        for (id, expanded) in unjudged.into_iter().zip(level.done) {
-            self.record(id, &expanded);
-        }
+        let unjudged = self.judged..self.store.len();
+        let level = self.level(unjudged, deadline, Asked::RulesOnly, Duration::ZERO);
         if level.stopped {
             self.reason = Some(self.time_limit_reason());
-            self.states.truncate(self.judged);
-            self.parents.truncate(self.judged);
             let kept = self.judged;
+            self.store.truncate(kept);
             self.arrows
                 .retain(|arrow| arrow.from < kept && arrow.to < kept);
         }
@@ -286,98 +506,200 @@ impl Search<'_> {
         format!("{TIME_LIMIT_REASON} {seconds} s")
     }
 
-    fn budget(&self, deadline: Option<Instant>) -> Budget {
-        Budget {
-            deadline,
-            successors: self.limits.max_states,
+    fn limit_reason(&self) -> String {
+        format!("state limit of {}", self.limits.max_states)
+    }
+
+    fn expand(&self, deadline: Option<Instant>, asked: Asked) -> Expand<'_> {
+        Expand {
+            model: self.model,
+            only_rule: self.limits.only_rule.as_deref(),
+            slots: self.slots,
+            asked,
+            budget: Budget {
+                deadline,
+                successors: self.limits.max_states,
+            },
         }
     }
 
-    fn insert(&mut self, key: Key, parent: Option<Parent>) -> Option<usize> {
-        if self.index.contains_key(&key) {
-            return None;
-        }
-        if self.states.len() >= self.limits.max_states {
-            self.reason = Some(format!("state limit of {}", self.limits.max_states));
-            return None;
-        }
-        let id = self.states.len();
-        self.states.push(Arc::clone(&key.state));
-        self.index.insert(key, id);
-        self.parents.push(parent);
-        Some(id)
-    }
-
-    fn expand_ids(&self, ids: &[usize], deadline: Option<Instant>, asked: Asked) -> Expansion {
-        let only_rule = self.limits.only_rule.as_deref();
-        let budget = self.budget(deadline);
-        let mut level = Vec::with_capacity(ids.len());
-        let mut known = Known {
-            index: &self.index,
-            met: (!self.limits.keep_graph).then(Default::default),
-        };
-        for (position, id) in ids.iter().enumerate() {
-            let clock_due = position.is_multiple_of(STATES_BETWEEN_CLOCK_READS);
-            let late = deadline.is_some_and(|limit| Instant::now() >= limit);
-            if asked == Asked::Everything && clock_due && late {
-                return Expansion {
-                    done: level,
-                    stopped: true,
-                    workers: 1,
-                };
-            }
-            let Some(state) = self.states.get(*id) else {
-                break;
+    fn level(
+        &mut self,
+        frontier: Range<usize>,
+        deadline: Option<Instant>,
+        asked: Asked,
+        per_state: Duration,
+    ) -> Ran {
+        if let Some(expansion) = self.spread_level(&frontier, deadline, asked, per_state) {
+            let ran = Ran {
+                stopped: expansion.stopped,
+                workers: expansion.workers,
             };
-            let expanded = expand_state(
-                self.model, only_rule, self.slots, state, asked, budget, &mut known,
-            );
-            if expanded.clock == Clock::Stopped {
-                return Expansion {
-                    done: level,
-                    stopped: true,
-                    workers: 1,
-                };
+            if !(ran.stopped && asked == Asked::Everything) {
+                self.merge(expansion.parts);
             }
-            level.push(expanded);
+            return ran;
         }
-        Expansion {
-            done: level,
-            stopped: false,
+        let here = self.expand_here(frontier.clone(), deadline, asked);
+        if here.stopped && asked == Asked::Everything {
+            self.store.truncate(frontier.end);
+            self.arrows.retain(|arrow| arrow.from < frontier.start);
+            return Ran {
+                stopped: true,
+                workers: 1,
+            };
+        }
+        for (id, mark) in &here.marks {
+            self.record(*id, mark);
+        }
+        self.judged = self.judged.max(here.through);
+        if here.full {
+            self.reason = Some(self.limit_reason());
+        }
+        Ran {
+            stopped: here.stopped,
             workers: 1,
         }
     }
 
-    fn expand_level(
+    fn expand_here(
+        &mut self,
+        frontier: Range<usize>,
+        deadline: Option<Instant>,
+        asked: Asked,
+    ) -> Here {
+        let expand = Expand {
+            model: self.model,
+            only_rule: self.limits.only_rule.as_deref(),
+            slots: self.slots,
+            asked,
+            budget: Budget {
+                deadline,
+                successors: self.limits.max_states,
+            },
+        };
+        let mut here = Here {
+            stopped: false,
+            full: false,
+            marks: Vec::new(),
+            through: frontier.start,
+        };
+        let mut sink = HereSink {
+            store: &mut self.store,
+            arrows: &mut self.arrows,
+            graph: self.limits.keep_graph,
+            base: Vec::new(),
+            base_is_row: false,
+            from: 0,
+            level_start: frontier.end,
+            most: self.limits.max_states,
+            full: false,
+            row: Vec::new(),
+            after_full: FxHashSet::default(),
+        };
+        let mut scratch = Scratch::default();
+        let mut state = Vec::new();
+        for (position, id) in frontier.enumerate() {
+            let clock_due = position.is_multiple_of(STATES_BETWEEN_CLOCK_READS);
+            let late = deadline.is_some_and(|limit| Instant::now() >= limit);
+            if asked == Asked::Everything && clock_due && late {
+                here.stopped = true;
+                break;
+            }
+            state.clear();
+            sink.store.read_state(id, &mut state);
+            let outside = sink.store.outside(id, &self.model.fields);
+            sink.begin(id);
+            let mark = expand.state(&state, outside, &mut sink, &mut scratch);
+            if mark.clock == Clock::Stopped {
+                here.stopped = true;
+                break;
+            }
+            if !mark.is_plain() {
+                here.marks.push((id, mark));
+            }
+            here.through = id.saturating_add(1);
+            if sink.full {
+                here.full = true;
+                break;
+            }
+        }
+        here
+    }
+
+    fn expand_ids(&self, ids: Range<usize>, deadline: Option<Instant>, asked: Asked) -> Part {
+        let expand = self.expand(deadline, asked);
+        let mut sink = PartSink {
+            store: &self.store,
+            graph: self.limits.keep_graph,
+            base: None,
+            from: 0,
+            row: Vec::new(),
+            met: HashTable::new(),
+            met_raw: FxHashSet::default(),
+            part: Part {
+                first: ids.start,
+                ..Part::default()
+            },
+        };
+        let mut scratch = Scratch::default();
+        let mut state = Vec::new();
+        for (position, id) in ids.enumerate() {
+            let clock_due = position.is_multiple_of(STATES_BETWEEN_CLOCK_READS);
+            let late = deadline.is_some_and(|limit| Instant::now() >= limit);
+            if asked == Asked::Everything && clock_due && late {
+                sink.part.stopped = true;
+                return sink.part;
+            }
+            state.clear();
+            self.store.read_state(id, &mut state);
+            sink.base = self.store.row(id);
+            sink.from = id;
+            let outside = self.store.outside(id, &self.model.fields);
+            let mark = expand.state(&state, outside, &mut sink, &mut scratch);
+            if mark.clock == Clock::Stopped {
+                sink.part.stopped = true;
+                return sink.part;
+            }
+            if !mark.is_plain() {
+                sink.part.marks.push((id, mark));
+            }
+            sink.part.expanded = sink.part.expanded.saturating_add(1);
+        }
+        sink.part
+    }
+
+    fn spread_level(
         &self,
-        frontier: &[usize],
+        frontier: &Range<usize>,
         deadline: Option<Instant>,
         asked: Asked,
         per_state: Duration,
-    ) -> Expansion {
+    ) -> Option<Expansion> {
         let states = u32::try_from(frontier.len()).unwrap_or(u32::MAX);
         let worth_spreading = frontier.len() >= SMALLEST_SHARED_LEVEL
             || per_state.saturating_mul(states) >= WORTH_SPREADING;
         let own = self.limits.jobs.max(1);
-        if !worth_spreading || (own == 1 && self.limits.helpers.is_none()) {
-            return self.expand_ids(frontier, deadline, asked);
+        let helpers = self.limits.helpers.as_ref();
+        let alone = own == 1 && helpers.is_none_or(|helpers| helpers.idle() == 0);
+        if !worth_spreading || alone {
+            return None;
         }
         let level = Level {
-            frontier,
+            frontier: frontier.clone(),
             cuts: cut_points(frontier.len(), frontier.len().div_ceil(MOST_PARTS)),
             deadline,
             asked,
         };
         let parts = level.cuts.len().saturating_sub(1);
         if parts <= 1 {
-            return self.expand_ids(frontier, deadline, asked);
+            return None;
         }
         let shared = Shared::default();
         std::thread::scope(|scope| {
             for _ in 0..own.min(parts) {
                 self.start_worker(scope, &level, &shared, None);
             }
-            let helpers = self.limits.helpers.as_ref();
             for _ in 0..parts.saturating_sub(own) {
                 let Some(loan) = helpers
                     .map(|helpers| helpers.borrow(1))
@@ -401,24 +723,25 @@ impl Search<'_> {
             .unwrap_or_else(PoisonError::into_inner);
         finished.sort_by_key(|(part, _)| *part);
         let mut expansion = Expansion {
-            done: Vec::with_capacity(frontier.len()),
+            parts: Vec::with_capacity(finished.len()),
             stopped: false,
             workers: shared.peak.into_inner(),
         };
         for (_, part) in finished {
-            expansion.done.extend(part.done);
-            if part.stopped {
+            let stopped = part.stopped;
+            expansion.parts.push(part);
+            if stopped {
                 expansion.stopped = true;
                 break;
             }
         }
-        expansion
+        Some(expansion)
     }
 
     fn start_worker<'scope, 'env>(
         &'env self,
         scope: &'scope Scope<'scope, 'env>,
-        level: &'env Level<'env>,
+        level: &'env Level,
         shared: &'env Shared,
         loan: Option<Loan<'env>>,
     ) {
@@ -450,7 +773,7 @@ impl Search<'_> {
     fn take_parts<'scope, 'env>(
         &'env self,
         scope: &'scope Scope<'scope, 'env>,
-        level: &'env Level<'env>,
+        level: &'env Level,
         shared: &'env Shared,
     ) {
         let parts = level.cuts.len().saturating_sub(1);
@@ -464,7 +787,10 @@ impl Search<'_> {
                 .cuts
                 .get(part)
                 .zip(level.cuts.get(part.saturating_add(1)))
-                .and_then(|(from, to)| level.frontier.get(*from..*to));
+                .map(|(from, to)| {
+                    level.frontier.start.saturating_add(*from)
+                        ..level.frontier.start.saturating_add(*to)
+                });
             let Some(ids) = ids else {
                 return;
             };
@@ -483,7 +809,7 @@ impl Search<'_> {
     fn take_up_idle_threads<'scope, 'env>(
         &'env self,
         scope: &'scope Scope<'scope, 'env>,
-        level: &'env Level<'env>,
+        level: &'env Level,
         shared: &'env Shared,
         parts: usize,
     ) {
@@ -502,41 +828,59 @@ impl Search<'_> {
         }
     }
 
-    fn merge(&mut self, frontier: &[usize], level: Vec<Expanded>) -> Vec<usize> {
-        let mut next = Vec::new();
-        for (id, expanded) in frontier.iter().copied().zip(level) {
-            self.record(id, &expanded);
-            for successor in expanded.successors {
-                let parent = Parent {
-                    state: id,
-                    action: successor.action,
-                    input: successor.input,
+    fn merge(&mut self, parts: Vec<Part>) {
+        let most = self.limits.max_states;
+        let words = self.store.words();
+        for part in parts {
+            let mut marks = part.marks.into_iter().peekable();
+            let mut raws = part.raws.into_iter();
+            let mut fresh = part.hashes.iter().enumerate();
+            for entry in &part.entries {
+                while let Some((id, mark)) = marks.next_if(|(id, _)| *id <= entry.from) {
+                    self.record(id, &mark);
+                }
+                self.judged = self.judged.max(entry.from.saturating_add(1));
+                let parent = Some(Parent {
+                    state: entry.from,
+                    action: entry.action,
+                    input: entry.input,
+                });
+                let placed = match entry.target {
+                    Target::Known(to) => Placed::Known(to),
+                    Target::Fresh => {
+                        let Some((at, hash)) = fresh.next() else {
+                            continue;
+                        };
+                        self.store
+                            .place(row_at(&part.rows, words, at), *hash, parent, most)
+                    }
+                    Target::Raw => {
+                        let Some(values) = raws.next() else {
+                            continue;
+                        };
+                        self.store.place_values(values, parent, most)
+                    }
                 };
-                let known = successor
-                    .known
-                    .or_else(|| self.index.get(&successor.next).copied());
-                let target = match known {
-                    Some(known) => Some(known),
-                    None => self.insert(successor.next, Some(parent)).inspect(|new| {
-                        next.push(*new);
-                    }),
-                };
-                let Some(to) = target else {
-                    return next;
+                let (Placed::Known(to) | Placed::New(to)) = placed else {
+                    self.reason = Some(self.limit_reason());
+                    return;
                 };
                 if self.limits.keep_graph {
                     self.arrows.push(Arrow {
-                        from: id,
+                        from: entry.from,
                         to,
-                        action: successor.action,
+                        action: entry.action,
                     });
                 }
             }
+            for (id, mark) in marks {
+                self.record(id, &mark);
+            }
+            self.judged = self.judged.max(part.first.saturating_add(part.expanded));
         }
-        next
     }
 
-    fn record(&mut self, id: usize, expanded: &Expanded) {
+    fn record(&mut self, id: usize, expanded: &Mark) {
         self.judged = self.judged.max(id.saturating_add(1));
         self.wide |= expanded.width == Width::Beyond32Bits;
         self.cut_short |= expanded.cut_short;
@@ -574,6 +918,11 @@ impl Search<'_> {
             };
         }
     }
+}
+
+struct Ran {
+    stopped: bool,
+    workers: usize,
 }
 
 #[cfg(test)]
