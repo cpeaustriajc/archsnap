@@ -57,6 +57,7 @@ fn update(model: &Model) -> &Expr {
     model.actions[0].updates[0]
         .as_ref()
         .expect("the action sets `chosen`")
+        .expr()
 }
 
 fn named_item(who: Term) -> Term {

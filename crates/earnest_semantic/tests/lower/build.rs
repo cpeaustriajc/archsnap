@@ -3,7 +3,7 @@ use earnest_ast::{
     RuleDraft, Shape, ShapeKind, Term, TermKind, Unary, ViewDraft,
 };
 use earnest_diagnostics::{Place, Problem};
-use earnest_ir::{Fault, Frame, Model, eval, truth};
+use earnest_ir::{Fault, Frame, Model};
 use earnest_semantic::lower;
 use earnest_value::{IntType, Value};
 
@@ -400,7 +400,7 @@ pub(crate) fn verdict_of(source: &Draft) -> Result<bool, Fault> {
     let model = lowered(source);
     let state = first_state(&model);
     let checked = &model.rules[0];
-    truth(&checked.holds, &mut Frame::new(&state, checked.slots))
+    checked.holds.truth(&mut Frame::new(&state, checked.slots))
 }
 
 pub(crate) fn verdict(fields: Vec<(&str, Shape)>, condition: Term) -> Result<bool, Fault> {
@@ -430,9 +430,9 @@ pub(crate) fn after(model: &Model, position: usize, inputs: &[Value]) -> Vec<Val
         .iter()
         .enumerate()
         .map(|(index, old)| match taken.updates.get(index) {
-            Some(Some(update)) => {
-                eval(update, &mut frame).expect("the update has a value in the start state")
-            }
+            Some(Some(update)) => update
+                .eval(&mut frame)
+                .expect("the update has a value in the start state"),
             Some(None) | None => old.clone(),
         })
         .collect()

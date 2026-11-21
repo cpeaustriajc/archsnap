@@ -4,8 +4,10 @@
 //! actions, rules and ends whose conditions are [`Expr`]s. An expression reads state fields by
 //! position and local values by slot, and [`eval`] gives its value in one state.
 
+mod code;
 mod eval;
 
+pub use code::Code;
 pub use eval::{Fault, Frame, eval, truth};
 
 use earnest_value::{Domain, IntType, Sym, Symbols, Value};
@@ -262,10 +264,10 @@ pub struct Action {
     /// The inputs, each in its own slot.
     pub inputs: Vec<Input>,
     /// Whether the action can happen in a state with given inputs. It must give a boolean.
-    pub guard: Expr,
+    pub guard: Code,
     /// The new value of each state field, by position in [`Model::fields`]. `None` keeps the
     /// field as it is, and so does a list that ends before the field's position.
-    pub updates: Vec<Option<Expr>>,
+    pub updates: Vec<Option<Code>>,
     /// How many local slots `guard` and `updates` need.
     pub slots: usize,
 }
@@ -282,7 +284,7 @@ pub struct Rule {
     /// The condition's source text, kept to show a rule change in the report.
     pub text: String,
     /// The condition. It must give a boolean.
-    pub holds: Expr,
+    pub holds: Code,
     /// How many local slots `holds` needs.
     pub slots: usize,
 }
@@ -295,7 +297,7 @@ pub struct End {
     /// The end's sentence.
     pub says: String,
     /// The condition. It must give a boolean.
-    pub when: Expr,
+    pub when: Code,
     /// How many local slots `when` needs.
     pub slots: usize,
 }
@@ -307,7 +309,7 @@ pub enum Piece {
     /// Text copied as it is.
     Text(String),
     /// An expression whose value is printed without quotes.
-    Shown(Expr),
+    Shown(Code),
 }
 
 /// A chart label computed from a state.

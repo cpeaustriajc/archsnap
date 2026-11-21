@@ -1,4 +1,4 @@
-use earnest_ir::{Action, End, Expr, Field, Input, Model, Op, Rule, View};
+use earnest_ir::{Action, Code, End, Expr, Field, Input, Model, Op, Rule, View};
 use earnest_tla::{Files, write};
 use earnest_value::{Domain, Sym, Symbols, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -88,8 +88,11 @@ impl Sketch {
             line: 1,
             slots: 8,
             inputs,
-            guard,
-            updates: changed,
+            guard: guard.into(),
+            updates: changed
+                .into_iter()
+                .map(|update| update.map(Code::new))
+                .collect(),
         });
     }
 
@@ -99,7 +102,7 @@ impl Sketch {
             says: format!("{id} always"),
             line: 1,
             text: String::new(),
-            holds,
+            holds: holds.into(),
             slots: 8,
         });
     }
@@ -108,7 +111,7 @@ impl Sketch {
         self.ends.push(End {
             id: id.to_owned(),
             says: format!("{id} is reached"),
-            when,
+            when: when.into(),
             slots: 8,
         });
     }

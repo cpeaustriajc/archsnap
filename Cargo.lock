@@ -394,6 +394,7 @@ name = "earnest_ir"
 version = "0.1.0"
 dependencies = [
  "earnest_value",
+ "proptest",
 ]
 
 [[package]]

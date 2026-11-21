@@ -1,5 +1,5 @@
 use crate::explore::{Note, Search};
-use earnest_ir::{Frame, Label, Piece, eval};
+use earnest_ir::{Frame, Label, Piece};
 use earnest_value::Value;
 use rustc_hash::FxHashMap;
 
@@ -66,7 +66,7 @@ impl Search<'_> {
         for piece in &label.pieces {
             match piece {
                 Piece::Text(plain) => text.push_str(plain),
-                Piece::Shown(expr) => match eval(expr, &mut frame) {
+                Piece::Shown(expr) => match expr.eval(&mut frame) {
                     Ok(value) => text.push_str(&self.model.symbols.plain(&value)),
                     Err(_) => text.push('?'),
                 },

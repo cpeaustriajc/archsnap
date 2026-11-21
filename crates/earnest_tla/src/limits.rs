@@ -161,16 +161,16 @@ pub(crate) fn declared(model: &Model) -> Vec<String> {
                 found.value(symbols, value);
             }
         }
-        found.expr(symbols, &action.guard);
+        found.expr(symbols, action.guard.expr());
         for update in action.updates.iter().flatten() {
-            found.expr(symbols, update);
+            found.expr(symbols, update.expr());
         }
     }
     for rule in &model.rules {
-        found.expr(symbols, &rule.holds);
+        found.expr(symbols, rule.holds.expr());
     }
     for end in &model.ends {
-        found.expr(symbols, &end.when);
+        found.expr(symbols, end.when.expr());
     }
     let mut reasons = Vec::new();
     if let Some(number) = found.widest {

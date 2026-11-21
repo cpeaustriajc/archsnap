@@ -1,4 +1,4 @@
-use earnest_ir::{Action, Fault, Frame, Model, eval, truth};
+use earnest_ir::{Action, Fault, Frame, Model};
 use earnest_value::Value;
 use hashbrown::HashTable;
 use rustc_hash::FxHasher;
@@ -187,7 +187,7 @@ fn next_updates(
     updates.clear();
     for (position, update) in action.updates.iter().take(state.len()).enumerate() {
         if let Some(expr) = update {
-            updates.push((position, eval(expr, frame)?));
+            updates.push((position, expr.eval(frame)?));
         }
     }
     Ok(())
@@ -218,7 +218,7 @@ impl<S: Successors> Expansion<'_, '_, S> {
                 break;
             }
             set_inputs(action, input, &mut self.frame);
-            match truth(&action.guard, &mut self.frame) {
+            match action.guard.truth(&mut self.frame) {
                 Ok(true) => {}
                 Ok(false) => continue,
                 Err(fault) => {
@@ -252,7 +252,7 @@ impl<S: Successors> Expansion<'_, '_, S> {
     fn marked_end(&mut self, model: &Model) -> Stopping {
         let mut stopping = Stopping::default();
         for (position, end) in model.ends.iter().enumerate() {
-            match truth(&end.when, &mut self.frame) {
+            match end.when.truth(&mut self.frame) {
                 Ok(true) => stopping.enabled = true,
                 Ok(false) => {}
                 Err(fault) => {
@@ -295,7 +295,7 @@ impl Expand<'_> {
             if self.only_rule.is_some_and(|wanted| wanted != rule.id) {
                 continue;
             }
-            match truth(&rule.holds, &mut frame) {
+            match rule.holds.truth(&mut frame) {
                 Ok(true) => {}
                 Ok(false) => found.broken.push(position),
                 Err(fault) => {
@@ -360,7 +360,7 @@ mod tests {
             label: "acts".to_owned(),
             line: 1,
             inputs,
-            guard: Expr::Const(Value::Bool(true)),
+            guard: Expr::Const(Value::Bool(true)).into(),
             updates: Vec::new(),
             slots: 2,
         }

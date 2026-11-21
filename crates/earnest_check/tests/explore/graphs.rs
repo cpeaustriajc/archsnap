@@ -34,7 +34,7 @@ fn low_or_high(sketch: &mut Sketch, n: &Expr) -> Label {
         Box::new(Expr::Const(high)),
     );
     Label {
-        pieces: vec![Piece::Text("band ".to_owned()), Piece::Shown(band)],
+        pieces: vec![Piece::Text("band ".to_owned()), Piece::Shown(band.into())],
         slots: 0,
     }
 }
@@ -224,7 +224,10 @@ fn a_label_that_can_not_be_evaluated_shows_a_question_mark() {
     sketch.end("full", is(&n, 1));
     let unreadable = Expr::Apply(Op::Unwrap, vec![Expr::Const(Value::Null)]);
     sketch.view.state = Some(Label {
-        pieces: vec![Piece::Text("n is ".to_owned()), Piece::Shown(unreadable)],
+        pieces: vec![
+            Piece::Text("n is ".to_owned()),
+            Piece::Shown(unreadable.into()),
+        ],
         slots: 0,
     });
     let graph = graph_of(&sketch.model());

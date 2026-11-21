@@ -1,16 +1,76 @@
 //! Every operation of the expression language gives the value its definition says, and every
-//! fault is reported as a fault.
+//! fault is reported as a fault. Each case is evaluated by the reference walk and by the
+//! prepared [`Code`], which must agree on the value, the fault and the effects on the frame.
 
 use earnest_ir::{
-    Expr, Fault, Frame, MapOp, Math, Op, Order, SeqOp, SetOp, Shelf, Sweep, eval, truth,
+    Code, Expr, Fault, Frame, MapOp, Math, Op, Order, SeqOp, SetOp, Shelf, Sweep, eval, truth,
 };
 use earnest_value::{IntType, MOST_SAFE_INTEGER, Symbols, Value};
+use proptest::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 const SLOTS: usize = 4;
 
+struct Ran<T> {
+    answer: Result<T, Fault>,
+    beyond_32_bits: bool,
+    locals: Vec<Result<Value, Fault>>,
+}
+
+fn ran<T>(
+    state: &[Value],
+    locals: &[Value],
+    evaluate: impl FnOnce(&mut Frame<'_>) -> Result<T, Fault>,
+) -> Ran<T> {
+    let mut frame = Frame::new(state, SLOTS);
+    for (slot, value) in locals.iter().enumerate() {
+        frame.put(slot, value.clone());
+    }
+    let answer = evaluate(&mut frame);
+    Ran {
+        answer,
+        beyond_32_bits: frame.computed_beyond_32_bits(),
+        locals: (0..SLOTS)
+            .map(|slot| eval(&Expr::Local(slot), &mut frame))
+            .collect(),
+    }
+}
+
+fn agreed<T: PartialEq + std::fmt::Debug>(reference: Ran<T>, prepared: &Ran<T>) -> Ran<T> {
+    assert_eq!(reference.answer, prepared.answer, "the same value or fault");
+    assert_eq!(
+        reference.beyond_32_bits, prepared.beyond_32_bits,
+        "the same mark for numbers beyond 32 bits"
+    );
+    assert_eq!(
+        reference.locals, prepared.locals,
+        "the same slots afterwards"
+    );
+    reference
+}
+
+fn both_values(state: &[Value], locals: &[Value], expr: &Expr) -> Ran<Value> {
+    let code = Code::new(expr.clone());
+    agreed(
+        ran(state, locals, |frame| eval(expr, frame)),
+        &ran(state, locals, |frame| code.eval(frame)),
+    )
+}
+
+fn both_truths(state: &[Value], locals: &[Value], expr: &Expr) -> Ran<bool> {
+    let code = Code::new(expr.clone());
+    agreed(
+        ran(state, locals, |frame| truth(expr, frame)),
+        &ran(state, locals, |frame| code.truth(frame)),
+    )
+}
+
 fn value_in(state: &[Value], expr: &Expr) -> Result<Value, Fault> {
-    eval(expr, &mut Frame::new(state, SLOTS))
+    both_values(state, &[], expr).answer
+}
+
+fn condition(expr: &Expr) -> Result<bool, Fault> {
+    both_truths(&[], &[], expr).answer
 }
 
 fn value_of(expr: &Expr) -> Result<Value, Fault> {
@@ -707,12 +767,11 @@ fn a_test_that_does_not_give_a_boolean_is_a_fault() {
 
 #[test]
 fn a_condition_is_true_or_false_and_anything_else_is_a_fault() {
-    let mut frame = Frame::new(&[], SLOTS);
-    assert_eq!(truth(&yes(), &mut frame), Ok(true));
-    assert_eq!(truth(&no(), &mut frame), Ok(false));
-    assert_eq!(truth(&int(1), &mut frame), Err(Fault::WrongKind));
-    assert_eq!(truth(&null(), &mut frame), Err(Fault::NullRead));
-    assert_eq!(truth(&faulting(), &mut frame), Err(Fault::NullRead));
+    assert_eq!(condition(&yes()), Ok(true));
+    assert_eq!(condition(&no()), Ok(false));
+    assert_eq!(condition(&int(1)), Err(Fault::WrongKind));
+    assert_eq!(condition(&null()), Err(Fault::NullRead));
+    assert_eq!(condition(&faulting()), Err(Fault::NullRead));
 }
 
 #[test]
@@ -891,9 +950,8 @@ fn values_of_different_kinds_are_unequal_and_never_a_fault() {
 }
 
 fn wide_after(expr: &Expr) -> (Result<Value, Fault>, bool) {
-    let mut frame = Frame::new(&[], SLOTS);
-    let value = eval(expr, &mut frame);
-    (value, frame.computed_beyond_32_bits())
+    let ran = both_values(&[], &[], expr);
+    (ran.answer, ran.beyond_32_bits)
 }
 
 #[test]
@@ -928,11 +986,111 @@ fn only_arithmetic_beyond_32_bits_or_too_large_to_hold_is_marked() {
 
 #[test]
 fn a_condition_that_chooses_a_value_that_is_not_a_boolean_is_a_fault() {
-    let mut frame = Frame::new(&[], SLOTS);
     let chosen = Expr::Choose(Box::new(yes()), Box::new(int(1)), Box::new(no()));
-    assert_eq!(truth(&chosen, &mut frame), Err(Fault::WrongKind));
+    assert_eq!(condition(&chosen), Err(Fault::WrongKind));
     let negated = apply(Op::Not, &[null()]);
-    assert_eq!(truth(&negated, &mut frame), Err(Fault::NullRead));
+    assert_eq!(condition(&negated), Err(Fault::NullRead));
     let and = Expr::And(Box::new(int(1)), Box::new(faulting()));
-    assert_eq!(truth(&and, &mut frame), Err(Fault::WrongKind));
+    assert_eq!(condition(&and), Err(Fault::WrongKind));
+}
+
+const FIELDS: usize = 3;
+
+fn edge_number() -> impl Strategy<Value = i64> {
+    prop_oneof![
+        -3_i64..12,
+        Just(i64::MAX),
+        Just(i64::MIN),
+        Just(MOST_SAFE_INTEGER),
+        Just(-MOST_SAFE_INTEGER - 1),
+        Just(i64::from(i32::MAX)),
+        Just(i64::from(i32::MAX) + 1),
+        Just(255),
+        Just(256),
+    ]
+}
+
+fn any_value() -> impl Strategy<Value = Value> {
+    let plain = prop_oneof![
+        3 => edge_number().prop_map(Value::Int),
+        1 => any::<bool>().prop_map(Value::Bool),
+        1 => Just(Value::Null),
+    ];
+    plain.prop_recursive(2, 6, 3, |inner| {
+        prop_oneof![
+            proptest::collection::vec(inner.clone(), 0..3).prop_map(Value::seq),
+            proptest::collection::btree_set(inner, 0..3).prop_map(Value::set),
+        ]
+    })
+}
+
+fn any_op() -> impl Strategy<Value = Op> {
+    prop_oneof![
+        Just(Op::Not),
+        Just(Op::Negate),
+        Just(Op::SomeOf),
+        Just(Op::Unwrap),
+        Just(Op::Safe),
+        Just(Op::Fit(IntType::U8)),
+        Just(Op::Fit(IntType::I32)),
+        Just(Op::Equal),
+        Just(Op::Differ),
+        Just(Op::Order(Order::Less)),
+        Just(Op::Order(Order::LessOrEqual)),
+        Just(Op::Order(Order::Greater)),
+        Just(Op::Order(Order::GreaterOrEqual)),
+        Just(Op::Math(Math::Add)),
+        Just(Op::Math(Math::Subtract)),
+        Just(Op::Math(Math::Multiply)),
+        Just(Op::Math(Math::Remainder)),
+        Just(Op::Math(Math::Divide)),
+        Just(Op::Seq(SeqOp::Size)),
+        Just(Op::Seq(SeqOp::Includes)),
+        Just(Op::Set(SetOp::Size)),
+        Just(Op::Set(SetOp::Has)),
+    ]
+}
+
+fn any_expr() -> impl Strategy<Value = Expr> {
+    let leaf = prop_oneof![
+        2 => any_value().prop_map(Expr::Const),
+        2 => (0..FIELDS + 1).prop_map(Expr::Field),
+        2 => (0..SLOTS + 1).prop_map(Expr::Local),
+    ];
+    leaf.prop_recursive(5, 40, 4, |inner| {
+        let boxed = || inner.clone().prop_map(Box::new);
+        prop_oneof![
+            6 => (any_op(), proptest::collection::vec(inner.clone(), 0..4))
+                .prop_map(|(op, arguments)| Expr::Apply(op, arguments)),
+            2 => (boxed(), boxed()).prop_map(|(left, right)| Expr::And(left, right)),
+            2 => (boxed(), boxed()).prop_map(|(left, right)| Expr::Or(left, right)),
+            1 => (boxed(), boxed(), boxed()).prop_map(|(test, yes, no)| Expr::Choose(test, yes, no)),
+            1 => (0..SLOTS, boxed(), boxed())
+                .prop_map(|(slot, value, body)| Expr::Bind { slot, value, body }),
+            1 => (any::<bool>(), 0..SLOTS, boxed(), boxed()).prop_map(|(every, slot, source, body)| {
+                Expr::Sweep {
+                    sweep: if every { Sweep::Every } else { Sweep::Some },
+                    shelf: Shelf::Seq,
+                    slot,
+                    source,
+                    body,
+                }
+            }),
+            1 => proptest::collection::vec(inner.clone(), 0..3).prop_map(Expr::SeqOf),
+        ]
+    })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(4096))]
+
+    #[test]
+    fn the_prepared_form_agrees_with_the_reference_walk(
+        expr in any_expr(),
+        state in proptest::collection::vec(any_value(), FIELDS),
+        locals in proptest::collection::vec(any_value(), SLOTS),
+    ) {
+        both_values(&state, &locals, &expr);
+        both_truths(&state, &locals, &expr);
+    }
 }

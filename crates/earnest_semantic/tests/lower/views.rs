@@ -3,7 +3,7 @@ use crate::build::{
     the_problem,
 };
 use earnest_ast::{Draft, LabelDraft, TemplatePiece, Term, TermKind};
-use earnest_ir::{Frame, Label, Model, Piece, eval};
+use earnest_ir::{Frame, Label, Model, Piece};
 
 fn cart() -> Draft {
     draft(vec![
@@ -31,7 +31,7 @@ fn rendered(model: &Model, label: &Label) -> String {
         .map(|piece| match piece {
             Piece::Text(plain) => plain.clone(),
             Piece::Shown(expr) => {
-                let value = eval(expr, &mut frame).expect("the label has a value");
+                let value = expr.eval(&mut frame).expect("the label has a value");
                 model.symbols.plain(&value)
             }
             _ => panic!("a label piece this test does not know"),
