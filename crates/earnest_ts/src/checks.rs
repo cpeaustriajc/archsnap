@@ -30,9 +30,7 @@ fn model_with(parts: &str) -> String {
 }
 
 fn rule(holds: &str) -> String {
-    model_with(&format!(
-        "export const r = M.rule({{ says: \"r\", holds: {holds} }});"
-    ))
+    model_with(&format!("export const r = m.rule(M, \"r\", {holds});"))
 }
 
 #[test]
@@ -43,7 +41,7 @@ fn a_block_constant_read_before_its_declaration_is_refused_in_a_rule() {
     assert_eq!(found[0].feature, "`LIMIT`", "the name");
     assert_eq!(
         (found[0].line, found[0].column),
-        (4, 67),
+        (4, 55),
         "at the first use, before the declaration"
     );
     assert!(
@@ -70,15 +68,15 @@ fn a_block_constant_read_in_its_own_initializer_is_refused() {
 #[test]
 fn a_block_constant_read_before_its_declaration_is_refused_in_an_action_and_a_helper() {
     let action = model_with(
-        "export const up = M.action(\"up\", { then: (s) => { const next = LIMIT; const LIMIT = 1; return { n: next }; } });",
+        "export const up = m.action(M, \"up\", { changes: (s) => { const next = LIMIT; const LIMIT = 1; return { n: next }; } });",
     );
-    assert_eq!(features(&action), ["`LIMIT`"], "in `then`");
+    assert_eq!(features(&action), ["`LIMIT`"], "in `changes`");
     let guard = model_with(
-        "export const up = M.action(\"up\", { when: (s) => { const x = LIMIT; const LIMIT = 1; return s.n < x; }, then: (s) => ({ n: s.n + 1 }) });",
+        "export const up = m.action(M, \"up\", { when: (s) => { const x = LIMIT; const LIMIT = 1; return s.n < x; }, changes: (s) => ({ n: s.n + 1 }) });",
     );
     assert_eq!(features(&guard), ["`LIMIT`"], "in `when`");
     let helper = model_with(
-        "const bump = (n: number) => { const x = LIMIT; const LIMIT = n; return x; };\nexport const r = M.rule({ says: \"r\", holds: (s) => bump(s.n) > 0 });",
+        "const bump = (n: number) => { const x = LIMIT; const LIMIT = n; return x; };\nexport const r = m.rule(M, \"r\", (s) => bump(s.n) > 0);",
     );
     assert_eq!(features(&helper), ["`LIMIT`"], "in a helper");
 }
@@ -104,7 +102,7 @@ fn a_nested_block_constant_read_early_is_refused_whatever_the_outer_block_holds(
         1,
         "only the early read in the inner block: {found:?}"
     );
-    assert_eq!(found[0].column, 104, "the `LIMIT` of `const inner = LIMIT`");
+    assert_eq!(found[0].column, 92, "the `LIMIT` of `const inner = LIMIT`");
 }
 
 #[test]
@@ -301,7 +299,9 @@ fn a_file_that_leaves_the_library_alone_does_not_reach_it() {
 }
 
 fn view_with(colors: &str) -> String {
-    model_with(&format!("export const v = M.view({{ colors: {colors} }});"))
+    model_with(&format!(
+        "export const v = m.view(M, {{ colors: {colors} }});"
+    ))
 }
 
 #[test]
@@ -323,7 +323,7 @@ fn a_color_the_chart_would_leave_out_makes_the_file_unreadable() {
     let found = problems(&view_with("{ broken: \"#ff\" }"));
     assert_eq!(
         (found[0].line, found[0].column, found[0].feature.as_str()),
-        (4, 45, "`\"#ff\"`"),
+        (4, 48, "`\"#ff\"`"),
         "at the value, as the file writes it"
     );
 }
@@ -494,8 +494,8 @@ fn a_parameter_named_twice_is_refused() {
     refused_once(&format!("{HEAD}const add = (n, n) => n + 1;\n"), "n");
     refused_once(
         &model_with(
-            "export const go = M.action(\"go\", { input: { by: m.int(0, 1) }, \
-             then: (s, { by, by }) => ({ n: by }) });",
+            "export const go = m.action(M, \"go\", { input: { by: m.int(0, 1) }, \
+             changes: (s, { by, by }) => ({ n: by }) });",
         ),
         "by",
     );
@@ -517,7 +517,7 @@ fn a_postfix_bang_is_refused_with_the_function_to_write_instead() {
 fn m_some_is_read_as_the_value_inside_an_optional() {
     let source = "import { m } from \"@earnest/model\";\n\
         export const M = m.model(\"M\", { o: m.int(0, 2).optional() });\n\
-        export const r = M.rule({ says: \"r\", holds: (s) => m.some(s.o) <= 1 });\n";
+        export const r = m.rule(M, \"r\", (s) => m.some(s.o) <= 1);\n";
     let reading = read("m.model.ts", source);
     assert_eq!(reading.problems, [], "no problem");
     assert_eq!(reading.drafts.len(), 1);
@@ -548,9 +548,9 @@ fn a_file_with_text_that_looks_deep_is_not_unreadable_for_it() {
 #[test]
 fn a_rule_action_or_end_bound_to_an_unexported_constant_is_refused() {
     for part in [
-        "const low = M.rule({ says: \"low\", holds: (s) => s.n <= 1 });",
-        "const inc = M.action(\"inc\", { then: (s) => ({ n: s.n + 1 }) });",
-        "const top = M.end({ says: \"top\", when: (s) => s.n === 3 });",
+        "const low = m.rule(M, \"low\", (s) => s.n <= 1);",
+        "const inc = m.action(M, \"inc\", { changes: (s) => ({ n: s.n + 1 }) });",
+        "const top = m.end(M, \"top\", (s) => s.n === 3);",
     ] {
         let found = problems(&model_with(part));
         assert_eq!(found.len(), 1, "`{part}` is refused once: {found:?}");
@@ -567,14 +567,14 @@ fn a_rule_action_or_end_bound_to_an_unexported_constant_is_refused() {
 fn an_exported_constant_and_a_name_in_an_export_list_are_read() {
     assert_eq!(
         problems(&model_with(
-            "export const low = M.rule({ says: \"low\", holds: (s) => s.n <= 1 });"
+            "export const low = m.rule(M, \"low\", (s) => s.n <= 1);"
         )),
         [],
         "exported where it is declared"
     );
     assert_eq!(
         problems(&model_with(
-            "const low = M.rule({ says: \"low\", holds: (s) => s.n <= 1 });\nexport { low };"
+            "const low = m.rule(M, \"low\", (s) => s.n <= 1);\nexport { low };"
         )),
         [],
         "exported by a list"
@@ -584,8 +584,8 @@ fn an_exported_constant_and_a_name_in_an_export_list_are_read() {
 #[test]
 fn a_view_step_for_an_action_the_model_does_not_have_is_refused() {
     let source = model_with(
-        "export const inc = M.action(\"inc\", { then: (s) => ({ n: s.n + 1 }) });\n\
-         export const v = M.view({ step: { inc: \"up\", dec: \"down\" } });",
+        "export const inc = m.action(M, \"inc\", { changes: (s) => ({ n: s.n + 1 }) });\n\
+         export const v = m.view(M, { step: { inc: \"up\", dec: \"down\" } });",
     );
     let found = problems(&source);
     assert_eq!(found.len(), 1, "one unknown id: {found:?}");
@@ -600,8 +600,8 @@ fn a_view_step_for_an_action_the_model_does_not_have_is_refused() {
 #[test]
 fn a_view_step_may_come_before_the_action_it_labels() {
     let source = model_with(
-        "export const v = M.view({ step: { inc: \"up\" } });\n\
-         export const inc = M.action(\"inc\", { then: (s) => ({ n: s.n + 1 }) });",
+        "export const v = m.view(M, { step: { inc: \"up\" } });\n\
+         export const inc = m.action(M, \"inc\", { changes: (s) => ({ n: s.n + 1 }) });",
     );
     assert_eq!(
         problems(&source),
@@ -610,8 +610,8 @@ fn a_view_step_may_come_before_the_action_it_labels() {
     );
 }
 
-const LOW: &str = "const low = M.rule({ says: \"low\", holds: (s) => s.n <= 1 });";
-const TOP: &str = "const top = M.end({ says: \"top\", when: (s) => s.n === 3 });";
+const LOW: &str = "const low = m.rule(M, \"low\", (s) => s.n <= 1);";
+const TOP: &str = "const top = m.end(M, \"top\", (s) => s.n === 3);";
 
 #[test]
 fn a_name_exported_twice_is_refused_in_every_spelling() {
@@ -631,7 +631,7 @@ fn a_name_exported_twice_is_refused_in_every_spelling() {
         );
     }
     let found = problems(&model_with(
-        "export const low = M.rule({ says: \"low\", holds: (s) => s.n <= 1 });\nexport { low };",
+        "export const low = m.rule(M, \"low\", (s) => s.n <= 1);\nexport { low };",
     ));
     assert_eq!(found.len(), 1, "inline and in a list: {found:?}");
     let found = problems(&model_with(

@@ -9,13 +9,10 @@ export type {
   AnyModel,
   End,
   EndRunner,
-  EndSpec,
   NoInput,
   Rule,
   RuleRunner,
-  RuleSpec,
   Runners,
-  ThenActionSpec,
   View,
   ViewSpec,
 } from "./model.ts";

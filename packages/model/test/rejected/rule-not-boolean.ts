@@ -9,7 +9,4 @@ export const Cart = m.model("Cart", {
   count: m.int(0, 3).initial(0),
 });
 
-export const counted = Cart.rule({
-  says: "The count is the count",
-  holds: (s) => s.count,
-});
+export const counted = m.rule(Cart, "The count is the count", (s) => s.count);

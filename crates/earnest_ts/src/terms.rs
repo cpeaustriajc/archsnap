@@ -12,7 +12,7 @@ use oxc_syntax::operator::{AssignmentOperator, BinaryOperator, LogicalOperator, 
 
 const NOT_AN_OPERATOR: &str = "this operator is outside the library: the operators are `===`, `!==`, `<`, `<=`, `>`, `>=`, `&&`, `||`, `!`, `+`, `-`, `*`, `m.rem(a, b)` and `m.div(a, b)`";
 pub(crate) const CLASS: &str = "a class is outside the library: declare the data as an `m.record({...})` and the behavior as the actions and rules of an `m.model`";
-const NOT_IN_PLACE: &str = "changing a value in place is outside the library; every operation gives back a new value: write `const next = value + 1;`, or return the new field from `then`";
+const NOT_IN_PLACE: &str = "changing a value in place is outside the library; every operation gives back a new value: write `const next = value + 1;`, or return the new field from `changes`";
 
 const AN_ASSERTION: &str = "a type assertion hides a `null` from the type checker and changes \
     nothing in JavaScript, so a value that is optional would be read as `null` where \
@@ -135,8 +135,7 @@ impl Reader<'_> {
                 written,
                 "a model is not a value: its actions, rules, ends and view are made at the top \
                  level with the model as the first argument, as in `export const name = \
-                 m.rule(Model, \"sentence\", (s) => ...)`, or by calling it directly, as in \
-                 `export const name = Model.rule({ ... })`",
+                 m.rule(Model, \"sentence\", (s) => ...)`",
             );
         }
         if hidden {
@@ -661,7 +660,7 @@ mod tests {
         seen: m.set(Kind), tray: m.queue(Kind, { capacity: 2 }) });\n";
 
     fn draft(rule: &str) -> Draft {
-        let source = format!("{HEAD}export const r = M.rule({{ says: \"r\", holds: {rule} }});\n");
+        let source = format!("{HEAD}export const r = m.rule(M, \"r\", {rule});\n");
         let reading = read("m.model.ts", &source);
         assert_eq!(reading.problems, [], "no problem in: {rule}");
         reading.drafts.into_iter().next().expect("one model")
@@ -672,7 +671,7 @@ mod tests {
     }
 
     fn features(rule: &str) -> Vec<String> {
-        let source = format!("{HEAD}export const r = M.rule({{ says: \"r\", holds: {rule} }});\n");
+        let source = format!("{HEAD}export const r = m.rule(M, \"r\", {rule});\n");
         read("m.model.ts", &source)
             .problems
             .into_iter()
@@ -754,7 +753,7 @@ mod tests {
         }
         let sentence = read(
             "m.model.ts",
-            &format!("{HEAD}export const r = M.rule({{ says: \"r\", holds: (s) => (s.o as number) < 3 }});\n"),
+            &format!("{HEAD}export const r = m.rule(M, \"r\", (s) => (s.o as number) < 3);\n"),
         )
         .problems;
         assert!(
@@ -885,9 +884,9 @@ mod tests {
     #[test]
     fn a_name_that_would_be_read_as_another_value_is_refused() {
         let source = format!(
-            "{HEAD}const by = 1;\nexport const a = M.action(\"a\", {{ input: {{ by: Kind }}, \
+            "{HEAD}const by = 1;\nexport const a = m.action(M, \"a\", {{ input: {{ by: Kind }}, \
              when: (s) => s.n < 3, \
-             then: (state, {{ by: who }}) => ({{ n: m.setOf(1).some((s) => s === state.n) ? 1 : 2, \
+             changes: (state, {{ by: who }}) => ({{ n: m.setOf(1).some((s) => s === state.n) ? 1 : 2, \
              seen: m.setOf(who).filter((by) => by === who) }}) }});\n"
         );
         let found: Vec<(String, String)> = read("m.model.ts", &source)
@@ -904,7 +903,7 @@ mod tests {
         assert_eq!(
             found,
             [("`who`".to_owned(), sentence("by"))],
-            "an input under the name of a parameter; `then` reads the state by its own name"
+            "an input under the name of a parameter; `changes` reads the state by its own name"
         );
     }
 

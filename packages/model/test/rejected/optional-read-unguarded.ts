@@ -9,7 +9,4 @@ export const Cart = m.model("Cart", {
   count: m.int(0, 3).initial(0),
 });
 
-export const typed = Cart.rule({
-  says: "The press has a long name",
-  holds: (s) => s.pressBy.length > 5,
-});
+export const typed = m.rule(Cart, "The press has a long name", (s) => s.pressBy.length > 5);

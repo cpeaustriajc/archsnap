@@ -9,6 +9,6 @@ export const Cart = m.model("Cart", {
   count: m.int(0, 3).initial(0),
 });
 
-export const view = Cart.view({
+export const view = m.view(Cart, {
   colors: { stuck: "#c62828" },
 });

@@ -1,6 +1,7 @@
 use crate::read;
-use earnest_ast::Draft;
-use earnest_diagnostics::{Place, Problem};
+use crate::show::show;
+use earnest_ast::{Draft, ViewDraft};
+use earnest_diagnostics::Problem;
 
 const HEAD: &str = "import { m } from \"@earnest/model\";\n\
     const Press = m.enum([\"key\", \"mouse\"]);\n\
@@ -27,117 +28,75 @@ fn features(rest: &str) -> Vec<String> {
         .collect()
 }
 
-fn without_places(draft: &Draft) -> String {
-    const MARK: &str = "Place {";
-    let mut text = format!("{draft:?}");
-    while let Some(start) = text.find(MARK) {
-        let end = text
-            .get(start..)
-            .and_then(|rest| rest.find('}'))
-            .map_or(text.len(), |close| start + close + 1);
-        text.replace_range(start..end, "Place");
-    }
-    text
-}
-
-fn where_declared(draft: &Draft) -> Vec<(String, Place)> {
-    let actions = draft
-        .actions
-        .iter()
-        .map(|part| (part.id.clone(), part.place));
-    let rules = draft.rules.iter().map(|part| (part.id.clone(), part.place));
-    let ends = draft.ends.iter().map(|part| (part.id.clone(), part.place));
-    actions.chain(rules).chain(ends).collect()
-}
-
-fn same_draft(old: &str, new: &str) {
-    let (read_new, read_old) = (drafts(new), drafts(old));
-    assert_eq!(
-        read_new.iter().map(without_places).collect::<Vec<_>>(),
-        read_old.iter().map(without_places).collect::<Vec<_>>(),
-        "`{new}` reads as `{old}`"
-    );
-    assert_eq!(
-        read_new.iter().map(where_declared).collect::<Vec<_>>(),
-        read_old.iter().map(where_declared).collect::<Vec<_>>(),
-        "each part is declared at the same place"
-    );
-}
-
 #[test]
-fn an_action_with_only_its_change_reads_as_it_did() {
-    same_draft(
-        "export const act = M.action(\"the user acts\", { then: (s) => ({ n: s.n + 1 }) });",
-        "export const act = m.action(M, \"the user acts\", { changes: (s) => ({ n: s.n + 1 }) });",
-    );
-}
-
-#[test]
-fn an_action_with_no_input_and_a_condition_reads_as_it_did() {
-    same_draft(
-        "export const act = M.action(\"a\", { when: (s) => s.n < 3, then: (s) => ({ n: s.n + 1 }) });",
-        "export const act = m.action(M, \"a\", { when: (s) => s.n < 3, changes: (s) => ({ n: s.n + 1 }) });",
-    );
-}
-
-#[test]
-fn an_action_that_picks_its_input_reads_as_it_did() {
-    same_draft(
-        "export const act = M.action(\"a\", { input: { by: Press }, \
-         when: (s, { by }) => s.n < 3 && by === \"key\", then: (_, { by }) => ({ last: by }) });",
-        "export const act = m.action(M, \"a\", { input: { by: Press }, \
-         when: (s, { by }) => s.n < 3 && by === \"key\", changes: (_, { by }) => ({ last: by }) });",
-    );
-}
-
-#[test]
-fn an_action_that_takes_its_whole_input_reads_as_it_did() {
-    same_draft(
-        "export const act = M.action(\"a\", { input: { by: Press }, \
-         when: (s, input) => input.by === \"key\", \
-         then: (state, given) => ({ last: given.by, n: state.n }) });",
-        "export const act = m.action(M, \"a\", { input: { by: Press }, \
-         when: (s, input) => input.by === \"key\", \
-         changes: (state, given) => ({ last: given.by, n: state.n }) });",
-    );
-}
-
-#[test]
-fn an_action_whose_keys_are_in_another_order_reads_as_it_did() {
-    let old = "export const act = M.action(\"a\", { input: { by: Press }, \
-               when: (s, { by }) => by === \"key\", then: (_, { by }) => ({ last: by }) });";
-    for new in [
-        "export const act = m.action(M, \"a\", { changes: (_, { by }) => ({ last: by }), \
-         when: (s, { by }) => by === \"key\", input: { by: Press } });",
-        "export const act = m.action(M, \"a\", { when: (s, { by }) => by === \"key\", \
-         changes: (_, { by }) => ({ last: by }), input: { by: Press } });",
-        "export const act = m.action(M, \"a\", { changes: (_, { by }) => ({ last: by }), \
-         input: { by: Press }, when: (s, { by }) => by === \"key\" });",
+fn an_action_reads_its_keys_in_any_order() {
+    for parts in [
+        "input: { by: Press }, when: (s, { by }) => by === \"key\", changes: (_, { by }) => ({ last: by })",
+        "changes: (_, { by }) => ({ last: by }), when: (s, { by }) => by === \"key\", input: { by: Press }",
+        "when: (s, { by }) => by === \"key\", changes: (_, { by }) => ({ last: by }), input: { by: Press }",
+        "changes: (_, { by }) => ({ last: by }), input: { by: Press }, when: (s, { by }) => by === \"key\"",
     ] {
-        same_draft(old, new);
+        let found = drafts(&format!(
+            "export const act = m.action(M, \"a\", {{ {parts} }});"
+        ));
+        let action = found
+            .first()
+            .and_then(|draft| draft.actions.first())
+            .expect("one action");
+        let inputs: Vec<&str> = action
+            .inputs
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert_eq!(inputs, ["by"], "the input of `{parts}`");
+        let guard = action.guard.as_ref().expect("a guard");
+        assert_eq!(
+            show(&guard.term),
+            "(=== by \"key\")",
+            "the guard of `{parts}`"
+        );
+        assert_eq!(
+            show(&action.change.term),
+            "{last: by}",
+            "the change of `{parts}`"
+        );
     }
 }
 
 #[test]
-fn a_block_in_a_change_reads_as_it_did() {
-    same_draft(
-        "export const act = M.action(\"a\", { then: (s) => { const next = s.n + 1; \
-         if (next > 3) return { n: 0 }; return { n: next }; } });",
-        "export const act = m.action(M, \"a\", { changes: (s) => { const next = s.n + 1; \
-         if (next > 3) return { n: 0 }; return { n: next }; } });",
+fn an_action_without_a_condition_or_an_input_has_neither() {
+    let found = drafts("export const act = m.action(M, \"a\", { changes: () => ({ n: 0 }) });");
+    let action = found
+        .first()
+        .and_then(|draft| draft.actions.first())
+        .expect("one action");
+    assert_eq!(action.inputs, [], "no input");
+    assert_eq!(action.guard, None, "no guard");
+}
+
+#[test]
+fn a_view_with_no_part_is_an_empty_view() {
+    let found = drafts("export const view = m.view(M, {});");
+    assert_eq!(
+        found.first().map(|draft| &draft.view),
+        Some(&ViewDraft::default()),
+        "nothing declared"
     );
 }
 
 #[test]
-fn a_rule_reads_as_it_did() {
-    same_draft(
-        "export const low = M.rule({\n\tsays: \"The count is low\",\n\tholds: (s) =>\n\t\ts.n <= 2 &&\n\t\ts.n >= 0,\n});",
-        "export const low = m.rule(M, \"The count is low\", (s) =>\n\t\ts.n <= 2 &&\n\t\ts.n >= 0,\n);\n\n",
+fn a_rule_and_an_end_read_a_function_with_no_parameter() {
+    let found = drafts(
+        "export const low = m.rule(M, \"low\", () => true);\n\
+         export const full = m.end(M, \"Full\", () => false);",
     );
-    same_draft(
-        "export const low = M.rule({ says: \"low\", holds: () => true });",
-        "export const low = m.rule(M, \"low\", () => true);",
-    );
+    let draft = found.first().expect("one model");
+    let rule = draft.rules.first().expect("one rule");
+    assert_eq!(rule.state_name, None, "the rule reads no state");
+    assert_eq!(show(&rule.holds), "true", "the condition of the rule");
+    let end = draft.ends.first().expect("one end");
+    assert_eq!(end.state_name, None, "the end reads no state");
+    assert_eq!(show(&end.when), "false", "the condition of the end");
 }
 
 #[test]
@@ -153,58 +112,6 @@ fn a_rule_keeps_its_text_as_written() {
         rule.text, "s.n <= 2 && s.n >= 0",
         "as written, with each run of white space as one space"
     );
-}
-
-#[test]
-fn an_end_reads_as_it_did() {
-    same_draft(
-        "export const full = M.end({ says: \"Full\", when: (s) => s.n === 3 });",
-        "export const full = m.end(M, \"Full\", (s) => s.n === 3);",
-    );
-}
-
-#[test]
-fn a_view_with_every_part_reads_as_it_did() {
-    let act = "export const act = M.action(\"act\", { then: () => ({ n: 0 }) });\n";
-    let new_act = "export const act = m.action(M, \"act\", { changes: () => ({ n: 0 }) });\n";
-    same_draft(
-        &format!(
-            "{act}export const view = M.view({{ title: \"Counting\", \
-             state: (s) => `at ${{s.n}}, by ${{s.last}}!`, group: (s) => s.last, \
-             step: {{ act: \"go\" }}, colors: {{ broken: \"#c62828\", start: \"#fff\" }} }});"
-        ),
-        &format!(
-            "{new_act}export const view = m.view(M, {{ title: \"Counting\", \
-             state: (s) => `at ${{s.n}}, by ${{s.last}}!`, group: (s) => s.last, \
-             step: {{ act: \"go\" }}, colors: {{ broken: \"#c62828\", start: \"#fff\" }} }});"
-        ),
-    );
-}
-
-#[test]
-fn a_view_with_no_part_reads_as_it_did() {
-    same_draft(
-        "export const view = M.view({});",
-        "export const view = m.view(M, {});",
-    );
-}
-
-#[test]
-fn a_model_written_partly_in_each_form_reads() {
-    let old = "export const act = M.action(\"a\", { then: (s) => ({ n: s.n + 1 }) });\n\
-               export const low = M.rule({ says: \"low\", holds: (s) => s.n <= 2 });\n\
-               export const full = M.end({ says: \"Full\", when: (s) => s.n === 3 });\n\
-               export const view = M.view({ step: { act: \"go\" } });";
-    let new = "export const act = M.action(\"a\", { then: (s) => ({ n: s.n + 1 }) });\n\
-               export const low = m.rule(M, \"low\", (s) => s.n <= 2);\n\
-               export const full = M.end({ says: \"Full\", when: (s) => s.n === 3 });\n\
-               export const view = m.view(M, { step: { act: \"go\" } });";
-    same_draft(old, new);
-    let other = "export const act = m.action(M, \"a\", { changes: (s) => ({ n: s.n + 1 }) });\n\
-                 export const low = M.rule({ says: \"low\", holds: (s) => s.n <= 2 });\n\
-                 export const full = m.end(M, \"Full\", (s) => s.n === 3);\n\
-                 export const view = M.view({ step: { act: \"go\" } });";
-    same_draft(old, other);
 }
 
 #[test]
@@ -542,10 +449,10 @@ fn a_models_name_used_anywhere_else_is_refused() {
 }
 
 #[test]
-fn a_name_in_both_forms_is_declared_once() {
+fn a_name_given_to_two_parts_is_declared_once() {
     let found = problems(
         "export const low = m.rule(M, \"low\", (s) => s.n < 1);\n\
-         export const low = M.rule({ says: \"low\", holds: (s) => s.n < 1 });",
+         export const low = m.end(M, \"low\", (s) => s.n < 1);",
     );
     assert!(
         found
@@ -553,4 +460,284 @@ fn a_name_in_both_forms_is_declared_once() {
             .any(|problem| problem.message.contains("declared twice")),
         "a second `const` of one name is refused: {found:?}"
     );
+}
+
+fn refusals(rest: &str) -> Vec<(u32, u32, String, String)> {
+    problems(rest)
+        .into_iter()
+        .map(|problem| {
+            (
+                problem.line,
+                problem.column,
+                problem.feature,
+                problem.message,
+            )
+        })
+        .collect()
+}
+
+const WRITE_CHANGES: &str = "an object with a `then` is a promise to JavaScript, and an action that was exported would hang an `async` function: write `changes`";
+
+#[test]
+fn a_then_in_an_action_is_refused_and_names_changes() {
+    for parts in [
+        "{ when: (s) => s.n < 3, then: (s) => ({ n: s.n + 1 }) }",
+        "{ then: (s) => ({ n: s.n + 1 }), when: (s) => s.n < 3 }",
+        "{ then: (s) => ({ n: s.n + 1 }) }",
+    ] {
+        let found = refusals(&format!("export const act = m.action(M, \"a\", {parts});"));
+        let at =
+            parts.find("then").expect("a then") + "export const act = m.action(M, \"a\", ".len();
+        assert_eq!(
+            found,
+            [(
+                4,
+                u32::try_from(at + 1).expect("a short line"),
+                "`then`".to_owned(),
+                WRITE_CHANGES.to_owned()
+            )],
+            "`{parts}` is refused once, at the key"
+        );
+    }
+}
+
+#[test]
+fn an_action_with_a_then_still_reports_what_else_is_wrong_in_it() {
+    assert_eq!(
+        features(
+            "export const act = m.action(M, \"a\", { when: () => fetch(\"u\"), then: () => ({ n: 0 }) });"
+        ),
+        ["`fetch`", "`then`"],
+        "the condition is read, the change is not"
+    );
+}
+
+#[test]
+fn a_file_with_a_then_still_reads_its_other_parts() {
+    let reading = read(
+        "m.model.ts",
+        &source(
+            "export const old = m.action(M, \"old\", { then: () => ({ n: 0 }) });\n\
+             export const act = m.action(M, \"a\", { changes: () => ({ n: 1 }) });\n\
+             export const low = m.rule(M, \"low\", (s) => s.n < 3);",
+        ),
+    );
+    assert_eq!(
+        reading.problems.len(),
+        1,
+        "one refusal: {:?}",
+        reading.problems
+    );
+    let draft = reading.drafts.first().expect("the model");
+    let actions: Vec<&str> = draft.actions.iter().map(|part| part.id.as_str()).collect();
+    assert_eq!(actions, ["act"], "the action that is written well");
+    assert_eq!(draft.rules.len(), 1, "the rule");
+}
+
+#[test]
+fn a_call_on_the_model_is_refused_and_names_the_function_to_write() {
+    for (made, feature, message) in [
+        (
+            "export const a = M.action(\"a\", { then: () => ({ n: 0 }) });",
+            "`M.action`",
+            "a model has no methods: write `m.action(M, \"sentence\", { when: ..., changes: ... })`, with `changes` where an action had `then`",
+        ),
+        (
+            "export const r = M.rule({ says: \"r\", holds: (s) => s.n < 1 });",
+            "`M.rule`",
+            "a model has no methods: write `m.rule(M, \"sentence\", (s) => condition)`, with the sentence and the condition as arguments in place of `says` and `holds`",
+        ),
+        (
+            "export const e = M.end({ says: \"e\", when: (s) => s.n < 1 });",
+            "`M.end`",
+            "a model has no methods: write `m.end(M, \"sentence\", (s) => condition)`, with the sentence and the condition as arguments in place of `says` and `when`",
+        ),
+        (
+            "export const v = M.view({ title: \"t\" });",
+            "`M.view`",
+            "a model has no methods: write `m.view(M, { ... })`",
+        ),
+        (
+            "export const c = M.check({});",
+            "`M.check`",
+            "a model has no methods: its parts are made with `m.action(M, ...)`, `m.rule(M, ...)`, `m.end(M, ...)` and `m.view(M, ...)`",
+        ),
+    ] {
+        assert_eq!(
+            refusals(made),
+            [(4, 18, feature.to_owned(), message.to_owned())],
+            "`{made}` is refused once, at the call"
+        );
+    }
+}
+
+#[test]
+fn a_call_on_the_model_that_is_not_exported_is_refused_once() {
+    assert_eq!(
+        features("const r = M.rule({ says: \"r\", holds: (s) => s.n < 1 });"),
+        ["`M.rule`"],
+        "the call is what is wrong"
+    );
+}
+
+#[test]
+fn a_file_with_an_old_call_still_reads_the_other_models_and_parts() {
+    let reading = read(
+        "two.model.ts",
+        "import { m } from \"@earnest/model\";\n\
+         export const Porch = m.model(\"Porch\", { lit: m.boolean() });\n\
+         export const Hall = m.model(\"Hall\", { level: m.int(0, 2) });\n\
+         export const flip = Porch.action(\"flip\", { then: (s) => ({ lit: !s.lit }) });\n\
+         export const turn = m.action(Hall, \"turn\", { changes: (s) => ({ level: s.level }) });\n\
+         export const known = m.rule(Hall, \"known\", (s) => s.level < 3);\n\
+         export const done = m.end(Porch, \"done\", (s) => s.lit);\n",
+    );
+    let found: Vec<(u32, &str)> = reading
+        .problems
+        .iter()
+        .map(|problem| (problem.line, problem.feature.as_str()))
+        .collect();
+    assert_eq!(found, [(4, "`Porch.action`")], "only the old call");
+    let ids = |model: usize| -> Vec<String> {
+        let draft = reading.drafts.get(model).expect("a model");
+        let actions = draft.actions.iter().map(|part| part.id.clone());
+        let rules = draft.rules.iter().map(|part| part.id.clone());
+        let ends = draft.ends.iter().map(|part| part.id.clone());
+        actions.chain(rules).chain(ends).collect()
+    };
+    assert_eq!(ids(0), ["done"], "the porch keeps its end");
+    assert_eq!(ids(1), ["turn", "known"], "the hall keeps all it has");
+}
+
+#[test]
+fn a_key_for_the_sentence_or_the_condition_is_refused_and_names_the_arguments() {
+    for (made, column, written, replacement) in [
+        (
+            "export const r = m.rule(M, { says: \"r\", holds: (s) => s.n < 1 });",
+            28,
+            "{ says: \"r\", holds: (s) => s.n < 1 }",
+            "m.rule(M, \"sentence\", (s) => condition)",
+        ),
+        (
+            "export const r = m.rule(M, \"r\", { holds: (s) => s.n < 1 });",
+            33,
+            "{ holds: (s) => s.n < 1 }",
+            "m.rule(M, \"sentence\", (s) => condition)",
+        ),
+        (
+            "export const e = m.end(M, { says: \"e\", when: (s) => s.n < 1 });",
+            27,
+            "{ says: \"e\", when: (s) => s.n < 1 }",
+            "m.end(M, \"sentence\", (s) => condition)",
+        ),
+        (
+            "export const e = m.end(M, \"e\", { when: (s) => s.n < 1 });",
+            32,
+            "{ when: (s) => s.n < 1 }",
+            "m.end(M, \"sentence\", (s) => condition)",
+        ),
+    ] {
+        assert_eq!(
+            refusals(made),
+            [(
+                4,
+                column,
+                format!("`{written}`"),
+                format!(
+                    "the sentence and the function are arguments, not keys: write `{replacement}`"
+                )
+            )],
+            "`{made}` is refused once, at the object"
+        );
+    }
+}
+
+#[test]
+fn a_file_with_a_key_for_the_condition_still_reads_its_other_parts() {
+    let reading = read(
+        "m.model.ts",
+        &source(
+            "export const old = m.rule(M, \"old\", { holds: (s) => s.n < 3 });\n\
+             export const low = m.rule(M, \"low\", (s) => s.n < 3);\n\
+             export const full = m.end(M, \"Full\", (s) => s.n === 3);",
+        ),
+    );
+    assert_eq!(
+        reading.problems.len(),
+        1,
+        "one refusal: {:?}",
+        reading.problems
+    );
+    let draft = reading.drafts.first().expect("the model");
+    let rules: Vec<&str> = draft.rules.iter().map(|part| part.id.as_str()).collect();
+    assert_eq!(rules, ["low"], "the rule that is written well");
+    assert_eq!(draft.ends.len(), 1, "the end");
+}
+
+#[test]
+fn a_then_that_a_module_exports_is_refused_in_each_way_a_name_is_exported() {
+    let message = "a module with an export named `then` can't be awaited by `import()`, because JavaScript takes the module for a promise: export the constant under another name";
+    for (made, line, column, feature) in [
+        ("export const then = 3;", 4, 14, "`then`"),
+        ("export const a = 1, then = 2;", 4, 21, "`then`"),
+        ("const x = 3;\nexport { x as then };", 5, 10, "`x as then`"),
+        ("const then = 3;\nexport { then };", 5, 10, "`then`"),
+        (
+            "const x = 3;\nexport { x as \"then\" };",
+            5,
+            10,
+            "`x as \"then\"`",
+        ),
+    ] {
+        assert_eq!(
+            refusals(made),
+            [(line, column, feature.to_owned(), message.to_owned())],
+            "`{made}` is refused once"
+        );
+    }
+}
+
+#[test]
+fn a_then_that_is_only_a_type_is_not_an_export_of_the_module() {
+    assert_eq!(
+        problems("type then = number;\nexport type { then };\nconst x = 3;\nexport { x };"),
+        [],
+        "a type has no value in the module"
+    );
+}
+
+#[test]
+fn a_file_with_an_exported_then_still_reads_its_parts() {
+    let reading = read(
+        "m.model.ts",
+        &source(
+            "export const then = 3;\n\
+             export const low = m.rule(M, \"low\", (s) => s.n < 3);",
+        ),
+    );
+    assert_eq!(
+        reading.problems.len(),
+        1,
+        "one refusal: {:?}",
+        reading.problems
+    );
+    let draft = reading.drafts.first().expect("the model");
+    assert_eq!(draft.rules.len(), 1, "the rule");
+}
+
+#[test]
+fn a_call_on_the_model_outside_a_top_level_constant_names_the_model_as_a_value() {
+    for made in [
+        "M.rule({ says: \"r\", holds: (s) => s.n < 1 });",
+        "const make = () => M.action(\"a\", { then: () => ({ n: 0 }) });",
+        "export const all = { low: M.rule({ says: \"r\", holds: (s) => s.n < 1 }) };",
+    ] {
+        let found = problems(made);
+        assert!(
+            found
+                .iter()
+                .any(|problem| problem.message.contains("m.rule(Model, \"sentence\"")),
+            "`{made}` is refused with what to write: {found:?}"
+        );
+    }
 }

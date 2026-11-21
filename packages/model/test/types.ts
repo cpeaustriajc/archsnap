@@ -1,13 +1,18 @@
 import {
+  type Action,
+  type End,
   type LockValue,
   type MapValue,
+  type Model,
   type OwnedLockValue,
   type QueueValue,
   type RequestValue,
   type RetryValue,
+  type Rule,
   type SeqValue,
   type SetValue,
   type TimerValue,
+  type View,
   m,
 } from "@earnest/model";
 import type { AddToCartFocus, State, press } from "./models/cart.model.ts";
@@ -23,15 +28,76 @@ type Holds<Claim extends true> = Claim;
 
 type PressedBy = "keyboard" | "virtual" | "mouse";
 
+const Press = m.enum(["keyboard", "virtual", "mouse"]);
+
 type Changes = ReturnType<typeof press.changes>;
 
 type PressInput = Parameters<typeof press.when>[1];
 
-type RuleGiven = Parameters<typeof AddToCartFocus.rule>[0];
+type RuleGiven = Parameters<typeof m.rule<typeof AddToCartFocus.fields>>[2];
 
-type EndGiven = Parameters<typeof AddToCartFocus.end>[0];
+type EndGiven = Parameters<typeof m.end<typeof AddToCartFocus.fields>>[2];
 
-type ViewGiven = NonNullable<Parameters<typeof AddToCartFocus.view>[0]>;
+type ViewGiven = NonNullable<Parameters<typeof m.view<typeof AddToCartFocus.fields>>[1]>;
+
+type ThenKeys<Given> = Extract<keyof Given, "then">;
+
+type PartMakers<Given> = Extract<
+  keyof Given,
+  | "action"
+  | "rule"
+  | "end"
+  | "view"
+  | "declareAction"
+  | "declareRule"
+  | "declareEnd"
+  | "declareView"
+>;
+
+const Cart = m.model("Cart", {
+  cta: m.enum(["Add", "Adding", "InCart"]).initial("Add"),
+  pressBy: Press.optional().initial(null),
+  count: m.int(0, 3).initial(0),
+});
+
+const cartPress = m.action(Cart, "the buyer presses Add", {
+  input: { by: Press },
+  when: (s, { by }) => s.cta === "Add" && by !== "virtual",
+  changes: (_, { by }) => ({ cta: "Adding", pressBy: by }),
+});
+
+const changesFirst = m.action(Cart, "changes written first", {
+  changes: (_, { by }) => ({ pressBy: by }),
+  when: (_, { by }) => by === "mouse",
+  input: { by: Press },
+});
+
+const whenFirst = m.action(Cart, "when written first", {
+  when: (_, { by }) => by === "mouse",
+  input: { by: Press },
+  changes: (_, { by }) => ({ pressBy: by }),
+});
+
+const inputLast = m.action(Cart, "input written last", {
+  changes: (_, { by }) => ({ pressBy: by }),
+  input: { by: Press },
+  when: (_, { by }) => by === "mouse",
+});
+
+const noInput = m.action(Cart, "no input", { changes: () => ({ cta: "InCart" }) });
+
+const bothMembers = m.action(Cart, "when and changes without input", {
+  changes: (s) => ({ count: s.count + 1 }),
+  when: (s) => s.count < 3,
+});
+
+const pressed = m.rule(Cart, "A press is recorded", (s) => s.cta === "Add" || s.pressBy !== null);
+
+const inCart = m.end(Cart, "The item is in the cart", (s) => s.cta === "InCart");
+
+const cartView = m.view(Cart, { title: "Cart", step: { press: "press Add" } });
+
+const emptyView = m.view(Cart);
 
 const Owner = m.enum(["ann", "bob"]);
 
@@ -118,11 +184,10 @@ export type Proofs = [
   Holds<Rejects<PressInput, { by: null }>>,
   Holds<Rejects<PressInput, Record<never, never>>>,
 
-  Holds<Accepts<RuleGiven, { says: string; holds: (state: State) => boolean }>>,
-  Holds<Rejects<RuleGiven, { says: string; holds: (state: State) => number }>>,
-  Holds<Rejects<RuleGiven, { holds: (state: State) => boolean }>>,
-  Holds<Rejects<RuleGiven, { says: string; holds: (state: { missing: 1 }) => boolean }>>,
-  Holds<Rejects<EndGiven, { says: string; when: (state: State) => string }>>,
+  Holds<Accepts<RuleGiven, (state: State) => boolean>>,
+  Holds<Rejects<RuleGiven, (state: State) => number>>,
+  Holds<Rejects<RuleGiven, (state: { missing: 1 }) => boolean>>,
+  Holds<Rejects<EndGiven, (state: State) => string>>,
   Holds<Rejects<ViewGiven, { colors: { broken: 1 } }>>,
   Holds<Rejects<ViewGiven, { state: (state: State) => number }>>,
 
@@ -143,4 +208,28 @@ export type Proofs = [
   Holds<Same<SeqValue<"a">["first"], "a" | null>>,
   Holds<Same<QueueValue<"a">["head"], "a" | null>>,
   Holds<Same<OwnedLockValue<"ann">["holder"], "ann" | null>>,
+
+  Holds<Same<typeof cartPress, Action<typeof Cart.fields, { by: typeof Press }>>>,
+  Holds<Same<typeof changesFirst, typeof cartPress>>,
+  Holds<Same<typeof whenFirst, typeof cartPress>>,
+  Holds<Same<typeof inputLast, typeof cartPress>>,
+  Holds<Same<typeof noInput, Action<typeof Cart.fields>>>,
+  Holds<Same<typeof bothMembers, Action<typeof Cart.fields>>>,
+  Holds<Same<typeof pressed, Rule<typeof Cart.fields>>>,
+  Holds<Same<typeof inCart, End<typeof Cart.fields>>>,
+  Holds<Same<typeof cartView, View<typeof Cart.fields>>>,
+  Holds<Same<typeof emptyView, View<typeof Cart.fields>>>,
+  Holds<Same<Parameters<typeof cartPress.changes>[0], m.Infer<typeof Cart>>>,
+  Holds<Same<Parameters<typeof cartPress.changes>[1], PressInput>>,
+  Holds<Same<Parameters<typeof changesFirst.changes>[1], PressInput>>,
+  Holds<Same<Parameters<typeof whenFirst.when>[1], PressInput>>,
+  Holds<Same<Parameters<typeof inputLast.when>[1], PressInput>>,
+  Holds<Same<Parameters<typeof noInput.changes>[1], Readonly<Record<never, never>>>>,
+
+  Holds<Same<ThenKeys<typeof cartPress>, never>>,
+  Holds<Same<ThenKeys<typeof pressed>, never>>,
+  Holds<Same<ThenKeys<typeof inCart>, never>>,
+  Holds<Same<ThenKeys<typeof cartView>, never>>,
+  Holds<Same<ThenKeys<ReturnType<typeof Cart.runners>["actions"][number]>, never>>,
+  Holds<Same<PartMakers<Model<typeof Cart.fields>>, never>>,
 ];

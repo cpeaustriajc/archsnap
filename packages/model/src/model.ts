@@ -30,21 +30,6 @@ export interface ActionSpec<
 }
 
 /**
- * What `Model.action` is given: an `ActionSpec` whose `changes` is called `then`. Write `input`
- * before `when` and `then`, so that their second parameter is typed from it. Kept until models
- * are written with `m.action`.
- */
-export interface ThenActionSpec<
-  F extends Fields,
-  I extends Fields,
-  Changes extends Partial<StateOf<F>> = Partial<StateOf<F>>,
-> {
-  readonly input?: I;
-  readonly when?: (state: StateOf<F>, input: StateOf<I>) => boolean;
-  readonly then: (state: StateOf<F>, input: StateOf<I>) => OnlyFields<F, Changes>;
-}
-
-/**
  * One thing that can happen in a model. Export it from the model file: the name of the export is
  * its id. `when` is always present here, and always true for an action declared without one.
  */
@@ -56,33 +41,25 @@ export interface Action<F extends Fields, I extends Fields = NoInput> {
   readonly changes: (state: StateOf<F>, input: StateOf<I>) => Partial<StateOf<F>>;
 }
 
-/** What `Model.rule` is given: the reviewer's sentence and the condition every state must meet. */
-export interface RuleSpec<F extends Fields> {
+/** A rule every reachable state must meet. The name of its export is its id. */
+export interface Rule<F extends Fields> {
+  readonly kind: "rule";
   readonly says: string;
   readonly holds: (state: StateOf<F>) => boolean;
-}
-
-/** A rule every reachable state must meet. The name of its export is its id. */
-export interface Rule<F extends Fields> extends RuleSpec<F> {
-  readonly kind: "rule";
-}
-
-/** What `Model.end` is given: a sentence and the states where stopping is correct. */
-export interface EndSpec<F extends Fields> {
-  readonly says: string;
-  readonly when: (state: StateOf<F>) => boolean;
 }
 
 /**
  * States where stopping is correct. A state with no possible action that no end covers is
  * stuck. The name of its export is its id.
  */
-export interface End<F extends Fields> extends EndSpec<F> {
+export interface End<F extends Fields> {
   readonly kind: "end";
+  readonly says: string;
+  readonly when: (state: StateOf<F>) => boolean;
 }
 
 /**
- * What `Model.view` is given, all of it optional: the chart's title, the label of a state, the
+ * What `m.view` is given, all of it optional: the chart's title, the label of a state, the
  * group a state is drawn in, arrow labels by action id (the default is the action's sentence)
  * and colors.
  */
@@ -143,19 +120,29 @@ export interface AnyModel {
   runners(): Runners;
 }
 
+interface Parts<F extends Fields> {
+  readonly actions: ActionRunner[];
+  readonly rules: RuleRunner[];
+  readonly ends: EndRunner[];
+  readonly views: View<F>[];
+}
+
+let partsOf: <F extends Fields>(model: Model<F>) => Parts<F>;
+
 /**
- * A model: named fields, and the actions, rules, ends and views declared on it. `action`,
- * `rule`, `end` and `view` each give back a plain value to export, and also add it to this
- * model, in the order they are called, which is the order a search tries actions in.
+ * A model: named fields, and the actions, rules, ends and views that `m.action`, `m.rule`,
+ * `m.end` and `m.view` have declared on it, in the order they were called, which is the order a
+ * search tries actions in.
  */
 export class Model<F extends Fields> {
   readonly name: string;
   readonly fields: F;
   readonly #state: Declaration<StateOf<F>>;
-  readonly #actions: ActionRunner[] = [];
-  readonly #rules: RuleRunner[] = [];
-  readonly #ends: EndRunner[] = [];
-  readonly #views: View<F>[] = [];
+  readonly #parts: Parts<F> = { actions: [], rules: [], ends: [], views: [] };
+
+  static {
+    partsOf = (model) => model.#parts;
+  }
 
   /** Model files call `m.model(name, fields)` instead. */
   constructor(name: string, fields: F) {
@@ -187,100 +174,9 @@ export class Model<F extends Fields> {
       .filter(isState);
   }
 
-  /**
-   * Declares something that can happen, written with `then` where `m.action` writes `changes`.
-   * `sentence` says it in the reviewer's words.
-   */
-  action<
-    I extends Fields = NoInput,
-    const Changes extends Partial<StateOf<F>> = Partial<StateOf<F>>,
-  >(sentence: string, spec: ThenActionSpec<F, I, Changes>): Action<F, I> {
-    const { then: changes, ...rest } = spec;
-    return this.declareAction(sentence, { ...rest, changes });
-  }
-
-  /** Declares a rule: `holds` must be true in every state the model can reach. */
-  rule(spec: RuleSpec<F>): Rule<F> {
-    return this.declareRule(spec.says, spec.holds);
-  }
-
-  /** Declares where stopping is correct, so that those states are not reported as stuck. */
-  end(spec: EndSpec<F>): End<F> {
-    return this.declareEnd(spec.says, spec.when);
-  }
-
-  /** Declares how the model is drawn. A model needs no view. */
-  view(spec: ViewSpec<F> = {}): View<F> {
-    return this.declareView(spec);
-  }
-
-  /**
-   * Adds an action to the model and gives it back, as `m.action` does; call that in a model
-   * file. Actions are tried in the order they are added.
-   */
-  declareAction<
-    I extends Fields = NoInput,
-    const Changes extends Partial<StateOf<F>> = Partial<StateOf<F>>,
-  >(sentence: string, spec: ActionSpec<F, I, Changes>): Action<F, I> {
-    const declared = spec.input === undefined ? null : record(spec.input);
-    const isInput = (input: unknown): input is StateOf<I> =>
-      declared === null ? isRecord(input) && Object.keys(input).length === 0 : declared.has(input);
-    const known = (input: Row): StateOf<I> => {
-      if (!isInput(input)) {
-        throw new Error(`${this.name}: "${sentence}" was given an input it does not declare`);
-      }
-      return input;
-    };
-    const action: Action<F, I> = Object.freeze({
-      kind: "action",
-      sentence,
-      input: spec.input,
-      when: spec.when ?? (() => true),
-      changes: spec.changes,
-    });
-    this.#actions.push({
-      part: action,
-      sentence,
-      inputs: spec.input === undefined ? [] : Object.entries(spec.input),
-      when: (state, input) => action.when(this.#known(state), known(input)),
-      changes: (state, input) =>
-        this.#changed(state, action.changes(this.#known(state), known(input)), sentence),
-    });
-    return action;
-  }
-
-  /** Adds a rule to the model and gives it back, as `m.rule` does; call that in a model file. */
-  declareRule(says: string, holds: (state: StateOf<F>) => boolean): Rule<F> {
-    const rule: Rule<F> = Object.freeze({ kind: "rule", says, holds });
-    this.#rules.push({
-      part: rule,
-      says,
-      holds: (state) => rule.holds(this.#known(state)),
-    });
-    return rule;
-  }
-
-  /** Adds an end to the model and gives it back, as `m.end` does; call that in a model file. */
-  declareEnd(says: string, when: (state: StateOf<F>) => boolean): End<F> {
-    const end: End<F> = Object.freeze({ kind: "end", says, when });
-    this.#ends.push({
-      part: end,
-      says,
-      when: (state) => end.when(this.#known(state)),
-    });
-    return end;
-  }
-
-  /** Adds a view to the model and gives it back, as `m.view` does; call that in a model file. */
-  declareView(spec: ViewSpec<F> = {}): View<F> {
-    const view: View<F> = Object.freeze({ ...spec, kind: "view" });
-    this.#views.push(view);
-    return view;
-  }
-
   /** The views declared so far, in declaration order. */
   get views(): readonly View<F>[] {
-    return [...this.#views];
+    return [...this.#parts.views];
   }
 
   /**
@@ -288,31 +184,32 @@ export class Model<F extends Fields> {
    * the model's types. `explore` and `replay` are built on this.
    */
   runners(): Runners {
-    return { actions: [...this.#actions], rules: [...this.#rules], ends: [...this.#ends] };
-  }
-
-  #known(state: Row): StateOf<F> {
-    if (!this.has(state)) {
-      throw new Error(`${this.name}: the state is outside what the model declares`);
-    }
-    return state;
-  }
-
-  #changed(state: Row, changes: unknown, sentence: string): Row {
-    if (!isRecord(changes)) {
-      throw new Error(
-        `${this.name}: the then of "${sentence}" must give back an object holding the fields that change`,
-      );
-    }
-    const stray = Object.keys(changes).find((name) => !Object.hasOwn(this.fields, name));
-    if (stray !== undefined) {
-      throw new Error(
-        `${this.name}: the then of "${sentence}" gives \`${stray}\`, which is not a field of the model`,
-      );
-    }
-    return frozen({ ...state, ...changes });
+    const { actions, rules, ends } = this.#parts;
+    return { actions: [...actions], rules: [...rules], ends: [...ends] };
   }
 }
+
+const known = <F extends Fields>(model: Model<F>, state: Row): StateOf<F> => {
+  if (!model.has(state)) {
+    throw new Error(`${model.name}: the state is outside what the model declares`);
+  }
+  return state;
+};
+
+const changed = (model: AnyModel, state: Row, changes: unknown, sentence: string): Row => {
+  if (!isRecord(changes)) {
+    throw new Error(
+      `${model.name}: the then of "${sentence}" must give back an object holding the fields that change`,
+    );
+  }
+  const stray = Object.keys(changes).find((name) => !Object.hasOwn(model.fields, name));
+  if (stray !== undefined) {
+    throw new Error(
+      `${model.name}: the then of "${sentence}" gives \`${stray}\`, which is not a field of the model`,
+    );
+  }
+  return frozen({ ...state, ...changes });
+};
 
 /**
  * Declares a model: a name and its fields, each built with an `m` builder. The state type is
@@ -335,7 +232,38 @@ export const action = <
   model: Model<F>,
   sentence: string,
   spec: ActionSpec<F, I, Changes>,
-): Action<F, I> => model.declareAction(sentence, spec);
+): Action<F, I> => {
+  const declared = spec.input === undefined ? null : record(spec.input);
+  const isInput = (input: unknown): input is StateOf<I> =>
+    declared === null ? isRecord(input) && Object.keys(input).length === 0 : declared.has(input);
+  const knownInput = (input: Row): StateOf<I> => {
+    if (!isInput(input)) {
+      throw new Error(`${model.name}: "${sentence}" was given an input it does not declare`);
+    }
+    return input;
+  };
+  const declaredAction: Action<F, I> = Object.freeze({
+    kind: "action",
+    sentence,
+    input: spec.input,
+    when: spec.when ?? (() => true),
+    changes: spec.changes,
+  });
+  partsOf(model).actions.push({
+    part: declaredAction,
+    sentence,
+    inputs: spec.input === undefined ? [] : Object.entries(spec.input),
+    when: (state, input) => declaredAction.when(known(model, state), knownInput(input)),
+    changes: (state, input) =>
+      changed(
+        model,
+        state,
+        declaredAction.changes(known(model, state), knownInput(input)),
+        sentence,
+      ),
+  });
+  return declaredAction;
+};
 
 /**
  * Declares a rule of `model`: `holds` must be true in every state the model can reach.
@@ -346,7 +274,15 @@ export const rule = <F extends Fields>(
   model: Model<F>,
   sentence: string,
   holds: (state: StateOf<F>) => boolean,
-): Rule<F> => model.declareRule(sentence, holds);
+): Rule<F> => {
+  const declaredRule: Rule<F> = Object.freeze({ kind: "rule", says: sentence, holds });
+  partsOf(model).rules.push({
+    part: declaredRule,
+    says: sentence,
+    holds: (state) => declaredRule.holds(known(model, state)),
+  });
+  return declaredRule;
+};
 
 /**
  * Declares where stopping is correct in `model`, so that those states are not reported as
@@ -357,11 +293,22 @@ export const end = <F extends Fields>(
   model: Model<F>,
   sentence: string,
   when: (state: StateOf<F>) => boolean,
-): End<F> => model.declareEnd(sentence, when);
+): End<F> => {
+  const declaredEnd: End<F> = Object.freeze({ kind: "end", says: sentence, when });
+  partsOf(model).ends.push({
+    part: declaredEnd,
+    says: sentence,
+    when: (state) => declaredEnd.when(known(model, state)),
+  });
+  return declaredEnd;
+};
 
 /**
  * Declares how `earnest chart` draws `model`. A model needs no view. Export the result from the
  * model file: the name of the export is the view's id.
  */
-export const view = <F extends Fields>(model: Model<F>, spec: ViewSpec<F> = {}): View<F> =>
-  model.declareView(spec);
+export const view = <F extends Fields>(model: Model<F>, spec: ViewSpec<F> = {}): View<F> => {
+  const declaredView: View<F> = Object.freeze({ ...spec, kind: "view" });
+  partsOf(model).views.push(declaredView);
+  return declaredView;
+};

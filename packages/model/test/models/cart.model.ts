@@ -10,23 +10,21 @@ export const AddToCartFocus = m.model("AddToCartFocus", {
   keyboardAdd: m.boolean().initial(false),
 });
 
-export const press = AddToCartFocus.action("the buyer presses Add", {
+export const press = m.action(AddToCartFocus, "the buyer presses Add", {
   input: { by: Press },
   when: (s, { by }) => s.cta === "Add" && (by === "mouse" || s.focus === "Add"),
-  then: (_, { by }) => ({ cta: "Adding", pressBy: by, keyboardAdd: by === "keyboard" }),
+  changes: (_, { by }) => ({ cta: "Adding", pressBy: by, keyboardAdd: by === "keyboard" }),
 });
 
-export const focusLandsOnInCart = AddToCartFocus.rule({
-  says: "After a keyboard add lands, focus is on In cart",
-  holds: (s) => s.pressBy !== "keyboard" || s.cta !== "InCart" || s.focus === "InCart",
-});
+export const focusLandsOnInCart = m.rule(
+  AddToCartFocus,
+  "After a keyboard add lands, focus is on In cart",
+  (s) => s.pressBy !== "keyboard" || s.cta !== "InCart" || s.focus === "InCart",
+);
 
-export const inCart = AddToCartFocus.end({
-  says: "The item is in the cart",
-  when: (s) => s.cta === "InCart",
-});
+export const inCart = m.end(AddToCartFocus, "The item is in the cart", (s) => s.cta === "InCart");
 
-export const view = AddToCartFocus.view({
+export const view = m.view(AddToCartFocus, {
   title: "Add to cart focus",
   state: (s) => `${s.cta}, focus on ${s.focus}`,
   group: (s) => s.surface,

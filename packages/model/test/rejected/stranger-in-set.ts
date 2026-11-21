@@ -9,6 +9,6 @@ export const Cart = m.model("Cart", {
   count: m.int(0, 3).initial(0),
 });
 
-export const press = Cart.action("the buyer presses Add", {
-  then: (s) => ({ seen: s.seen.add("touch") }),
+export const press = m.action(Cart, "the buyer presses Add", {
+  changes: (s) => ({ seen: s.seen.add("touch") }),
 });

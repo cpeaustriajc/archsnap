@@ -9,13 +9,19 @@ export const Cart = m.model("Cart", {
   count: m.int(0, 3).initial(0),
 });
 
-export const press = Cart.action("the buyer presses Add", {
-  input: { by: Press },
+export const press = m.action(Cart, "the buyer presses Add", {
+  changes: (s, { by }) => ({
+    cta: "Adding",
+    pressBy: by,
+    seen: s.seen.add(by),
+    count: s.count + 1,
+  }),
   when: (s, { by }) => s.cta === "Add" && !s.seen.has(by),
-  then: (s, { by }) => ({ cta: "Adding", pressBy: by, seen: s.seen.add(by), count: s.count + 1 }),
+  input: { by: Press },
 });
 
-export const counted = Cart.rule({
-  says: "The count is never negative",
-  holds: (s) => s.count >= 0,
-});
+export const counted = m.rule(Cart, "The count is never negative", (s) => s.count >= 0);
+
+export const added = m.end(Cart, "The item is in the cart", (s) => s.cta === "InCart");
+
+export const view = m.view(Cart, { title: "Cart", step: { press: "press Add" } });

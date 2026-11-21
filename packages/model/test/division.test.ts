@@ -29,11 +29,11 @@ test("m.div of a negative number, or by a divisor below 1, throws the division f
   }
 });
 
-test("a division by zero in a then is a fault, as the checker reports it", () => {
+test("a division by zero in a change is a fault, as the checker reports it", () => {
   const Split = m.model("Split", { n: m.int(0, 3).initial(3), q: m.int(0, 3).initial(0) });
-  const cut = Split.action("the number is cut", {
+  const cut = m.action(Split, "the number is cut", {
     input: { by: m.int(0, 2) },
-    then: (s, { by }) => ({ q: m.div(s.n, by) }),
+    changes: (s, { by }) => ({ q: m.div(s.n, by) }),
   });
   const found = explore(Split, { exports: { cut } });
   expect(found.states).toBe(3);
@@ -43,18 +43,18 @@ test("a division by zero in a then is a fault, as the checker reports it", () =>
 
 test("a division of a negative number in a rule, an end and a when is a fault", () => {
   const Rule = m.model("Rule", { n: m.int(-1, 1).initial(-1) });
-  const rule = Rule.rule({ says: "Rule", holds: (s) => m.div(s.n, 1) !== 99 });
-  const always = Rule.end({ says: "Always", when: () => true });
+  const rule = m.rule(Rule, "Rule", (s) => m.div(s.n, 1) !== 99);
+  const always = m.end(Rule, "Always", () => true);
   expect(messages(explore(Rule, { exports: { rule, always } }))).toStrictEqual([
     `the rule \`rule\` ${FAULT}`,
   ]);
   const When = m.model("When", { n: m.int(-1, 1).initial(-1) });
-  const inWhen = When.action("when", { when: (s) => m.div(s.n, 1) === 0, then: () => ({}) });
+  const inWhen = m.action(When, "when", { when: (s) => m.div(s.n, 1) === 0, changes: () => ({}) });
   expect(messages(explore(When, { exports: { inWhen } }))).toStrictEqual([
     `the \`when\` of the action \`inWhen\` ${FAULT}`,
   ]);
   const Ended = m.model("Ended", { n: m.int(-1, 1).initial(-1) });
-  const over = Ended.end({ says: "Over", when: (s) => m.div(s.n, 1) === 0 });
+  const over = m.end(Ended, "Over", (s) => m.div(s.n, 1) === 0);
   expect(messages(explore(Ended, { exports: { over } }))).toStrictEqual([
     `the end \`over\` ${FAULT}`,
   ]);
@@ -62,7 +62,7 @@ test("a division of a negative number in a rule, an end and a when is a fault", 
 
 test("replay reports the division fault of an action", () => {
   const Then = m.model("Then", { n: m.int(0, 2).initial(1), d: m.int(0, 1).initial(0) });
-  const share = Then.action("share", { then: (s) => ({ n: m.div(s.n, s.d) }) });
+  const share = m.action(Then, "share", { changes: (s) => ({ n: m.div(s.n, s.d) }) });
   const state = (n: number) => [
     { name: "n", value: n },
     { name: "d", value: 0 },

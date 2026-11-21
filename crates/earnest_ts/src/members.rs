@@ -7,6 +7,7 @@ use earnest_ast::{
 };
 use oxc_ast::ast::{
     Argument, ArrowFunctionExpression, BindingPattern, CallExpression, Expression, ObjectPattern,
+    ObjectPropertyKind,
 };
 use oxc_span::GetSpan;
 
@@ -18,32 +19,9 @@ pub(crate) enum MemberKind {
     View,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum Form {
-    OnModel,
-    OnLibrary,
-}
-
-impl Form {
-    fn leading(self) -> usize {
-        match self {
-            Self::OnModel => 0,
-            Self::OnLibrary => 1,
-        }
-    }
-
-    fn change_key(self) -> &'static str {
-        match self {
-            Self::OnModel => "then",
-            Self::OnLibrary => "changes",
-        }
-    }
-}
-
 pub(crate) struct Member<'p, 'a> {
     pub(crate) model: usize,
     pub(crate) kind: MemberKind,
-    pub(crate) form: Form,
     pub(crate) id: String,
     pub(crate) start: u32,
     pub(crate) call: &'p CallExpression<'a>,
@@ -60,6 +38,15 @@ impl MemberKind {
         }
     }
 }
+
+const CHANGES_NOT_THEN: &str = "an object with a `then` is a promise to JavaScript, and an action \
+    that was exported would hang an `async` function: write `changes`";
+const CONDITION_KEYS: [&str; 3] = ["says", "holds", "when"];
+
+const SENTENCE: usize = 1;
+const FUNCTION: usize = 2;
+const ACTION_OBJECT: usize = 2;
+const VIEW_OBJECT: usize = 1;
 
 type Entries<'p, 'a> = Vec<(String, u32, &'p Expression<'a>)>;
 
@@ -83,11 +70,26 @@ fn pick<'p, 'a>(entries: &Entries<'p, 'a>, key: &str) -> Option<&'p Expression<'
         .map(|(_, _, value)| *value)
 }
 
+fn has_condition_key(wrapped: &Expression<'_>) -> bool {
+    let Expression::ObjectExpression(object) = bare(wrapped) else {
+        return false;
+    };
+    object.properties.iter().any(|property| {
+        matches!(
+            property,
+            ObjectPropertyKind::ObjectProperty(written)
+                if written
+                    .key
+                    .static_name()
+                    .is_some_and(|name| CONDITION_KEYS.contains(&name.as_ref()))
+        )
+    })
+}
+
 impl Reader<'_> {
     pub(crate) fn member_of(&mut self, draft: &mut Draft, member: Member<'_, '_>) {
         let Member {
             kind,
-            form,
             id,
             start,
             call,
@@ -95,21 +97,21 @@ impl Reader<'_> {
         } = member;
         match kind {
             MemberKind::Action => {
-                if let Some(action) = self.action(id, start, call, form) {
+                if let Some(action) = self.action(id, start, call) {
                     draft.actions.push(action);
                 }
             }
             MemberKind::Rule => {
-                if let Some(rule) = self.rule(id, start, call, form) {
+                if let Some(rule) = self.rule(id, start, call) {
                     draft.rules.push(rule);
                 }
             }
             MemberKind::End => {
-                if let Some(end) = self.end(id, start, call, form) {
+                if let Some(end) = self.end(id, start, call) {
                     draft.ends.push(end);
                 }
             }
-            MemberKind::View => draft.view = self.view(call, form),
+            MemberKind::View => draft.view = self.view(call),
         }
     }
 
@@ -129,6 +131,7 @@ impl Reader<'_> {
         call: &'p CallExpression<'a>,
         index: usize,
         allowed: &[&str],
+        renamed: &[(&str, &str)],
     ) -> Option<Entries<'p, 'a>> {
         let expected = index + 1;
         let found = call.arguments.get(index).and_then(Argument::as_expression);
@@ -145,7 +148,9 @@ impl Reader<'_> {
         };
         let entries = self.entries(object);
         for (name, start, _) in &entries {
-            if !allowed.contains(&name.as_str()) {
+            if let Some((_, message)) = renamed.iter().find(|(key, _)| key == name) {
+                self.refuse(*start, name, message);
+            } else if !allowed.contains(&name.as_str()) {
                 self.refuse(
                     *start,
                     name,
@@ -176,19 +181,16 @@ impl Reader<'_> {
         found
     }
 
-    fn action(
-        &mut self,
-        id: String,
-        start: u32,
-        call: &CallExpression<'_>,
-        form: Form,
-    ) -> Option<ActionDraft> {
-        let change_key = form.change_key();
-        let sentence_at = form.leading();
-        let entries = self.parts(call, sentence_at + 1, &["input", "when", change_key])?;
+    fn action(&mut self, id: String, start: u32, call: &CallExpression<'_>) -> Option<ActionDraft> {
+        let entries = self.parts(
+            call,
+            ACTION_OBJECT,
+            &["input", "when", "changes"],
+            &[("then", CHANGES_NOT_THEN)],
+        )?;
         let label = call
             .arguments
-            .get(sentence_at)
+            .get(SENTENCE)
             .and_then(Argument::as_expression)
             .map(|sentence| self.sentence(sentence))?;
         let inputs: Vec<(String, Shape)> = match pick(&entries, "input") {
@@ -196,11 +198,14 @@ impl Reader<'_> {
             None => Vec::new(),
         };
         let when = pick(&entries, "when").and_then(|written| self.arrow(written));
-        let then = self
-            .needed(&entries, change_key, call)
-            .and_then(|written| self.arrow(written));
+        let changes = if pick(&entries, "then").is_some() {
+            pick(&entries, "changes")
+        } else {
+            self.needed(&entries, "changes", call)
+        };
+        let changing = changes.and_then(|written| self.arrow(written));
         let guard = when.map(|arrow| self.action_body(arrow));
-        let change = then.map(|arrow| self.action_body(arrow))?;
+        let change = changing.map(|arrow| self.action_body(arrow))?;
         Some(ActionDraft {
             id,
             label,
@@ -312,52 +317,53 @@ impl Reader<'_> {
     fn sentence_and_function(
         &mut self,
         call: &CallExpression<'_>,
-        form: Form,
-        key: &str,
     ) -> (Option<String>, Option<StateFunction>) {
-        match form {
-            Form::OnModel => {
-                let Some(entries) = self.parts(call, 0, &["says", key]) else {
-                    return (None, None);
-                };
-                let says = self
-                    .needed(&entries, "says", call)
-                    .map(|sentence| self.sentence(sentence));
-                let function = self
-                    .needed(&entries, key, call)
-                    .and_then(|written| self.state_function(written));
-                (says, function)
-            }
-            Form::OnLibrary => {
-                let sentence = call.arguments.get(1).and_then(Argument::as_expression);
-                let function = call.arguments.get(2).and_then(Argument::as_expression);
-                let (Some(sentence), Some(function), 3) =
-                    (sentence, function, call.arguments.len())
-                else {
-                    let callee = self.quoted(call.callee.span());
-                    self.refuse(
-                        call.span.start,
-                        &callee,
-                        &format!(
-                            "its model, its sentence and its condition are needed here, as in \
-                             `{callee}(Model, \"sentence\", (s) => ...)`"
-                        ),
-                    );
-                    return (None, None);
-                };
-                (Some(self.sentence(sentence)), self.state_function(function))
-            }
+        let sentence = call
+            .arguments
+            .get(SENTENCE)
+            .and_then(Argument::as_expression);
+        let function = call
+            .arguments
+            .get(FUNCTION)
+            .and_then(Argument::as_expression);
+        let keyed = [sentence, function]
+            .into_iter()
+            .flatten()
+            .find(|written| has_condition_key(written));
+        if let Some(object) = keyed {
+            let written = self.quoted(object.span());
+            let callee = self.quoted(call.callee.span());
+            let model = call
+                .arguments
+                .first()
+                .map_or_else(|| "Model".to_owned(), |first| self.quoted(first.span()));
+            self.refuse(
+                object.span().start,
+                &written,
+                &format!(
+                    "the sentence and the function are arguments, not keys: write \
+                     `{callee}({model}, \"sentence\", (s) => condition)`"
+                ),
+            );
+            return (None, None);
         }
+        let (Some(sentence), Some(function), 3) = (sentence, function, call.arguments.len()) else {
+            let callee = self.quoted(call.callee.span());
+            self.refuse(
+                call.span.start,
+                &callee,
+                &format!(
+                    "its model, its sentence and its condition are needed here, as in \
+                     `{callee}(Model, \"sentence\", (s) => ...)`"
+                ),
+            );
+            return (None, None);
+        };
+        (Some(self.sentence(sentence)), self.state_function(function))
     }
 
-    fn rule(
-        &mut self,
-        id: String,
-        start: u32,
-        call: &CallExpression<'_>,
-        form: Form,
-    ) -> Option<RuleDraft> {
-        let (says, holds) = self.sentence_and_function(call, form, "holds");
+    fn rule(&mut self, id: String, start: u32, call: &CallExpression<'_>) -> Option<RuleDraft> {
+        let (says, holds) = self.sentence_and_function(call);
         let condition = holds?;
         Some(RuleDraft {
             id,
@@ -369,14 +375,8 @@ impl Reader<'_> {
         })
     }
 
-    fn end(
-        &mut self,
-        id: String,
-        start: u32,
-        call: &CallExpression<'_>,
-        form: Form,
-    ) -> Option<EndDraft> {
-        let (says, when) = self.sentence_and_function(call, form, "when");
+    fn end(&mut self, id: String, start: u32, call: &CallExpression<'_>) -> Option<EndDraft> {
+        let (says, when) = self.sentence_and_function(call);
         let condition = when?;
         Some(EndDraft {
             id,
@@ -387,9 +387,9 @@ impl Reader<'_> {
         })
     }
 
-    fn view(&mut self, call: &CallExpression<'_>, form: Form) -> ViewDraft {
+    fn view(&mut self, call: &CallExpression<'_>) -> ViewDraft {
         let allowed = ["title", "state", "group", "step", "colors"];
-        let Some(entries) = self.parts(call, form.leading(), &allowed) else {
+        let Some(entries) = self.parts(call, VIEW_OBJECT, &allowed, &[]) else {
             return ViewDraft::default();
         };
         ViewDraft {
@@ -463,7 +463,7 @@ mod tests {
     }
 
     fn action(parts: &str) -> ActionDraft {
-        let rest = format!("export const act = M.action(\"the user acts\", {parts});\n");
+        let rest = format!("export const act = m.action(M, \"the user acts\", {parts});\n");
         draft(&rest).actions.into_iter().next().expect("one action")
     }
 
@@ -476,8 +476,8 @@ mod tests {
     }
 
     #[test]
-    fn an_action_with_only_a_then() {
-        let found = action("{ then: (s) => ({ n: s.n + 1 }) }");
+    fn an_action_with_only_its_changes() {
+        let found = action("{ changes: (s) => ({ n: s.n + 1 }) }");
         assert_eq!(found.id, "act", "the exported name");
         assert_eq!(found.label, "the user acts", "the sentence");
         assert_eq!(found.place, Place { line: 4, column: 1 }, "the `export`");
@@ -497,7 +497,7 @@ mod tests {
     fn an_action_that_picks_its_input() {
         let found = action(
             "{ input: { by: Press }, when: (s, { by }) => s.n < 3 && by === \"key\", \
-             then: (_, { by }) => ({ last: by }) }",
+             changes: (_, { by }) => ({ last: by }) }",
         );
         let inputs: Vec<(&str, String)> = found
             .inputs
@@ -525,9 +525,9 @@ mod tests {
         assert_eq!(
             found.change.state_name.as_deref(),
             Some("_"),
-            "the state in `then`"
+            "the state in `changes`"
         );
-        assert_eq!(found.change.taken, ["by"], "`then` takes the input");
+        assert_eq!(found.change.taken, ["by"], "`changes` takes the input");
         assert_eq!(show(&found.change.term), "{last: by}", "the change");
     }
 
@@ -535,7 +535,7 @@ mod tests {
     fn an_action_that_takes_its_whole_input() {
         let found = action(
             "{ input: { by: Press }, when: (s, input) => input.by === \"key\", \
-             then: (state, given) => ({ last: given.by, n: state.n }) }",
+             changes: (state, given) => ({ last: given.by, n: state.n }) }",
         );
         let guard = found.guard.expect("a guard");
         assert_eq!(
@@ -553,23 +553,24 @@ mod tests {
         assert_eq!(
             found.change.state_name.as_deref(),
             Some("state"),
-            "the state in `then`"
+            "the state in `changes`"
         );
         assert_eq!(
             found.change.input_name.as_deref(),
             Some("given"),
-            "the input in `then`"
+            "the input in `changes`"
         );
         assert_eq!(
             show(&found.change.term),
             "{last: given.by, n: state.n}",
-            "`then` reads through its own names"
+            "`changes` reads through its own names"
         );
     }
 
     #[test]
     fn a_picked_input_may_be_renamed() {
-        let found = action("{ input: { by: Press }, then: (s, { by: who }) => ({ last: who }) }");
+        let found =
+            action("{ input: { by: Press }, changes: (s, { by: who }) => ({ last: who }) }");
         assert_eq!(found.change.taken, ["by"], "the input that is taken");
         assert_eq!(
             show(&found.change.term),
@@ -580,14 +581,14 @@ mod tests {
 
     #[test]
     fn an_action_without_parameters_has_no_state_name() {
-        let found = action("{ then: () => ({ n: 0 }) }");
+        let found = action("{ changes: () => ({ n: 0 }) }");
         assert_eq!(found.change.state_name, None, "nothing is read");
     }
 
     #[test]
-    fn a_block_in_a_then_folds_like_a_helper() {
+    fn a_block_in_changes_folds_like_a_helper() {
         let found = action(
-            "{ then: (s) => { const next = s.n + 1; if (next > 3) return { n: 0 }; \
+            "{ changes: (s) => { const next = s.n + 1; if (next > 3) return { n: 0 }; \
              return { n: next }; } }",
         );
         assert_eq!(
@@ -600,7 +601,7 @@ mod tests {
     #[test]
     fn a_rule_keeps_its_source_text() {
         let found = draft(
-            "export const low = M.rule({\n\tsays: \"The count is low\",\n\tholds: (s) =>\n\t\ts.n <= 2 &&\n\t\ts.n >= 0,\n});\n",
+            "export const low = m.rule(M, \"The count is low\", (s) =>\n\t\ts.n <= 2 &&\n\t\ts.n >= 0,\n);\n",
         );
         let rule = found.rules.first().expect("one rule");
         assert_eq!(rule.id, "low", "the exported name");
@@ -620,8 +621,7 @@ mod tests {
 
     #[test]
     fn an_end() {
-        let found =
-            draft("export const full = M.end({ says: \"Full\", when: (s) => s.n === 3 });\n");
+        let found = draft("export const full = m.end(M, \"Full\", (s) => s.n === 3);\n");
         let end = found.ends.first().expect("one end");
         assert_eq!(end.id, "full", "the exported name");
         assert_eq!(end.says, "Full", "the sentence");
@@ -632,8 +632,8 @@ mod tests {
     #[test]
     fn a_view_with_every_part() {
         let found = draft(
-            "export const act = M.action(\"act\", { then: () => ({ n: 0 }) });\n\
-             export const view = M.view({ title: \"Counting\", \
+            "export const act = m.action(M, \"act\", { changes: () => ({ n: 0 }) });\n\
+             export const view = m.view(M, { title: \"Counting\", \
              state: (s) => `at ${s.n}, by ${s.last}!`, group: (s) => s.last, \
              step: { act: \"go\" }, colors: { broken: \"#c62828\", start: \"#fff\" } });\n",
         );
@@ -679,38 +679,40 @@ mod tests {
     #[test]
     fn a_member_that_is_written_wrongly_is_named() {
         assert_eq!(
-            features("export const a = M.action(\"a\", { when: (s) => s.n < 1 });\n"),
-            ["`M.action`"],
-            "no then"
+            features("export const a = m.action(M, \"a\", { when: (s) => s.n < 1 });\n"),
+            ["`m.action`"],
+            "no changes"
         );
         assert_eq!(
-            features("export const a = M.action(\"a\", { then: (s) => ({ n: 1 }), until: 3 });\n"),
+            features(
+                "export const a = m.action(M, \"a\", { changes: (s) => ({ n: 1 }), until: 3 });\n"
+            ),
             ["`until`"],
             "an unknown part"
         );
         assert_eq!(
-            features("export const a = M.action(\"a\", { then: ({ n }) => ({ n }) });\n"),
+            features("export const a = m.action(M, \"a\", { changes: ({ n }) => ({ n }) });\n"),
             ["`{ n }`"],
             "a state taken apart"
         );
         assert_eq!(
-            features("export const r = M.rule({ says: \"r\", holds: (s, t) => s.n < t.n });\n"),
+            features("export const r = m.rule(M, \"r\", (s, t) => s.n < t.n);\n"),
             ["`(s, t)`"],
             "a rule with two parameters"
         );
         assert_eq!(
-            features("export const r = M.rule({ says: 3, holds: (s) => s.n < 1 });\n"),
+            features("export const r = m.rule(M, 3, (s) => s.n < 1);\n"),
             ["`3`"],
             "a sentence that is not text"
         );
         assert_eq!(
-            features("export const r = M.rule({ says: \"r\", holds: true });\n"),
+            features("export const r = m.rule(M, \"r\", true);\n"),
             ["`true`"],
             "a condition that is not a function"
         );
         assert_eq!(
-            features("export const r = M.rule();\n"),
-            ["`M.rule`"],
+            features("export const r = m.rule();\n"),
+            ["`m.rule`"],
             "no parts"
         );
     }
