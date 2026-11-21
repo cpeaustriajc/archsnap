@@ -17,10 +17,10 @@ pub struct Limits {
     /// same for every number.
     pub jobs: usize,
     /// Idle threads the search may borrow, on top of `jobs`, for the parts of each level it
-    /// spreads, when it starts the level and whenever it is about to take a part, and gives
-    /// back as soon as the level has no part left for them. Searches that run side by side share one handle, so
-    /// a thread one of them leaves idle goes to another. The outcome is the same whatever is
-    /// borrowed.
+    /// spreads. It borrows when it starts the level and whenever it is about to take a part,
+    /// and gives a thread back as soon as the level has no part left for it. Searches that
+    /// run side by side share one handle, so a thread one of them leaves idle goes to
+    /// another. The outcome is the same whatever is borrowed.
     pub helpers: Option<Helpers>,
     /// Whether [`Outcome::graph`] is filled. It costs memory for every arrow, so leave it off
     /// unless a chart is wanted.

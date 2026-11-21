@@ -35,9 +35,11 @@ pub(super) struct Place {
 /// Only values from the field's domain have a place; [`Self::code`] says which.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NumberSlot {
-    /// The index of the word in the row.
+    /// Which word of the row holds the field, counted from 0. The field never reaches into the
+    /// next word.
     pub word: usize,
-    /// The lowest bit of the field in that word.
+    /// How many bits lie below the field in that word: shift the word right by this to read
+    /// the field.
     pub shift: u32,
     /// How many bits the field takes. A field whose domain has one value takes none.
     pub width: u32,
@@ -54,7 +56,8 @@ impl NumberSlot {
         (self.offset <= value && value <= self.highest).then(|| value.abs_diff(self.offset))
     }
 
-    /// The value of the field in `row`.
+    /// The value of the field in `row`. A row too short for this layout gives the lowest value
+    /// of the domain.
     #[must_use]
     pub fn read(&self, row: &[u64]) -> i64 {
         let code = row.get(self.word).map_or(0, |word| {
@@ -153,7 +156,8 @@ impl RowLayout {
         }
     }
 
-    /// How many words a row has.
+    /// The length of every row of this layout, in `u64` words: the length to give a buffer
+    /// that holds one row.
     #[must_use]
     pub fn words(&self) -> usize {
         self.words
@@ -166,7 +170,8 @@ impl RowLayout {
         self.numbers.get(position).copied().flatten()
     }
 
-    /// The hash of `row`.
+    /// The hash the search files the state with this `row` under. Give it all
+    /// [`Self::words`] words of the row: the hash depends on every word and on its position.
     #[must_use]
     pub fn hash(&self, row: &[u64]) -> u64 {
         hash_words(row)
