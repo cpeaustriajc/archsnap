@@ -79,7 +79,7 @@ impl Shared {
             }
             _ => {
                 let mut changed = false;
-                each_part(expr, &mut |part| changed |= self.narrowed(part, scope));
+                expr.each_part(&mut |part| changed |= self.narrowed(part, scope));
                 changed
             }
         }
@@ -100,7 +100,7 @@ impl Shared {
             Expr::Sweep { .. } => false,
             _ => {
                 let mut settles = true;
-                each_part(expr, &mut |part| settles &= self.settles(part, scope));
+                expr.each_part(&mut |part| settles &= self.settles(part, scope));
                 settles
             }
         }
@@ -158,7 +158,7 @@ impl<'e> Survey<'e> {
             }
             _ => {}
         }
-        each_part(expr, &mut |part| self.walk(part));
+        expr.each_part(&mut |part| self.walk(part));
     }
 
     fn kinds(&self) -> Vec<Kind> {
@@ -204,44 +204,6 @@ fn holds_a_sweep(expr: &Expr) -> bool {
         return true;
     }
     let mut found = false;
-    each_part(expr, &mut |part| found |= holds_a_sweep(part));
+    expr.each_part(&mut |part| found |= holds_a_sweep(part));
     found
-}
-
-fn each_part<'e>(expr: &'e Expr, visit: &mut impl FnMut(&'e Expr)) {
-    match expr {
-        Expr::Const(_) | Expr::Field(_) | Expr::Local(_) => {}
-        Expr::Apply(_, items) | Expr::SetOf(items) | Expr::SeqOf(items) => {
-            items.iter().for_each(visit);
-        }
-        Expr::And(left, right) | Expr::Or(left, right) => {
-            visit(left);
-            visit(right);
-        }
-        Expr::Choose(test, yes, no) => {
-            visit(test);
-            visit(yes);
-            visit(no);
-        }
-        Expr::Bind { value, body, .. } => {
-            visit(value);
-            visit(body);
-        }
-        Expr::Record(fields) => fields.iter().for_each(|(_, inner)| visit(inner)),
-        Expr::Get(inner, _) => visit(inner),
-        Expr::With(base, changes) => {
-            visit(base);
-            for (_, inner) in changes {
-                visit(inner);
-            }
-        }
-        Expr::MapOf(entries) => entries.iter().for_each(|(key, value)| {
-            visit(key);
-            visit(value);
-        }),
-        Expr::Sweep { source, body, .. } => {
-            visit(source);
-            visit(body);
-        }
-    }
 }

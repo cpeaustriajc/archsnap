@@ -14,7 +14,7 @@ pub(crate) const NO_UNIT: u64 = 0;
 /// The search reports a fault as a finding with the path to the state. All but the last can
 /// happen in a well-typed model. [`Fault::WrongKind`] means the expression itself is malformed,
 /// which a model lowered by `earnest_semantic` never is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Fault {
     /// A value that must be present is `null`.

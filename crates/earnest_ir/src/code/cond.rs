@@ -1,6 +1,6 @@
 use super::num::{Operand, Stop, int_at, pair};
 use super::shared::Shared;
-use super::val::{Binding, Place, Val, plain};
+use super::val::{Binding, Place, Val};
 use crate::eval::{as_bool, compare};
 use crate::{Expr, Fault, Frame, Op, Order};
 use earnest_value::Value;
@@ -139,7 +139,12 @@ impl Cond {
             }
             _ => {}
         }
-        match (Place::of(left), Place::of(right), plain(left), plain(right)) {
+        match (
+            Place::of(left),
+            Place::of(right),
+            left.plain(),
+            right.plain(),
+        ) {
             (Some(place), None, _, Expr::Const(value))
             | (None, Some(place), Expr::Const(value), _) => Self::Matches {
                 place,

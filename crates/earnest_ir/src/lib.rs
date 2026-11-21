@@ -7,6 +7,8 @@
 
 mod code;
 mod eval;
+mod parts;
+mod told;
 
 pub use code::Code;
 pub use eval::{Fault, Frame, eval, truth};

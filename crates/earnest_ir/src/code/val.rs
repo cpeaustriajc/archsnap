@@ -16,7 +16,7 @@ pub(super) enum Place {
 
 impl Place {
     pub(super) fn of(expr: &Expr) -> Option<Self> {
-        match plain(expr) {
+        match expr.plain() {
             Expr::Field(index) => Some(Self::Field(*index)),
             Expr::Local(slot) => Some(Self::Local(*slot)),
             Expr::Get(inner, name) => Some(Self::Get(Box::new(Self::of(inner)?), *name)),
@@ -33,16 +33,6 @@ impl Place {
                 record.field(*name).ok_or_else(|| wrong_or_null(record))
             }
         }
-    }
-}
-
-pub(super) fn plain(expr: &Expr) -> &Expr {
-    match expr {
-        Expr::Apply(Op::SomeOf, arguments) => match arguments.as_slice() {
-            [inner] => plain(inner),
-            _ => expr,
-        },
-        _ => expr,
     }
 }
 
@@ -120,7 +110,7 @@ fn all_named(fields: &[(Sym, Expr)], shared: &Shared) -> Box<[(Sym, Val)]> {
 
 impl Val {
     pub(super) fn of(expr: &Expr, shared: &Shared) -> Self {
-        let expr = plain(expr);
+        let expr = expr.plain();
         match expr {
             Expr::Const(Value::Bool(flag)) => Self::Cond(Cond::Const(*flag)),
             Expr::Const(value) => Self::Const(value.clone()),

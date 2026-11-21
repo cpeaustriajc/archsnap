@@ -3,9 +3,10 @@
 //! prepared [`Code`], which must agree on the value, the fault and the effects on the frame.
 
 use earnest_ir::{
-    Code, Expr, Fault, Frame, MapOp, Math, Op, Order, SeqOp, SetOp, Shelf, Sweep, eval, truth,
+    Action, Code, Expr, Fault, Frame, Input, MapOp, Math, Op, Order, SeqOp, SetOp, Shelf, Sweep,
+    eval, truth,
 };
-use earnest_value::{IntType, MOST_SAFE_INTEGER, Sym, Symbols, Value};
+use earnest_value::{Domain, IntType, MOST_SAFE_INTEGER, Sym, Symbols, Value};
 use proptest::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1304,5 +1305,137 @@ proptest! {
         steps in proptest::collection::vec(any_step(), 1..12),
     ) {
         agreed_in_turn(&state, &locals, (&exprs, &others), &steps);
+    }
+}
+
+const INPUT_SLOT: usize = 0;
+
+fn small_field() -> impl Strategy<Value = Value> {
+    prop_oneof![
+        3 => (0..2_i64).prop_map(Value::Int),
+        1 => Just(Value::Null),
+    ]
+}
+
+fn any_input_value() -> impl Strategy<Value = Value> {
+    prop_oneof![
+        6 => proptest::collection::btree_map(any_name(), small_field(), 1..=NAMES)
+            .prop_map(|fields| Value::record(fields.into_iter().collect())),
+        1 => small_field(),
+    ]
+}
+
+fn any_reading_expr() -> impl Strategy<Value = Expr> {
+    let leaf = prop_oneof![
+        2 => any_value().prop_map(Expr::Const),
+        2 => (0..FIELDS).prop_map(Expr::Field),
+        1 => (0..SLOTS).prop_map(Expr::Local),
+        6 => (0..SLOTS, any_name())
+            .prop_map(|(slot, name)| Expr::Get(Box::new(Expr::Local(slot)), name)),
+    ];
+    leaf.prop_recursive(4, 24, 3, |inner| {
+        let boxed = || inner.clone().prop_map(Box::new);
+        prop_oneof![
+            4 => (any_op(), proptest::collection::vec(inner.clone(), 1..3))
+                .prop_map(|(op, arguments)| Expr::Apply(op, arguments)),
+            2 => (boxed(), boxed()).prop_map(|(left, right)| Expr::And(left, right)),
+            1 => (boxed(), boxed(), boxed()).prop_map(|(test, yes, no)| Expr::Choose(test, yes, no)),
+            3 => (1..SLOTS, 0..SLOTS, boxed()).prop_map(|(slot, source, body)| Expr::Bind {
+                slot,
+                value: Box::new(Expr::Local(source)),
+                body,
+            }),
+            1 => (1..SLOTS, boxed(), boxed())
+                .prop_map(|(slot, value, body)| Expr::Bind { slot, value, body }),
+            2 => proptest::collection::vec((any_name(), inner.clone()), 1..3).prop_map(Expr::Record),
+        ]
+    })
+}
+
+fn reading_action(values: Vec<Value>, exprs: Vec<Expr>) -> Action {
+    let mut codes = Code::together(exprs).into_iter();
+    let guard = codes
+        .next()
+        .unwrap_or_else(|| Code::new(Expr::Const(Value::Bool(true))));
+    Action {
+        id: "act".to_owned(),
+        label: "acts".to_owned(),
+        line: 1,
+        inputs: vec![Input {
+            name: "input".to_owned(),
+            slot: INPUT_SLOT,
+            domain: Domain::OneOf(values.clone()),
+            values,
+        }],
+        guard,
+        updates: codes.map(Some).collect(),
+        slots: SLOTS,
+    }
+}
+
+type Answers = Vec<(Result<Value, Fault>, bool)>;
+
+fn answers_in_turn(
+    action: &Action,
+    state: &[Value],
+    left_over: &[Value],
+    tried: &[bool],
+) -> Vec<Option<Answers>> {
+    let mut frame = Frame::new(state, SLOTS);
+    for (slot, value) in left_over.iter().enumerate() {
+        frame.put(slot, value.clone());
+    }
+    let values = action.inputs.first().map_or(&[][..], |input| &input.values);
+    values
+        .iter()
+        .zip(tried)
+        .map(|(value, tried)| {
+            if !tried {
+                return None;
+            }
+            frame.put(INPUT_SLOT, value.clone());
+            Some(
+                std::iter::once(&action.guard)
+                    .chain(action.updates.iter().flatten())
+                    .map(|code| {
+                        (
+                            eval(code.expr(), &mut frame),
+                            frame.computed_beyond_32_bits(),
+                        )
+                    })
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(4096))]
+
+    #[test]
+    fn a_search_that_skips_values_not_told_apart_sees_the_same_answers(
+        values in proptest::collection::vec(any_input_value(), 1..8),
+        exprs in proptest::collection::vec(any_reading_expr(), 1..4),
+        state in proptest::collection::vec(any_value(), FIELDS),
+        left_over in proptest::collection::vec(any_value(), SLOTS),
+    ) {
+        let action = reading_action(values, exprs);
+        let told = action.told_apart();
+        prop_assert_eq!(told.len(), 1, "one answer for each input");
+        let firsts = told.first().cloned().unwrap_or_default();
+        let count = action.inputs.first().map_or(0, |input| input.values.len());
+        prop_assert_eq!(firsts.len(), count, "one answer for each value");
+        prop_assert!(firsts.first().copied().unwrap_or(true), "the first value is always new");
+        let every = answers_in_turn(&action, &state, &left_over, &vec![true; count]);
+        let skipping = answers_in_turn(&action, &state, &left_over, &firsts);
+        for (position, (all, skipped)) in every.iter().zip(&skipping).enumerate() {
+            match skipped {
+                Some(answers) => prop_assert_eq!(Some(answers), all.as_ref(), "value {} answers as it does in the full walk", position),
+                None => prop_assert!(
+                    every.iter().take(position).any(|earlier| earlier == all),
+                    "value {} answers like no value before it", position
+                ),
+            }
+        }
     }
 }
