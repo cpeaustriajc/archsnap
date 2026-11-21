@@ -58,7 +58,6 @@ struct RowKit {
 struct PartSink<'a> {
     store: &'a Store,
     graph: bool,
-    merge_finds_known: bool,
     base_is_row: bool,
     from: usize,
     counted: usize,
@@ -124,7 +123,7 @@ impl PartSink<'_> {
         let hashbrown::hash_table::Entry::Vacant(vacant) = met else {
             return false;
         };
-        if !self.merge_finds_known && self.store.find(row, hash).is_some() {
+        if self.store.find(row, hash).is_some() {
             return false;
         }
         vacant.insert(hashes.len());
@@ -144,9 +143,6 @@ impl PartSink<'_> {
         let hashbrown::hash_table::Entry::Vacant(vacant) = met else {
             return false;
         };
-        if !self.merge_finds_known && self.store.find(&[word], hash).is_some() {
-            return false;
-        }
         vacant.insert(word);
         self.add_fresh(action, hash);
         true
@@ -276,7 +272,6 @@ impl Search<'_> {
         let mut sink = PartSink {
             store: &self.store,
             graph: self.limits.keep_graph,
-            merge_finds_known: self.store.files_rows(),
             base_is_row: false,
             from: 0,
             counted: 0,
