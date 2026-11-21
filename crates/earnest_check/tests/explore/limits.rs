@@ -571,3 +571,68 @@ fn a_state_with_more_new_successors_than_the_limit_leaves_the_search_unfinished(
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Faulting {
+    First,
+    Last,
+}
+
+fn two_fans_and_a_fault(faulting: Faulting) -> Model {
+    let mut sketch = Sketch::new();
+    let every_start: Vec<i64> = (0..600).collect();
+    let x = sketch.number("x", 0, 599, &every_start);
+    let t = sketch.number("t", 0, 1, &[0]);
+    let k = sketch.number("k", 0, 2001, &[0]);
+    let shared_k: Vec<Value> = (0..1000).map(Value::Int).collect();
+    let own_k: Vec<Value> = (1000..2001).map(Value::Int).collect();
+    let fans_out = |at: i64| both(is(&x, at), is(&t, 0));
+    let last = fans_out(599);
+    let divides_by_zero = is(&apply(Op::Math(Math::Divide), &k, int(0)), 0);
+    let boom = both(last.clone(), divides_by_zero);
+    let lands = [(&x, int(0)), (&t, int(1)), (&k, Expr::Local(0))];
+    if faulting == Faulting::First {
+        sketch.action("boom", boom.clone(), &[(&t, int(1))]);
+    }
+    let first_or_last = Expr::Or(Box::new(fans_out(0)), Box::new(last.clone()));
+    sketch.action_with("fan", &[("k", shared_k)], first_or_last, &lands);
+    sketch.action_with("fanMore", &[("k", own_k)], last, &lands);
+    if faulting == Faulting::Last {
+        sketch.action("boom", boom, &[(&t, int(1))]);
+    }
+    sketch.end("rest", yes());
+    sketch.model()
+}
+
+#[test]
+fn successors_an_earlier_state_of_the_level_found_never_use_up_the_room_of_a_later_one() {
+    for (faulting, max_states) in [
+        (Faulting::Last, 2000),
+        (Faulting::First, 2000),
+        (Faulting::Last, 3000),
+    ] {
+        let model = two_fans_and_a_fault(faulting);
+        let alone = explore(&model, &with_states(max_states));
+        assert_eq!(alone.status, Status::Fail, "the last start state faults");
+        let kinds: Vec<_> = alone.findings.iter().map(|found| found.kind).collect();
+        assert_eq!(kinds, [FindingKind::Fault], "{faulting:?}");
+        for keep_graph in [false, true] {
+            for jobs in [1, 2, 4, 10] {
+                let limits = Limits {
+                    max_states,
+                    jobs,
+                    keep_graph,
+                    ..Limits::default()
+                };
+                let outcome = explore(&model, &limits);
+                let case = format!(
+                    "{faulting:?} faults, room {max_states}, {jobs} jobs, graph {keep_graph}"
+                );
+                assert_eq!(outcome.status, alone.status, "{case}");
+                assert_eq!(outcome.states, alone.states, "{case}");
+                assert_eq!(outcome.reason, alone.reason, "{case}");
+                assert_eq!(outcome.findings, alone.findings, "{case}");
+            }
+        }
+    }
+}

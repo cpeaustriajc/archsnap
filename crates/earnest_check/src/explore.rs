@@ -167,18 +167,22 @@ impl Search<'_> {
         asked: Asked,
         per_state: Duration,
     ) -> Ran {
-        if let Some(expansion) = self.spread_level(&frontier, deadline, asked, per_state) {
-            let ran = Ran {
-                stopped: expansion.stopped,
-                workers: expansion.workers,
-            };
-            if !(ran.stopped && asked == Asked::Everything) {
-                self.merge_any(expansion.parts);
+        let mut helpers = self.limits.helpers.as_ref();
+        match self.spread_level(&frontier, deadline, asked, per_state) {
+            Some(expansion) if expansion.crowded => helpers = None,
+            Some(expansion) => {
+                let ran = Ran {
+                    stopped: expansion.stopped,
+                    workers: expansion.workers,
+                };
+                if !(ran.stopped && asked == Asked::Everything) {
+                    self.merge_any(expansion.parts);
+                }
+                return ran;
             }
-            return ran;
+            None => {}
         }
         let mut marks = Vec::new();
-        let mut helpers = self.limits.helpers.as_ref();
         let mut rest = frontier.clone();
         loop {
             let here = self.expand_here(rest.clone(), deadline, asked, helpers);
@@ -196,7 +200,7 @@ impl Search<'_> {
             } else {
                 None
             };
-            let Some(expansion) = spread else {
+            let Some(expansion) = spread.filter(|expansion| !expansion.crowded) else {
                 if here.handed {
                     helpers = None;
                     continue;

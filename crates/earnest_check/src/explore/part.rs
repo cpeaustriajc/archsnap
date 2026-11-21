@@ -34,6 +34,7 @@ pub(super) struct Part {
     pub(super) shards: Vec<Vec<usize>>,
     pub(super) raws: Vec<Box<[Value]>>,
     pub(super) stopped: bool,
+    pub(super) crowded: bool,
 }
 
 struct PartSink<'a> {
@@ -46,6 +47,7 @@ struct PartSink<'a> {
     packed: Vec<u8>,
     met: HashTable<usize>,
     met_raw: FxHashSet<Box<[Value]>>,
+    counted: usize,
     part: Part,
 }
 
@@ -123,6 +125,19 @@ impl Successors for PartSink<'_> {
         state: &[Value],
         updates: &[(usize, Value)],
     ) -> bool {
+        let counted = self.offer_unless_met(action, state, updates);
+        self.counted += usize::from(counted);
+        counted
+    }
+}
+
+impl PartSink<'_> {
+    fn offer_unless_met(
+        &mut self,
+        action: usize,
+        state: &[Value],
+        updates: &[(usize, Value)],
+    ) -> bool {
         let base = self.base_is_row.then_some(self.base.as_slice());
         if !encode_next(self.store, base, &mut self.row, state, updates) {
             let next = with_updates(state, updates);
@@ -172,6 +187,7 @@ impl Search<'_> {
             packed: Vec::new(),
             met: HashTable::new(),
             met_raw: FxHashSet::default(),
+            counted: 0,
             part: Part {
                 first: ids.start,
                 ..Part::default()
@@ -188,10 +204,15 @@ impl Search<'_> {
             }
             sink.base_is_row = self.store.read_state(id, &mut sink.base, &mut state);
             sink.from = id;
+            sink.counted = 0;
             let outside = self.store.outside(id, &sink.base, &self.model.fields);
             let mark = expand.state(&state, outside, &mut sink, &mut scratch);
             if mark.clock == Clock::Stopped {
                 sink.part.stopped = true;
+                return sink.part;
+            }
+            if sink.counted > self.limits.max_states {
+                sink.part.crowded = true;
                 return sink.part;
             }
             if !mark.is_plain() {

@@ -20,6 +20,7 @@ const WORTH_SPREADING: Duration = Duration::from_millis(1);
 pub(super) struct Expansion {
     pub(super) parts: Vec<Part>,
     pub(super) stopped: bool,
+    pub(super) crowded: bool,
     pub(super) workers: usize,
 }
 
@@ -97,6 +98,7 @@ impl Search<'_> {
         let mut expansion = Expansion {
             parts: Vec::with_capacity(finished.len()),
             stopped: false,
+            crowded: finished.iter().any(|(_, part)| part.crowded),
             workers: shared.peak.into_inner(),
         };
         for (expected, (index, part)) in finished.into_iter().enumerate() {
