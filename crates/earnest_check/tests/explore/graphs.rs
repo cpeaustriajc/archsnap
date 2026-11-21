@@ -69,7 +69,7 @@ fn without_a_view_each_state_is_a_node_labelled_with_its_fields() {
     sketch.end("full", is(&n, 2));
     let graph = graph_of(&sketch.model());
     assert_eq!(graph.title, None);
-    assert!(graph.colors.is_empty());
+    assert!(graph.colors.is_empty(), "{:?}", graph.colors);
     assert_eq!(labels(&graph), ["n = 0", "n = 1", "n = 2"]);
     assert!(graph.nodes.iter().all(|node| node.states == 1));
     assert!(graph.nodes.iter().all(|node| node.group.is_none()));

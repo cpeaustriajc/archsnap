@@ -24,8 +24,8 @@ fn terms_differ_when_only_their_place_differs() {
 #[test]
 fn a_file_without_models_reads_as_nothing_found_and_nothing_refused() {
     let reading = Reading::default();
-    assert!(reading.drafts.is_empty());
-    assert!(reading.problems.is_empty());
+    assert!(reading.drafts.is_empty(), "{:?}", reading.drafts);
+    assert!(reading.problems.is_empty(), "{:?}", reading.problems);
 }
 
 #[test]
@@ -34,8 +34,8 @@ fn a_model_without_a_view_has_no_title_labels_steps_or_colors() {
     assert_eq!(view.title, None);
     assert_eq!(view.state, None);
     assert_eq!(view.group, None);
-    assert!(view.steps.is_empty());
-    assert!(view.colors.is_empty());
+    assert!(view.steps.is_empty(), "{:?}", view.steps);
+    assert!(view.colors.is_empty(), "{:?}", view.colors);
 }
 
 #[test]

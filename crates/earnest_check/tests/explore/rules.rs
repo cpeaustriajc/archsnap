@@ -61,7 +61,7 @@ fn each_step_of_a_path_names_its_action_and_the_state_it_leads_to() {
     let first = &path.steps[0];
     assert_eq!(first.action, "jump");
     assert_eq!(first.label, "does jump");
-    assert!(first.input.is_empty());
+    assert!(first.input.is_empty(), "{:?}", first.input);
     assert_eq!(texts(&first.state), ["n = 2"]);
     assert_eq!(texts(&path.steps[1].state), ["n = 3"]);
     assert_eq!(first.changes[0].before.json, json!(0));
@@ -79,7 +79,7 @@ fn a_rule_broken_in_a_start_state_has_a_path_without_steps() {
         .as_ref()
         .expect("a broken rule has a path");
     assert_eq!(texts(&path.start), ["n = 0"]);
-    assert!(path.steps.is_empty());
+    assert!(path.steps.is_empty(), "{:?}", path.steps);
 }
 
 #[test]
@@ -181,7 +181,7 @@ fn checking_only_a_rule_the_model_does_not_have_checks_no_rule() {
         ..Limits::default()
     };
     let outcome = explore(&two_broken_rules().model(), &limits);
-    assert!(outcome.rules.is_empty());
+    assert!(outcome.rules.is_empty(), "{:?}", outcome.rules);
     assert_eq!(outcome.status, Status::Pass);
     assert_eq!(outcome.states, 4);
 }

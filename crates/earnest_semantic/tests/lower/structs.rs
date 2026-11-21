@@ -79,7 +79,8 @@ fn an_action_that_gives_a_field_a_record_of_another_struct_is_refused() {
     let mut source = rust(draft(vec![("line", starting(line("Line"), built("Line")))]));
     let change = owned_by(None, None, vec![("line", built("Line2"))]);
     source.actions.push(action("swap", None, change));
-    assert!(!refused(&source).is_empty());
+    let problems = refused(&source);
+    assert!(!problems.is_empty(), "{problems:?}");
 }
 
 #[test]
@@ -92,7 +93,8 @@ fn an_input_that_is_a_struct_is_not_a_value_of_another_struct() {
     );
     take(&mut swap, "given", line("Line2"));
     source.actions.push(swap);
-    assert!(!refused(&source).is_empty());
+    let problems = refused(&source);
+    assert!(!problems.is_empty(), "{problems:?}");
     let mut fine = rust(draft(vec![("line", starting(line("Line"), built("Line")))]));
     let mut swap = action(
         "swap",

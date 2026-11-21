@@ -69,7 +69,7 @@ fn a_stuck_start_state_has_a_path_without_steps() {
     let finding = the_finding(&outcome);
     assert_eq!(finding.kind, FindingKind::Stuck);
     assert_eq!(texts(&finding.path.start), ["n = 2"]);
-    assert!(finding.path.steps.is_empty());
+    assert!(finding.path.steps.is_empty(), "{:?}", finding.path.steps);
 }
 
 #[test]
@@ -153,7 +153,7 @@ fn a_start_value_outside_its_field_is_out_of_range_at_the_start() {
     let outcome = sketch.explored();
     let finding = the_finding(&outcome);
     assert_eq!(finding.kind, FindingKind::OutOfRange);
-    assert!(finding.path.steps.is_empty());
+    assert!(finding.path.steps.is_empty(), "{:?}", finding.path.steps);
 }
 
 #[test]
@@ -171,7 +171,7 @@ fn a_rule_that_reads_null_is_a_fault() {
         "the rule `positive` reads a value that is null in this state"
     );
     assert_eq!(texts(&finding.path.start), ["picked = null"]);
-    assert!(finding.path.steps.is_empty());
+    assert!(finding.path.steps.is_empty(), "{:?}", finding.path.steps);
 }
 
 #[test]
