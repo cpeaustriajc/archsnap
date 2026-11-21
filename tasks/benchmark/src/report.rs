@@ -5,6 +5,8 @@ use std::time::Duration;
 const KIB_PER_MIB: f64 = 1024.0;
 pub(crate) const TOGETHER_TARGET_SECONDS: u32 = 5;
 pub(crate) const SLOWEST_TARGET_SECONDS: u32 = 10;
+pub(crate) const LARGE_TARGET_SECONDS: u32 = 5;
+pub(crate) const TARGET_WORKERS: usize = 4;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Row {
@@ -97,6 +99,26 @@ pub(crate) fn spec_lines(together: Duration, slowest: Duration) -> [String; 2] {
     ]
 }
 
+pub(crate) fn target_line(
+    model: &str,
+    median: Duration,
+    peak_kib: Option<u64>,
+    cores: usize,
+) -> String {
+    let machine = if cores >= TARGET_WORKERS {
+        format!("this machine has {cores} cores, at least the {TARGET_WORKERS} of the target")
+    } else {
+        format!(
+            "a stand-in: this machine has {cores} cores, fewer than the {TARGET_WORKERS} of the target"
+        )
+    };
+    format!(
+        "{model} with {TARGET_WORKERS} workers: {} s, peak memory {} MiB, target under {LARGE_TARGET_SECONDS} s on {TARGET_WORKERS} cores and 16 GB ({machine})",
+        seconds(median),
+        memory(peak_kib)
+    )
+}
+
 pub(crate) fn speedup_line(model: &str, one: Duration, all: Duration, cores: usize) -> String {
     let speedup = one.as_secs_f64() / all.as_secs_f64().max(f64::EPSILON);
     format!(
@@ -126,7 +148,7 @@ pub(crate) fn r12_lines(
     let ratio = together.as_secs_f64() / longest.median.as_secs_f64().max(f64::EPSILON);
     [
         format!(
-            "the {models} models in one run: {} s; the largest model ({}) alone: {} s; the slowest of the 12 alone ({}): {} s",
+            "the {models} models in one run: {} s; the large model ({}) alone: {} s; the slowest of the 12 alone ({}): {} s",
             seconds(together),
             largest.model,
             seconds(largest.median),
@@ -234,6 +256,22 @@ mod tests {
     }
 
     #[test]
+    fn target_line_says_whether_the_machine_has_the_cores() {
+        let enough = target_line("Big", millis(2_500), Some(2_048), 4);
+        assert_eq!(
+            enough,
+            "Big with 4 workers: 2.500 s, peak memory 2.0 MiB, target under 5 s on 4 cores and 16 GB (this machine has 4 cores, at least the 4 of the target)",
+            "a machine with the cores"
+        );
+        let fewer = target_line("Big", millis(2_500), None, 2);
+        assert!(
+            fewer.contains("peak memory n/a")
+                && fewer.contains("a stand-in: this machine has 2 cores, fewer than the 4"),
+            "{fewer}"
+        );
+    }
+
+    #[test]
     fn speedup_is_one_worker_over_all_cores() {
         assert_eq!(
             speedup_line("Big", millis(8_000), millis(2_000), 4),
@@ -258,7 +296,7 @@ mod tests {
         );
         assert!(
             first.starts_with(
-                "the 13 models in one run: 3.000 s; the largest model (Big) alone: 1.000 s"
+                "the 13 models in one run: 3.000 s; the large model (Big) alone: 1.000 s"
             ),
             "{first}"
         );

@@ -3,12 +3,18 @@
 A repeatable speed measurement of the release `earnest verify`. The spec sets two targets: the
 first app's 12 models in under 5 s in all, and the slowest of them under 10 s alone. Those 12
 models are not in this repository, so this task holds fixed models that stand in for them, and
-the numbers below say how the checker does on those, not on the app's.
+the numbers below say how the checker does on those, not on the app's. The owner set a third
+target: the model with 10,000,000 states (`grid_10m`) in under 5 s on 4 vCPUs and 16 GB, a Linux
+x86-64 machine. That one is measured on the model itself, with no stand-in, and only a run on
+such a machine says whether it is met.
 
 ```sh
 cargo build --release --locked -p earnest-cli
 cargo run --release --locked -p earnest_benchmark -- --runs 5
 ```
+
+`grid_10m` is run with `--max-states 20000000`, because the checker stops a model at 5,000,000
+states by default; the other cases use the default.
 
 `--runs <n>` is the number of measured runs of each case (default 5, after one run that is not
 counted) and `--binary <path>` the `earnest` to measure (default `target/release/earnest`). The
@@ -20,10 +26,14 @@ from a cache and nothing is written to the repository, and prints Markdown:
 - the 12 mixed models, each alone;
 - the two spec lines, marked as a stand-in, with the 12 models checked together in one
   `earnest verify`;
-- the largest model on one worker (`--jobs 1`) and on all cores, with the speed-up;
-- the R12 comparison: the 12 mixed models and the largest model (`grid_1m`) in one
-  `earnest verify`, against the longest of the 13 alone (`grid_1m` or `wide`, whichever takes
-  longer). R12 asks for about 1x.
+- the 10-million-state target: `grid_10m` with 4 workers (`--jobs 4`), its median wall time and
+  peak memory, against "under 5 s on 4 cores and 16 GB", and whether the machine it ran on has
+  at least 4 cores or is a stand-in with fewer;
+- the largest model (`grid_10m`) on one worker (`--jobs 1`) and on all cores, with the speed-up;
+- the R12 comparison: the 12 mixed models and the large model `grid_1m` in one `earnest verify`,
+  against the longest of the 13 alone (`grid_1m` or `wide`, whichever takes longer). R12 asks
+  for about 1x. It stays on `grid_1m` because it is about many models in one run, not about the
+  biggest one.
 
 Wall time is the time from starting the process to its exit, so it includes reading the files.
 Peak memory is the largest resident set (`VmHWM` in `/proc`) any run reached; it is `n/a` where
@@ -42,7 +52,8 @@ the model and the contract in the root `README.md`, never from the checker.
 |---|---|---|---|
 | `Grid1k` | `grid_1k` | 1,000 | Three wheels `a`, `b`, `c`, each 0 to 9, each turned up one at a time by its own action and never down. Every combination is reachable from (0, 0, 0): 10 × 10 × 10 = 1,000. Only (9, 9, 9) has no action and it is a marked end |
 | `Grid100k` | `grid_100k` | 100,000 | The same with five wheels: 10^5 |
-| `Grid1m` | `grid_1m` | 1,000,000 | The same with six wheels: 10^6. This is the largest model |
+| `Grid1m` | `grid_1m` | 1,000,000 | The same with six wheels: 10^6. This is the large model of the R12 comparison |
+| `Grid10m` | `grid_10m` | 10,000,000 | The same with seven wheels `a` to `g`: 10^7. This is the largest model |
 | `Ledger` | `ledger` | 36,400 | A queue of capacity 5 over 3 letters and a record `{a, b}` of two numbers 0 to 9. A queue holds 0 to 5 letters, 3^k contents of k letters: 1 + 3 + 9 + 27 + 81 + 243 = 364. The record takes 10 × 10 = 100 values. Deliveries and reads change only the queue and the two bumps only the record, so every pair is reachable: 364 × 100 = 36,400. An empty queue can take a letter and any other can be read, so nothing is stuck |
 | `Wide` | `wide` | 10,000 | `x` and `y` each 0 to 99. One action takes three inputs `a`, `b`, `c` of 0 to 9, 1,000 combinations in every state, and moves `x` to `(x + a) mod 100` and `y` to `(y + b + c) mod 100`. Choosing `a = 1` and `b = 1, c = 0` steps each by one, so each reaches every value, and `a` and `b + c` are chosen independently: 100 × 100 = 10,000. The action is always allowed, so nothing is stuck. The checker evaluates it 10,000 × 1,000 = 10^7 times |
 
@@ -64,7 +75,15 @@ The 12 mixed models that stand in for the app's 12 are the next ten (in `models/
 
 ## Results
 
-Last run: the release build of this commit, `--runs 7`.
+The numbers below are from a run before `grid_10m` and the 5 s target were added, with the
+checker as it was then, which is much slower than the current one. They are not a result for the
+current checker. `grid_10m` and its target have no recorded result on the target machine yet; run
+`just benchmark` on a machine with 4 vCPUs and 16 GB to get one. The sections below are as that
+run printed them, so they have no `grid_10m` row or target line, and "the largest model" there
+is `grid_1m`.
+
+Last run: the release build of commit 50ef5ab (the thread-sharing change, the last to touch
+this section), `--runs 7`.
 
 Machine: a shared container with 4 cores visible to the process (`nproc` 4), 16 GB of memory and
 Linux on x86-64, so other work on the same host adds noise to every number below. Rerun on the

@@ -30,6 +30,7 @@ pub(crate) struct Job<'a> {
     pub(crate) binary: &'a Path,
     pub(crate) files: &'a [PathBuf],
     pub(crate) workers: Option<usize>,
+    pub(crate) max_states: Option<u64>,
     pub(crate) scratch: &'a Path,
 }
 
@@ -96,6 +97,9 @@ pub(crate) fn run_once(job: &Job<'_>) -> Result<Sample, String> {
     command.args(["verify", "--no-cache", "--json"]);
     if let Some(workers) = job.workers {
         command.args(["--jobs", &workers.to_string()]);
+    }
+    if let Some(limit) = job.max_states {
+        command.args(["--max-states", &limit.to_string()]);
     }
     let started = Instant::now();
     let child = command
