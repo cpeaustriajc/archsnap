@@ -143,7 +143,7 @@ pub fn eval(expr: &Expr, frame: &mut Frame<'_>) -> Result<Value, Fault> {
         Expr::Const(value) => Ok(value.clone()),
         Expr::Field(index) => frame.state.get(*index).cloned().ok_or(Fault::WrongKind),
         Expr::Local(slot) => frame.locals.get(*slot).cloned().ok_or(Fault::WrongKind),
-        Expr::Apply(op, arguments) => apply(*op, arguments, frame),
+        Expr::Apply(op, arguments) => applied(*op, arguments, frame, eval),
         Expr::And(left, right) => Ok(Value::Bool(truth(left, frame)? && truth(right, frame)?)),
         Expr::Or(left, right) => Ok(Value::Bool(truth(left, frame)? || truth(right, frame)?)),
         Expr::Choose(test, yes, no) => {
@@ -158,24 +158,15 @@ pub fn eval(expr: &Expr, frame: &mut Frame<'_>) -> Result<Value, Fault> {
             frame.put(*slot, bound);
             eval(body, frame)
         }
-        Expr::Record(fields) => Ok(Value::record(named(fields, frame)?)),
-        Expr::Get(inner, name) => {
-            let record = eval(inner, frame)?;
-            record
-                .field(*name)
-                .cloned()
-                .ok_or_else(|| wrong_or_null(&record))
+        Expr::Record(fields) => Ok(Value::record(named(fields, frame, eval)?)),
+        Expr::Get(inner, name) => field_of(&eval(inner, frame)?, *name),
+        Expr::With(base, changes) => {
+            let fields = fields_of(eval(base, frame)?)?;
+            Ok(changed(fields, named(changes, frame, eval)?))
         }
-        Expr::With(base, changes) => with_fields(base, changes, frame),
-        Expr::SetOf(items) => Ok(Value::set(each(items, frame)?.into_iter().collect())),
-        Expr::SeqOf(items) => Ok(Value::seq(each(items, frame)?)),
-        Expr::MapOf(entries) => {
-            let mut built = BTreeMap::new();
-            for (key, value) in entries {
-                built.insert(eval(key, frame)?, eval(value, frame)?);
-            }
-            Ok(Value::map(built))
-        }
+        Expr::SetOf(items) => Ok(Value::set(each(items, frame, eval)?.into_iter().collect())),
+        Expr::SeqOf(items) => Ok(Value::seq(each(items, frame, eval)?)),
+        Expr::MapOf(entries) => mapped(entries, frame, eval),
         Expr::Sweep {
             sweep,
             shelf,
@@ -183,18 +174,13 @@ pub fn eval(expr: &Expr, frame: &mut Frame<'_>) -> Result<Value, Fault> {
             source,
             body,
         } => {
-            let collection = eval(source, frame)?;
             let test = Test {
                 sweep: *sweep,
                 shelf: *shelf,
                 slot: *slot,
-                body,
+                body: &**body,
             };
-            match &collection {
-                Value::Set(items) => test.over(items.iter(), frame),
-                Value::Seq(items) => test.over(items.iter(), frame),
-                other => Err(wrong_or_null(other)),
-            }
+            test.over(&eval(source, frame)?, frame, truth)
         }
     }
 }
@@ -209,53 +195,100 @@ pub fn truth(expr: &Expr, frame: &mut Frame<'_>) -> Result<bool, Fault> {
     as_bool(&eval(expr, frame)?)
 }
 
-fn each(items: &[Expr], frame: &mut Frame<'_>) -> Result<Vec<Value>, Fault> {
+pub(crate) fn each<T>(
+    items: &[T],
+    frame: &mut Frame<'_>,
+    evaluate: impl Fn(&T, &mut Frame<'_>) -> Evaluated,
+) -> Result<Vec<Value>, Fault> {
     let mut built = Vec::with_capacity(items.len());
     for item in items {
-        built.push(eval(item, frame)?);
+        built.push(evaluate(item, frame)?);
     }
     Ok(built)
 }
 
-fn named(fields: &[(Sym, Expr)], frame: &mut Frame<'_>) -> Result<Vec<(Sym, Value)>, Fault> {
+pub(crate) fn named<T>(
+    fields: &[(Sym, T)],
+    frame: &mut Frame<'_>,
+    evaluate: impl Fn(&T, &mut Frame<'_>) -> Evaluated,
+) -> Result<Vec<(Sym, Value)>, Fault> {
     let mut built = Vec::with_capacity(fields.len());
     for (name, inner) in fields {
-        built.push((*name, eval(inner, frame)?));
+        built.push((*name, evaluate(inner, frame)?));
     }
     Ok(built)
 }
 
-fn with_fields(base: &Expr, changes: &[(Sym, Expr)], frame: &mut Frame<'_>) -> Evaluated {
-    let old = match eval(base, frame)? {
-        Value::Record(old) => old,
-        other => return Err(wrong_or_null(&other)),
-    };
-    let mut fields = Arc::unwrap_or_clone(old);
-    for (name, value) in named(changes, frame)? {
+pub(crate) fn mapped<T>(
+    entries: &[(T, T)],
+    frame: &mut Frame<'_>,
+    evaluate: impl Fn(&T, &mut Frame<'_>) -> Evaluated,
+) -> Evaluated {
+    let mut built = BTreeMap::new();
+    for (key, value) in entries {
+        built.insert(evaluate(key, frame)?, evaluate(value, frame)?);
+    }
+    Ok(Value::map(built))
+}
+
+pub(crate) fn field_of(record: &Value, name: Sym) -> Evaluated {
+    record
+        .field(name)
+        .cloned()
+        .ok_or_else(|| wrong_or_null(record))
+}
+
+pub(crate) fn fields_of(record: Value) -> Result<Vec<(Sym, Value)>, Fault> {
+    match record {
+        Value::Record(fields) => Ok(Arc::unwrap_or_clone(fields)),
+        other => Err(wrong_or_null(&other)),
+    }
+}
+
+pub(crate) fn changed(mut fields: Vec<(Sym, Value)>, changes: Vec<(Sym, Value)>) -> Value {
+    for (name, value) in changes {
         match fields.iter_mut().find(|(key, _)| *key == name) {
             Some((_, place)) => *place = value,
             None => fields.push((name, value)),
         }
     }
-    Ok(Value::record(fields))
+    Value::record(fields)
 }
 
-struct Test<'e> {
-    sweep: Sweep,
-    shelf: Shelf,
-    slot: usize,
-    body: &'e Expr,
+pub(crate) struct Test<'b, B> {
+    pub(crate) sweep: Sweep,
+    pub(crate) shelf: Shelf,
+    pub(crate) slot: usize,
+    pub(crate) body: &'b B,
 }
 
-impl Test<'_> {
-    fn over<'v>(&self, items: impl Iterator<Item = &'v Value>, frame: &mut Frame<'_>) -> Evaluated {
+impl<B> Test<'_, B> {
+    pub(crate) fn over(
+        &self,
+        collection: &Value,
+        frame: &mut Frame<'_>,
+        judge: impl Fn(&B, &mut Frame<'_>) -> Result<bool, Fault>,
+    ) -> Evaluated {
+        match collection {
+            Value::Set(items) => self.through(items.iter(), frame, judge),
+            Value::Seq(items) => self.through(items.iter(), frame, judge),
+            other => Err(wrong_or_null(other)),
+        }
+    }
+
+    fn through<'v>(
+        &self,
+        items: impl Iterator<Item = &'v Value>,
+        frame: &mut Frame<'_>,
+        judge: impl Fn(&B, &mut Frame<'_>) -> Result<bool, Fault>,
+    ) -> Evaluated {
         let mut kept = Vec::new();
         for item in items {
             if frame.out_of_time() {
                 return Err(Fault::Stopped);
             }
             frame.put(self.slot, item.clone());
-            let passed = truth(self.body, frame)?;
+            let passed = judge(self.body, frame)?;
             match self.sweep {
                 Sweep::Every if !passed => return Ok(Value::Bool(false)),
                 Sweep::Some if passed => return Ok(Value::Bool(true)),
@@ -276,22 +309,27 @@ impl Test<'_> {
     }
 }
 
-fn apply(op: Op, arguments: &[Expr], frame: &mut Frame<'_>) -> Evaluated {
+pub(crate) fn applied<T>(
+    op: Op,
+    arguments: &[T],
+    frame: &mut Frame<'_>,
+    evaluate: impl Fn(&T, &mut Frame<'_>) -> Evaluated,
+) -> Evaluated {
     let mut remaining = arguments.iter();
     let first = match remaining.next() {
-        Some(argument) => eval(argument, frame)?,
+        Some(argument) => evaluate(argument, frame)?,
         None => return Err(Fault::WrongKind),
     };
     let second = remaining
         .next()
-        .map(|argument| eval(argument, frame))
+        .map(|argument| evaluate(argument, frame))
         .transpose()?;
     let third = remaining
         .next()
-        .map(|argument| eval(argument, frame))
+        .map(|argument| evaluate(argument, frame))
         .transpose()?;
     for argument in remaining {
-        eval(argument, frame)?;
+        evaluate(argument, frame)?;
     }
     match op {
         Op::Not => Ok(Value::Bool(!as_bool(&first)?)),

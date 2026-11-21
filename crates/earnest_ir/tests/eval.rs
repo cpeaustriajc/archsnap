@@ -5,7 +5,7 @@
 use earnest_ir::{
     Code, Expr, Fault, Frame, MapOp, Math, Op, Order, SeqOp, SetOp, Shelf, Sweep, eval, truth,
 };
-use earnest_value::{IntType, MOST_SAFE_INTEGER, Symbols, Value};
+use earnest_value::{IntType, MOST_SAFE_INTEGER, Sym, Symbols, Value};
 use proptest::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1010,73 +1010,132 @@ fn edge_number() -> impl Strategy<Value = i64> {
     ]
 }
 
+const NAMES: usize = 3;
+
+fn any_name() -> impl Strategy<Value = Sym> {
+    (0..NAMES).prop_map(|position| {
+        let mut symbols = Symbols::default();
+        let mut named = symbols.intern("a");
+        for text in ["b", "c"].iter().take(position) {
+            named = symbols.intern(text);
+        }
+        named
+    })
+}
+
 fn any_value() -> impl Strategy<Value = Value> {
     let plain = prop_oneof![
         3 => edge_number().prop_map(Value::Int),
         1 => any::<bool>().prop_map(Value::Bool),
         1 => Just(Value::Null),
+        1 => any_name().prop_map(Value::Str),
     ];
     plain.prop_recursive(2, 6, 3, |inner| {
         prop_oneof![
-            proptest::collection::vec(inner.clone(), 0..3).prop_map(Value::seq),
-            proptest::collection::btree_set(inner, 0..3).prop_map(Value::set),
+            1 => proptest::collection::vec(inner.clone(), 0..3).prop_map(Value::seq),
+            1 => proptest::collection::btree_set(inner.clone(), 0..3).prop_map(Value::set),
+            1 => proptest::collection::btree_map(inner.clone(), inner.clone(), 0..3)
+                .prop_map(Value::map),
+            2 => proptest::collection::btree_map(any_name(), inner, 0..4)
+                .prop_map(|fields| Value::record(fields.into_iter().collect())),
         ]
     })
 }
 
 fn any_op() -> impl Strategy<Value = Op> {
+    let set_ops = prop_oneof![
+        Just(SetOp::Has),
+        Just(SetOp::Add),
+        Just(SetOp::Delete),
+        Just(SetOp::Union),
+        Just(SetOp::Intersect),
+        Just(SetOp::Subtract),
+        Just(SetOp::IsSubset),
+        Just(SetOp::Size),
+    ];
+    let map_ops = prop_oneof![
+        Just(MapOp::Has),
+        Just(MapOp::Get),
+        Just(MapOp::Set),
+        Just(MapOp::Delete),
+        Just(MapOp::Size),
+        Just(MapOp::Keys),
+    ];
+    let sequence_ops = prop_oneof![
+        Just(SeqOp::Size),
+        Just(SeqOp::Get),
+        Just(SeqOp::First),
+        Just(SeqOp::Last),
+        Just(SeqOp::Push),
+        Just(SeqOp::Shift),
+        Just(SeqOp::Pop),
+        Just(SeqOp::Includes),
+    ];
     prop_oneof![
-        Just(Op::Not),
-        Just(Op::Negate),
-        Just(Op::SomeOf),
-        Just(Op::Unwrap),
-        Just(Op::Safe),
-        Just(Op::Fit(IntType::U8)),
-        Just(Op::Fit(IntType::I32)),
-        Just(Op::Equal),
-        Just(Op::Differ),
-        Just(Op::Order(Order::Less)),
-        Just(Op::Order(Order::LessOrEqual)),
-        Just(Op::Order(Order::Greater)),
-        Just(Op::Order(Order::GreaterOrEqual)),
-        Just(Op::Math(Math::Add)),
-        Just(Op::Math(Math::Subtract)),
-        Just(Op::Math(Math::Multiply)),
-        Just(Op::Math(Math::Remainder)),
-        Just(Op::Math(Math::Divide)),
-        Just(Op::Seq(SeqOp::Size)),
-        Just(Op::Seq(SeqOp::Includes)),
-        Just(Op::Set(SetOp::Size)),
-        Just(Op::Set(SetOp::Has)),
+        2 => Just(Op::Not),
+        1 => Just(Op::Negate),
+        2 => Just(Op::SomeOf),
+        1 => Just(Op::Unwrap),
+        1 => Just(Op::Safe),
+        1 => Just(Op::Fit(IntType::U8)),
+        1 => Just(Op::Fit(IntType::I32)),
+        3 => Just(Op::Equal),
+        3 => Just(Op::Differ),
+        1 => Just(Op::Order(Order::Less)),
+        1 => Just(Op::Order(Order::LessOrEqual)),
+        1 => Just(Op::Order(Order::Greater)),
+        1 => Just(Op::Order(Order::GreaterOrEqual)),
+        1 => Just(Op::Math(Math::Add)),
+        1 => Just(Op::Math(Math::Subtract)),
+        1 => Just(Op::Math(Math::Multiply)),
+        1 => Just(Op::Math(Math::Remainder)),
+        1 => Just(Op::Math(Math::Divide)),
+        2 => set_ops.prop_map(Op::Set),
+        2 => map_ops.prop_map(Op::Map),
+        2 => sequence_ops.prop_map(Op::Seq),
     ]
+}
+
+fn any_sweep() -> impl Strategy<Value = (Sweep, Shelf)> {
+    (
+        prop_oneof![Just(Sweep::Every), Just(Sweep::Some), Just(Sweep::Filter)],
+        prop_oneof![Just(Shelf::Set), Just(Shelf::Seq)],
+    )
 }
 
 fn any_expr() -> impl Strategy<Value = Expr> {
     let leaf = prop_oneof![
         2 => any_value().prop_map(Expr::Const),
         2 => (0..FIELDS + 1).prop_map(Expr::Field),
-        2 => (0..SLOTS + 1).prop_map(Expr::Local),
+        3 => (0..SLOTS + 1).prop_map(Expr::Local),
     ];
     leaf.prop_recursive(5, 40, 4, |inner| {
         let boxed = || inner.clone().prop_map(Box::new);
+        let named = || proptest::collection::vec((any_name(), inner.clone()), 0..4);
         prop_oneof![
             6 => (any_op(), proptest::collection::vec(inner.clone(), 0..4))
                 .prop_map(|(op, arguments)| Expr::Apply(op, arguments)),
             2 => (boxed(), boxed()).prop_map(|(left, right)| Expr::And(left, right)),
             2 => (boxed(), boxed()).prop_map(|(left, right)| Expr::Or(left, right)),
             1 => (boxed(), boxed(), boxed()).prop_map(|(test, yes, no)| Expr::Choose(test, yes, no)),
-            1 => (0..SLOTS, boxed(), boxed())
+            2 => (0..SLOTS, boxed(), boxed())
                 .prop_map(|(slot, value, body)| Expr::Bind { slot, value, body }),
-            1 => (any::<bool>(), 0..SLOTS, boxed(), boxed()).prop_map(|(every, slot, source, body)| {
-                Expr::Sweep {
-                    sweep: if every { Sweep::Every } else { Sweep::Some },
-                    shelf: Shelf::Seq,
+            1 => (any_sweep(), 0..SLOTS, boxed(), boxed()).prop_map(
+                |((sweep, shelf), slot, source, body)| Expr::Sweep {
+                    sweep,
+                    shelf,
                     slot,
                     source,
                     body,
-                }
-            }),
+                },
+            ),
             1 => proptest::collection::vec(inner.clone(), 0..3).prop_map(Expr::SeqOf),
+            1 => proptest::collection::vec(inner.clone(), 0..3).prop_map(Expr::SetOf),
+            1 => proptest::collection::vec((inner.clone(), inner.clone()), 0..3)
+                .prop_map(Expr::MapOf),
+            2 => named().prop_map(Expr::Record),
+            3 => (boxed(), any_name()).prop_map(|(record, name)| Expr::Get(record, name)),
+            1 => (boxed(), named()).prop_map(|(base, changes)| Expr::With(base, changes)),
         ]
     })
 }
