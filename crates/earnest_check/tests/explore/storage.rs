@@ -7,7 +7,7 @@ fn size_of(queue: &Expr) -> Expr {
     Expr::Apply(Op::Seq(SeqOp::Size), vec![queue.clone()])
 }
 
-fn queue_of_up_to_three(max: usize) -> Model {
+fn queue_of_up_to(most: i64, max: usize) -> Model {
     let mut sketch = Sketch::new();
     let messages = vec![sketch.text("a"), sketch.text("b")];
     let domain = Domain::Seq {
@@ -18,7 +18,7 @@ fn queue_of_up_to_three(max: usize) -> Model {
     let below_three = apply(
         Op::Order(Order::Less),
         &size_of(&queue),
-        Expr::Const(Value::Int(3)),
+        Expr::Const(Value::Int(most)),
     );
     let sent = apply(Op::Seq(SeqOp::Push), &queue, Expr::Local(0));
     sketch.action_with(
@@ -51,6 +51,13 @@ fn with_graph(jobs: usize) -> Limits {
     }
 }
 
+fn with_jobs(jobs: usize) -> Limits {
+    Limits {
+        jobs,
+        ..Limits::default()
+    }
+}
+
 fn broken_after(outcome: &Outcome, steps: usize) {
     let rule = &outcome.rules[0];
     assert_eq!(rule.verdict, Verdict::Broken, "{outcome:?}");
@@ -61,8 +68,8 @@ fn broken_after(outcome: &Outcome, steps: usize) {
 #[test]
 fn a_field_with_too_many_values_to_list_is_searched_like_one_with_few() {
     for limits in [Limits::default(), with_graph(1), with_graph(4)] {
-        let listed = explore(&queue_of_up_to_three(3), &limits);
-        let grown = explore(&queue_of_up_to_three(20), &limits);
+        let listed = explore(&queue_of_up_to(3, 3), &limits);
+        let grown = explore(&queue_of_up_to(3, 20), &limits);
         assert_eq!(listed.states, 15, "queues of up to three messages");
         broken_after(&listed, 3);
         assert_eq!(grown, listed, "the same states, verdicts and paths");
@@ -71,7 +78,7 @@ fn a_field_with_too_many_values_to_list_is_searched_like_one_with_few() {
 
 #[test]
 fn a_value_that_leaves_its_domain_is_kept_and_shown_on_its_path() {
-    let outcome = explore(&queue_of_up_to_three(2), &Limits::default());
+    let outcome = explore(&queue_of_up_to(3, 2), &Limits::default());
     assert_eq!(outcome.status, Status::Fail);
     assert_eq!(outcome.states, 15, "the queues of three are counted");
     assert_eq!(
@@ -82,6 +89,29 @@ fn a_value_that_leaves_its_domain_is_kept_and_shown_on_its_path() {
     let finding = &outcome.findings[0];
     assert_eq!(finding.kind, FindingKind::OutOfRange);
     assert_eq!(finding.path.steps.len(), 3, "the shortest path");
+}
+
+#[test]
+fn workers_find_the_same_states_when_a_value_has_no_code_yet() {
+    let listed = explore(&queue_of_up_to(10, 10), &Limits::default());
+    assert_eq!(listed.states, 2047, "queues of up to ten messages");
+    for limits in [Limits::default(), with_graph(4), with_jobs(4)] {
+        let grown = explore(&queue_of_up_to(10, 20), &limits);
+        assert_eq!(grown.states, listed.states);
+        assert_eq!(grown.rules, listed.rules, "the same verdicts and paths");
+    }
+}
+
+#[test]
+fn workers_keep_the_states_that_leave_their_domain() {
+    let alone = explore(&queue_of_up_to(10, 9), &Limits::default());
+    assert_eq!(alone.states, 2047, "the queues of ten are counted");
+    assert_eq!(alone.findings[0].kind, FindingKind::OutOfRange);
+    assert_eq!(explore(&queue_of_up_to(10, 9), &with_jobs(4)), alone);
+    assert_eq!(
+        explore(&queue_of_up_to(10, 9), &with_graph(4)).findings,
+        alone.findings
+    );
 }
 
 #[test]

@@ -154,8 +154,6 @@ impl Codec {
     }
 }
 
-/// Whether a row was in the store, was put in it, or could not be put in because the store
-/// already holds the most states it may.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Placed {
     Known(usize),
