@@ -475,6 +475,7 @@ impl Successors for Choice<'_> {
 struct Here {
     stopped: bool,
     full: bool,
+    handed: bool,
     marks: Vec<(usize, Mark)>,
     through: usize,
 }
@@ -585,26 +586,65 @@ impl Search<'_> {
             }
             return ran;
         }
-        let here = self.expand_here(frontier.clone(), deadline, asked);
-        if here.stopped && asked == Asked::Everything {
-            self.store.truncate(frontier.end);
-            self.arrows.retain(|arrow| arrow.from < frontier.start);
+        let mut marks = Vec::new();
+        let mut helpers = self.limits.helpers.as_ref();
+        let mut rest = frontier.clone();
+        loop {
+            let here = self.expand_here(rest.clone(), deadline, asked, helpers);
+            if here.stopped && asked == Asked::Everything {
+                self.undo_level(&frontier);
+                return Ran {
+                    stopped: true,
+                    workers: 1,
+                };
+            }
+            marks.extend(here.marks);
+            rest.start = here.through;
+            let spread = if here.handed {
+                self.spread_level(&rest, deadline, asked, per_state)
+            } else {
+                None
+            };
+            let Some(expansion) = spread else {
+                if here.handed {
+                    helpers = None;
+                    continue;
+                }
+                self.record_all(&marks, here.through);
+                if here.full {
+                    self.reason = Some(self.limit_reason());
+                }
+                return Ran {
+                    stopped: here.stopped,
+                    workers: 1,
+                };
+            };
+            if expansion.stopped && asked == Asked::Everything {
+                self.undo_level(&frontier);
+                return Ran {
+                    stopped: true,
+                    workers: expansion.workers,
+                };
+            }
+            self.record_all(&marks, rest.start);
+            self.merge(expansion.parts);
             return Ran {
-                stopped: true,
-                workers: 1,
+                stopped: expansion.stopped,
+                workers: expansion.workers,
             };
         }
-        for (id, mark) in &here.marks {
+    }
+
+    fn undo_level(&mut self, frontier: &Range<usize>) {
+        self.store.truncate(frontier.end);
+        self.arrows.retain(|arrow| arrow.from < frontier.start);
+    }
+
+    fn record_all(&mut self, marks: &[(usize, Mark)], through: usize) {
+        for (id, mark) in marks {
             self.record(*id, mark);
         }
-        self.judged = self.judged.max(here.through);
-        if here.full {
-            self.reason = Some(self.limit_reason());
-        }
-        Ran {
-            stopped: here.stopped,
-            workers: 1,
-        }
+        self.judged = self.judged.max(through);
     }
 
     fn expand_here(
@@ -612,6 +652,7 @@ impl Search<'_> {
         frontier: Range<usize>,
         deadline: Option<Instant>,
         asked: Asked,
+        helpers: Option<&Helpers>,
     ) -> Here {
         let expand = Expand {
             model: self.model,
@@ -626,6 +667,7 @@ impl Search<'_> {
         let mut here = Here {
             stopped: false,
             full: false,
+            handed: false,
             marks: Vec::new(),
             through: frontier.start,
         };
@@ -650,6 +692,11 @@ impl Search<'_> {
             let late = deadline.is_some_and(|limit| Instant::now() >= limit);
             if asked == Asked::Everything && clock_due && late {
                 here.stopped = true;
+                break;
+            }
+            let idle = || helpers.is_some_and(|helpers| helpers.idle() > 0);
+            if clock_due && position > 0 && idle() {
+                here.handed = true;
                 break;
             }
             sink.base_is_row = sink.store.read_state(id, &mut sink.base, &mut state);
