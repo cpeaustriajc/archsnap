@@ -5,6 +5,7 @@ use rustc_hash::{FxHashMap, FxHasher};
 use std::hash::Hasher;
 
 const WORD_BITS: u32 = u64::BITS;
+const WORD_BYTES: usize = 8;
 const SHARD_BITS: u32 = 6;
 const SHARD_COUNT: usize = 1 << SHARD_BITS;
 const SHARD_SHIFT: u32 = 51;
@@ -139,10 +140,11 @@ impl Codec {
         }
     }
 
-    fn read(&self, row: &[u64]) -> u64 {
-        row.get(self.word).map_or(0, |word| {
-            word.checked_shr(self.shift).unwrap_or(0) & self.mask
-        })
+    fn read(&self, packed: &[u8]) -> u64 {
+        word_of(packed, self.word)
+            .checked_shr(self.shift)
+            .unwrap_or(0)
+            & self.mask
     }
 
     fn write(&self, row: &mut [u64], code: u64) {
@@ -221,22 +223,22 @@ impl<T: Id> Links<T> {
             .push(parent.and_then(T::from_index).unwrap_or(T::NONE));
     }
 
-    fn find(&self, rows: &[u64], words: usize, row: &[u64], hash: u64) -> Option<usize> {
+    fn find(&self, rows: &[u8], stride: usize, row: &[u8], hash: u64) -> Option<usize> {
         self.shards
             .get(shard_of(hash))?
-            .find(hash, |id| same_row(row_at(rows, words, id.index()), row))
+            .find(hash, |id| same_row(row_at(rows, stride, id.index()), row))
             .map(|id| id.index())
     }
 
-    fn place(&mut self, rows: &mut Vec<u64>, at: Place<'_>) -> Placed {
+    fn place(&mut self, rows: &mut Vec<u8>, at: Place<'_>) -> Placed {
         let Some(shard) = self.shards.get_mut(shard_of(at.hash)) else {
             return Placed::Full;
         };
-        let words = at.words;
+        let stride = at.stride;
         let entry = shard.entry(
             at.hash,
-            |id| same_row(row_at(rows, words, id.index()), at.row),
-            |id| hash_row(row_at(rows, words, id.index())),
+            |id| same_row(row_at(rows, stride, id.index()), at.row),
+            |id| hash_row(row_at(rows, stride, id.index())),
         );
         match entry {
             hashbrown::hash_table::Entry::Occupied(found) => Placed::Known(found.get().index()),
@@ -262,9 +264,9 @@ impl<T: Id> Links<T> {
 
 #[derive(Clone, Copy)]
 struct Place<'a> {
-    row: &'a [u64],
+    row: &'a [u8],
     hash: u64,
-    words: usize,
+    stride: usize,
     count: usize,
     most: usize,
     parent: Option<usize>,
@@ -280,7 +282,8 @@ enum Ids {
 pub(crate) struct Store {
     codecs: Vec<Codec>,
     words: usize,
-    rows: Vec<u64>,
+    stride: usize,
+    rows: Vec<u8>,
     count: usize,
     ids: Ids,
     grown: Vec<usize>,
@@ -288,25 +291,34 @@ pub(crate) struct Store {
     wide_ids: FxHashMap<Box<[Value]>, usize>,
 }
 
-pub(crate) fn same_row(one: &[u64], other: &[u64]) -> bool {
+pub(crate) fn same_row(one: &[u8], other: &[u8]) -> bool {
     one.len() == other.len() && one.iter().zip(other).all(|(left, right)| left == right)
 }
 
-pub(crate) fn hash_row(row: &[u64]) -> u64 {
+pub(crate) fn hash_row(row: &[u8]) -> u64 {
     let mut hasher = FxHasher::default();
-    for word in row {
-        hasher.write_u64(*word);
-    }
+    hasher.write(row);
     hasher.finish()
+}
+
+fn word_of(packed: &[u8], word: usize) -> u64 {
+    let start = word.saturating_mul(WORD_BYTES);
+    let mut bytes = [0; WORD_BYTES];
+    if let Some(found) = packed.get(start..) {
+        for (to, from) in bytes.iter_mut().zip(found) {
+            *to = *from;
+        }
+    }
+    u64::from_le_bytes(bytes)
 }
 
 fn shard_of(hash: u64) -> usize {
     usize::try_from(hash.checked_shr(SHARD_SHIFT).unwrap_or(0) & SHARD_MASK).unwrap_or(0)
 }
 
-pub(crate) fn row_at(rows: &[u64], words: usize, id: usize) -> &[u64] {
-    let start = id.saturating_mul(words);
-    rows.get(start..start.saturating_add(words)).unwrap_or(&[])
+pub(crate) fn row_at(rows: &[u8], stride: usize, id: usize) -> &[u8] {
+    let start = id.saturating_mul(stride);
+    rows.get(start..start.saturating_add(stride)).unwrap_or(&[])
 }
 
 impl Store {
@@ -329,6 +341,8 @@ impl Store {
             used += bits;
         }
         let words = if used > 0 { word + 1 } else { word };
+        let stride =
+            word * WORD_BYTES + usize::try_from(used.div_ceil(u8::BITS)).unwrap_or(WORD_BYTES);
         let grown = codecs
             .iter()
             .enumerate()
@@ -339,6 +353,7 @@ impl Store {
             grown,
             codecs,
             words,
+            stride,
             rows: Vec::new(),
             count: 0,
             ids: if u32::from_index(most).is_some() {
@@ -355,15 +370,26 @@ impl Store {
         self.count
     }
 
-    pub(crate) fn words(&self) -> usize {
-        self.words
+    pub(crate) fn stride(&self) -> usize {
+        self.stride
     }
 
-    pub(crate) fn row(&self, id: usize) -> Option<&[u64]> {
+    pub(crate) fn unpack(&self, id: usize, words: &mut Vec<u64>) -> bool {
+        words.clear();
         if id >= self.count || self.wide_state(id).is_some() {
-            return None;
+            return false;
         }
-        Some(row_at(&self.rows, self.words, id))
+        let packed = row_at(&self.rows, self.stride, id);
+        words.extend((0..self.words).map(|word| word_of(packed, word)));
+        true
+    }
+
+    pub(crate) fn pack(&self, words: &[u64], packed: &mut Vec<u8>) {
+        packed.clear();
+        for word in words {
+            packed.extend_from_slice(&word.to_le_bytes());
+        }
+        packed.truncate(self.stride);
     }
 
     fn wide_state(&self, id: usize) -> Option<&[Value]> {
@@ -391,7 +417,7 @@ impl Store {
             values.extend(full.iter().cloned());
             return;
         }
-        let row = row_at(&self.rows, self.words, id);
+        let row = row_at(&self.rows, self.stride, id);
         values.extend(self.codecs.iter().map(|codec| codec.value(codec.read(row))));
     }
 
@@ -402,7 +428,7 @@ impl Store {
                 .zip(full.iter())
                 .position(|(field, value)| !field.domain.contains(value));
         }
-        let row = row_at(&self.rows, self.words, id);
+        let row = row_at(&self.rows, self.stride, id);
         self.grown.iter().copied().find(|position| {
             self.codecs
                 .get(*position)
@@ -448,16 +474,16 @@ impl Store {
         self.wide_ids.get(values).copied()
     }
 
-    pub(crate) fn find(&self, row: &[u64], hash: u64) -> Option<usize> {
+    pub(crate) fn find(&self, row: &[u8], hash: u64) -> Option<usize> {
         match &self.ids {
-            Ids::Narrow(links) => links.find(&self.rows, self.words, row, hash),
-            Ids::Wide(links) => links.find(&self.rows, self.words, row, hash),
+            Ids::Narrow(links) => links.find(&self.rows, self.stride, row, hash),
+            Ids::Wide(links) => links.find(&self.rows, self.stride, row, hash),
         }
     }
 
     pub(crate) fn place(
         &mut self,
-        row: &[u64],
+        row: &[u8],
         hash: u64,
         parent: Option<usize>,
         most: usize,
@@ -465,7 +491,7 @@ impl Store {
         let at = Place {
             row,
             hash,
-            words: self.words,
+            stride: self.stride,
             count: self.count,
             most,
             parent,
@@ -488,8 +514,10 @@ impl Store {
     ) -> Placed {
         let mut row = Vec::with_capacity(self.words);
         if self.encode_or_add(&values, &mut row) {
-            let hash = hash_row(&row);
-            return self.place(&row, hash, parent, most);
+            let mut packed = Vec::with_capacity(self.stride);
+            self.pack(&row, &mut packed);
+            let hash = hash_row(&packed);
+            return self.place(&packed, hash, parent, most);
         }
         if let Some(id) = self.wide_ids.get(&values) {
             return Placed::Known(*id);
@@ -499,7 +527,7 @@ impl Store {
         }
         let id = self.count;
         self.rows
-            .resize(self.rows.len().saturating_add(self.words), 0);
+            .resize(self.rows.len().saturating_add(self.stride), 0);
         match &mut self.ids {
             Ids::Narrow(links) => links.push_parent(parent),
             Ids::Wide(links) => links.push_parent(parent),
@@ -515,7 +543,7 @@ impl Store {
             return;
         }
         self.count = kept;
-        self.rows.truncate(kept.saturating_mul(self.words));
+        self.rows.truncate(kept.saturating_mul(self.stride));
         match &mut self.ids {
             Ids::Narrow(links) => links.truncate(kept),
             Ids::Wide(links) => links.truncate(kept),

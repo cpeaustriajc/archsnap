@@ -121,7 +121,7 @@ struct Part {
     expanded: usize,
     marks: Vec<(usize, Mark)>,
     entries: Vec<Entry>,
-    rows: Vec<u64>,
+    rows: Vec<u8>,
     hashes: Vec<u64>,
     raws: Vec<Box<[Value]>>,
     stopped: bool,
@@ -280,9 +280,11 @@ fn encode_next(
 struct PartSink<'a> {
     store: &'a Store,
     graph: bool,
-    base: Option<&'a [u64]>,
+    base: Vec<u64>,
+    base_is_row: bool,
     from: usize,
     row: Vec<u64>,
+    packed: Vec<u8>,
     met: HashTable<usize>,
     met_raw: FxHashSet<Box<[Value]>>,
     part: Part,
@@ -298,12 +300,12 @@ impl PartSink<'_> {
     }
 
     fn first_in_part(&mut self, hash: u64) -> bool {
-        let words = self.store.words();
-        let (rows, row) = (&self.part.rows, &self.row);
+        let stride = self.store.stride();
+        let (rows, row) = (&self.part.rows, &self.packed);
         match self.met.entry(
             hash,
-            |at| same_row(row_at(rows, words, *at), row),
-            |at| hash_row(row_at(rows, words, *at)),
+            |at| same_row(row_at(rows, stride, *at), row),
+            |at| hash_row(row_at(rows, stride, *at)),
         ) {
             hashbrown::hash_table::Entry::Occupied(_) => false,
             hashbrown::hash_table::Entry::Vacant(vacant) => {
@@ -322,7 +324,8 @@ impl Successors for PartSink<'_> {
         state: &[Value],
         updates: &[(usize, Value)],
     ) -> bool {
-        if !encode_next(self.store, self.base, &mut self.row, state, updates) {
+        let base = self.base_is_row.then_some(self.base.as_slice());
+        if !encode_next(self.store, base, &mut self.row, state, updates) {
             let next = with_updates(state, updates);
             if let Some(to) = self.store.find_values(&next) {
                 if self.graph {
@@ -337,8 +340,9 @@ impl Successors for PartSink<'_> {
             self.push(action, Target::Raw);
             return true;
         }
-        let hash = hash_row(&self.row);
-        if let Some(to) = self.store.find(&self.row, hash) {
+        self.store.pack(&self.row, &mut self.packed);
+        let hash = hash_row(&self.packed);
+        if let Some(to) = self.store.find(&self.packed, hash) {
             if self.graph {
                 self.push(action, Target::Known(to));
             }
@@ -347,7 +351,7 @@ impl Successors for PartSink<'_> {
         if !self.graph && !self.first_in_part(hash) {
             return false;
         }
-        self.part.rows.extend_from_slice(&self.row);
+        self.part.rows.extend_from_slice(&self.packed);
         self.part.hashes.push(hash);
         self.push(action, Target::Fresh);
         true
@@ -365,20 +369,14 @@ struct HereSink<'a> {
     most: usize,
     full: bool,
     row: Vec<u64>,
+    packed: Vec<u8>,
     after_full: FxHashSet<Box<[Value]>>,
 }
 
 impl HereSink<'_> {
     fn begin(&mut self, id: usize) {
         self.from = id;
-        self.base.clear();
-        match self.store.row(id) {
-            Some(row) => {
-                self.base.extend_from_slice(row);
-                self.base_is_row = true;
-            }
-            None => self.base_is_row = false,
-        }
+        self.base_is_row = self.store.unpack(id, &mut self.base);
     }
 
     fn counts(&self, known: usize) -> bool {
@@ -403,10 +401,13 @@ impl Successors for HereSink<'_> {
     ) -> bool {
         let base = self.base_is_row.then_some(self.base.as_slice());
         let encoded = encode_next(self.store, base, &mut self.row, state, updates);
+        if encoded {
+            self.store.pack(&self.row, &mut self.packed);
+        }
         if self.full {
             let next = with_updates(state, updates);
             let known = if encoded {
-                self.store.find(&self.row, hash_row(&self.row))
+                self.store.find(&self.packed, hash_row(&self.packed))
             } else {
                 self.store.find_values(&next)
             };
@@ -414,8 +415,8 @@ impl Successors for HereSink<'_> {
         }
         let parent = Some(self.from);
         let placed = if encoded {
-            let hash = hash_row(&self.row);
-            self.store.place(&self.row, hash, parent, self.most)
+            let hash = hash_row(&self.packed);
+            self.store.place(&self.packed, hash, parent, self.most)
         } else {
             self.store
                 .place_values(with_updates(state, updates), parent, self.most)
@@ -642,6 +643,7 @@ impl Search<'_> {
             most: self.limits.max_states,
             full: false,
             row: Vec::new(),
+            packed: Vec::new(),
             after_full: FxHashSet::default(),
         };
         let mut scratch = Scratch::default();
@@ -679,9 +681,11 @@ impl Search<'_> {
         let mut sink = PartSink {
             store: &self.store,
             graph: self.limits.keep_graph,
-            base: None,
+            base: Vec::new(),
+            base_is_row: false,
             from: 0,
             row: Vec::new(),
+            packed: Vec::new(),
             met: HashTable::new(),
             met_raw: FxHashSet::default(),
             part: Part {
@@ -700,7 +704,7 @@ impl Search<'_> {
             }
             state.clear();
             self.store.read_state(id, &mut state);
-            sink.base = self.store.row(id);
+            sink.base_is_row = self.store.unpack(id, &mut sink.base);
             sink.from = id;
             let outside = self.store.outside(id, &self.model.fields);
             let mark = expand.state(&state, outside, &mut sink, &mut scratch);
@@ -877,7 +881,7 @@ impl Search<'_> {
 
     fn merge(&mut self, parts: Vec<Part>) {
         let most = self.limits.max_states;
-        let words = self.store.words();
+        let stride = self.store.stride();
         for part in parts {
             let mut marks = part.marks.into_iter().peekable();
             let mut raws = part.raws.into_iter();
@@ -895,7 +899,7 @@ impl Search<'_> {
                             continue;
                         };
                         self.store
-                            .place(row_at(&part.rows, words, at), *hash, parent, most)
+                            .place(row_at(&part.rows, stride, at), *hash, parent, most)
                     }
                     Target::Raw => {
                         let Some(values) = raws.next() else {
