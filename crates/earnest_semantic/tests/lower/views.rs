@@ -45,8 +45,8 @@ fn a_model_without_a_view_has_no_labels() {
     assert!(model.view.title.is_none());
     assert!(model.view.state.is_none());
     assert!(model.view.group.is_none());
-    assert!(model.view.steps.is_empty());
-    assert!(model.view.colors.is_empty());
+    assert!(model.view.steps.is_empty(), "{:?}", model.view.steps);
+    assert!(model.view.colors.is_empty(), "{:?}", model.view.colors);
 }
 
 #[test]

@@ -87,8 +87,10 @@ fn a_view_with_nothing_in_it_labels_nothing() {
     assert_eq!(bare.state_label(), None);
     assert_eq!(bare.group_label(), None);
     assert_eq!(Bare::title(), None);
-    assert!(Bare::step_labels().is_empty());
-    assert!(Bare::colors().is_empty());
+    let labels = Bare::step_labels();
+    assert!(labels.is_empty(), "{labels:?}");
+    let colors = Bare::colors();
+    assert!(colors.is_empty(), "{colors:?}");
     assert!(bare.open());
 }
 

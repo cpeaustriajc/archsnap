@@ -7,7 +7,8 @@ fn a_model_within_32_bits_and_ascii_has_no_limit() {
     sketch.number("n", -2_147_483_648, 2_147_483_647, 0);
     sketch.rule("fine", yes());
     sketch.end("any", yes());
-    assert!(limits(&sketch.model()).is_empty());
+    let found = limits(&sketch.model());
+    assert!(found.is_empty(), "{found:?}");
 }
 
 #[test]

@@ -450,7 +450,8 @@ fn each_kind_of_finding_prints_under_its_own_words() {
             "  start  count = 4",
         ]
     );
-    assert!(detail_lines(&outcome(Status::Pass, 1)).is_empty());
+    let lines = detail_lines(&outcome(Status::Pass, 1));
+    assert!(lines.is_empty(), "{lines:?}");
 }
 
 #[test]
