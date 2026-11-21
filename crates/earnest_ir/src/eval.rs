@@ -262,10 +262,22 @@ fn sweep_over(
 }
 
 fn apply(op: Op, arguments: &[Expr], frame: &mut Frame<'_>) -> Evaluated {
-    let mut values = each(arguments, frame)?.into_iter();
-    let first = values.next().ok_or(Fault::WrongKind)?;
-    let second = values.next();
-    let third = values.next();
+    let mut remaining = arguments.iter();
+    let first = match remaining.next() {
+        Some(argument) => eval(argument, frame)?,
+        None => return Err(Fault::WrongKind),
+    };
+    let second = remaining
+        .next()
+        .map(|argument| eval(argument, frame))
+        .transpose()?;
+    let third = remaining
+        .next()
+        .map(|argument| eval(argument, frame))
+        .transpose()?;
+    for argument in remaining {
+        eval(argument, frame)?;
+    }
     match op {
         Op::Not => Ok(Value::Bool(!as_bool(&first)?)),
         Op::Negate => as_int(&first)?
