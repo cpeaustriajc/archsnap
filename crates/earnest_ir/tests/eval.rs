@@ -822,3 +822,117 @@ fn a_number_past_the_safe_integers_is_an_overflow_when_it_must_be_safe() {
         "only a number can be safe"
     );
 }
+
+fn overflowing() -> Expr {
+    apply(Op::Math(Math::Add), &[int(i64::MAX), int(1)])
+}
+
+#[test]
+fn every_argument_is_evaluated_before_the_kind_of_any_is_checked() {
+    let compared = apply(Op::Order(Order::Less), &[null(), overflowing()]);
+    assert_eq!(value_of(&compared), Err(Fault::Overflow));
+    let summed = apply(Op::Math(Math::Add), &[yes(), overflowing()]);
+    assert_eq!(value_of(&summed), Err(Fault::Overflow));
+    let made_safe = apply(Op::Safe, &[apply(Op::Unwrap, &[null()])]);
+    assert_eq!(value_of(&made_safe), Err(Fault::NullRead));
+}
+
+#[test]
+fn the_kind_of_the_first_argument_is_checked_before_the_second() {
+    let null_first = apply(Op::Order(Order::Less), &[null(), yes()]);
+    assert_eq!(value_of(&null_first), Err(Fault::NullRead));
+    let wrong_first = apply(Op::Math(Math::Subtract), &[yes(), null()]);
+    assert_eq!(value_of(&wrong_first), Err(Fault::WrongKind));
+    let wrong_second = apply(Op::Math(Math::Remainder), &[int(-1), null()]);
+    assert_eq!(value_of(&wrong_second), Err(Fault::NullRead));
+}
+
+#[test]
+fn an_argument_past_those_an_operation_takes_is_still_evaluated() {
+    let extra = |op: Op, arguments: &[Expr]| value_of(&apply(op, arguments));
+    assert_eq!(extra(Op::Safe, &[int(1), faulting()]), Err(Fault::NullRead));
+    assert_eq!(
+        extra(Op::Math(Math::Add), &[int(1), int(2), faulting()]),
+        Err(Fault::NullRead)
+    );
+    assert_eq!(
+        extra(Op::Order(Order::Less), &[int(1), int(2), faulting()]),
+        Err(Fault::NullRead)
+    );
+    assert_eq!(extra(Op::Not, &[yes(), faulting()]), Err(Fault::NullRead));
+    assert_eq!(extra(Op::Equal, &[int(1), int(1), int(2)]), YES);
+    assert_eq!(
+        extra(Op::Math(Math::Add), &[int(1), int(2), int(3)]),
+        Ok(Value::Int(3))
+    );
+}
+
+#[test]
+fn a_missing_field_is_malformed_before_any_later_argument_is_evaluated() {
+    let compared = apply(Op::Order(Order::Less), &[Expr::Field(9), overflowing()]);
+    assert_eq!(value_in(&ints(&[1]), &compared), Err(Fault::WrongKind));
+    let equal = apply(Op::Equal, &[Expr::Local(9), overflowing()]);
+    assert_eq!(value_in(&ints(&[1]), &equal), Err(Fault::WrongKind));
+}
+
+#[test]
+fn values_of_different_kinds_are_unequal_and_never_a_fault() {
+    let state = vec![Value::Null, Value::Bool(true), Value::Int(4)];
+    let equal = |left: Expr, right: Expr| value_in(&state, &apply(Op::Equal, &[left, right]));
+    assert_eq!(equal(Expr::Field(0), int(0)), NO);
+    assert_eq!(equal(int(1), Expr::Field(1)), NO);
+    assert_eq!(equal(Expr::Field(2), int(4)), YES);
+    assert_eq!(equal(int(4), Expr::Field(2)), YES);
+    assert_eq!(equal(Expr::Field(0), null()), YES);
+    assert_eq!(equal(Expr::Field(1), yes()), YES);
+    assert_eq!(equal(Expr::Field(1), overflowing()), Err(Fault::Overflow));
+    let differ = apply(Op::Differ, &[Expr::Field(0), int(0)]);
+    assert_eq!(value_in(&state, &differ), YES);
+}
+
+fn wide_after(expr: &Expr) -> (Result<Value, Fault>, bool) {
+    let mut frame = Frame::new(&[], SLOTS);
+    let value = eval(expr, &mut frame);
+    (value, frame.computed_beyond_32_bits())
+}
+
+#[test]
+fn only_arithmetic_beyond_32_bits_or_too_large_to_hold_is_marked() {
+    let above_32_bits = i64::from(i32::MAX) + 1;
+    let sum = |left: i64, right: i64| apply(Op::Math(Math::Add), &[int(left), int(right)]);
+    assert_eq!(
+        wide_after(&sum(i64::from(i32::MAX), 0)),
+        (Ok(Value::Int(i64::from(i32::MAX))), false)
+    );
+    assert_eq!(
+        wide_after(&sum(i64::from(i32::MAX), 1)),
+        (Ok(Value::Int(above_32_bits)), true)
+    );
+    assert_eq!(wide_after(&overflowing()), (Err(Fault::Overflow), true));
+    let unsafe_sum = apply(Op::Safe, &[sum(MOST_SAFE_INTEGER, 1)]);
+    assert_eq!(wide_after(&unsafe_sum), (Err(Fault::Overflow), true));
+    let unfit = apply(Op::Fit(IntType::U8), &[sum(above_32_bits, 0)]);
+    assert_eq!(wide_after(&unfit), (Err(Fault::Outside(IntType::U8)), true));
+    let remainder = apply(Op::Math(Math::Remainder), &[int(above_32_bits), int(0)]);
+    assert_eq!(wide_after(&remainder), (Err(Fault::Remainder), false));
+    let kind = apply(Op::Math(Math::Add), &[null(), int(above_32_bits)]);
+    assert_eq!(wide_after(&kind), (Err(Fault::NullRead), false));
+    let negated = apply(Op::Negate, &[int(above_32_bits)]);
+    assert_eq!(
+        wide_after(&negated),
+        (Ok(Value::Int(-above_32_bits)), false)
+    );
+    let compared = apply(Op::Order(Order::Less), &[int(above_32_bits), int(0)]);
+    assert_eq!(wide_after(&compared), (NO, false));
+}
+
+#[test]
+fn a_condition_that_chooses_a_value_that_is_not_a_boolean_is_a_fault() {
+    let mut frame = Frame::new(&[], SLOTS);
+    let chosen = Expr::Choose(Box::new(yes()), Box::new(int(1)), Box::new(no()));
+    assert_eq!(truth(&chosen, &mut frame), Err(Fault::WrongKind));
+    let negated = apply(Op::Not, &[null()]);
+    assert_eq!(truth(&negated, &mut frame), Err(Fault::NullRead));
+    let and = Expr::And(Box::new(int(1)), Box::new(faulting()));
+    assert_eq!(truth(&and, &mut frame), Err(Fault::WrongKind));
+}
