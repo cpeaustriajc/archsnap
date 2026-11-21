@@ -1352,7 +1352,9 @@ fn any_reading_expr() -> impl Strategy<Value = Expr> {
     })
 }
 
-fn reading_action(values: Vec<Value>, exprs: Vec<Expr>) -> Action {
+const INPUT_SLOTS: [usize; 2] = [INPUT_SLOT, INPUT_SLOT + 1];
+
+fn reading_action(values: [Vec<Value>; 2], exprs: Vec<Expr>) -> Action {
     let mut codes = Code::together(exprs).into_iter();
     let guard = codes
         .next()
@@ -1361,12 +1363,17 @@ fn reading_action(values: Vec<Value>, exprs: Vec<Expr>) -> Action {
         id: "act".to_owned(),
         label: "acts".to_owned(),
         line: 1,
-        inputs: vec![Input {
-            name: "input".to_owned(),
-            slot: INPUT_SLOT,
-            domain: Domain::OneOf(values.clone()),
-            values,
-        }],
+        inputs: INPUT_SLOTS
+            .into_iter()
+            .zip(values)
+            .enumerate()
+            .map(|(position, (slot, values))| Input {
+                name: format!("input{position}"),
+                slot,
+                domain: Domain::OneOf(values.clone()),
+                values,
+            })
+            .collect(),
         guard,
         updates: codes.map(Some).collect(),
         slots: SLOTS,
@@ -1375,25 +1382,48 @@ fn reading_action(values: Vec<Value>, exprs: Vec<Expr>) -> Action {
 
 type Answers = Vec<(Result<Value, Fault>, bool)>;
 
+fn combinations(action: &Action) -> Vec<Vec<usize>> {
+    let counts: Vec<usize> = action
+        .inputs
+        .iter()
+        .map(|input| input.values.len())
+        .collect();
+    let total: usize = counts.iter().product();
+    (0..total)
+        .map(|mut rest| {
+            counts
+                .iter()
+                .map(|count| {
+                    let digit = rest % count;
+                    rest /= count;
+                    digit
+                })
+                .collect()
+        })
+        .collect()
+}
+
 fn answers_in_turn(
     action: &Action,
     state: &[Value],
     left_over: &[Value],
-    tried: &[bool],
+    tried: impl Fn(&[usize]) -> bool,
 ) -> Vec<Option<Answers>> {
     let mut frame = Frame::new(state, SLOTS);
     for (slot, value) in left_over.iter().enumerate() {
         frame.put(slot, value.clone());
     }
-    let values = action.inputs.first().map_or(&[][..], |input| &input.values);
-    values
-        .iter()
-        .zip(tried)
-        .map(|(value, tried)| {
-            if !tried {
+    combinations(action)
+        .into_iter()
+        .map(|digits| {
+            if !tried(&digits) {
                 return None;
             }
-            frame.put(INPUT_SLOT, value.clone());
+            for (input, digit) in action.inputs.iter().zip(&digits) {
+                if let Some(value) = input.values.get(*digit) {
+                    frame.put(input.slot, value.clone());
+                }
+            }
             Some(
                 std::iter::once(&action.guard)
                     .chain(action.updates.iter().flatten())
@@ -1414,26 +1444,32 @@ proptest! {
 
     #[test]
     fn a_search_that_skips_values_not_told_apart_sees_the_same_answers(
-        values in proptest::collection::vec(any_input_value(), 1..8),
+        first_values in proptest::collection::vec(any_input_value(), 1..6),
+        second_values in proptest::collection::vec(any_input_value(), 1..4),
         exprs in proptest::collection::vec(any_reading_expr(), 1..4),
         state in proptest::collection::vec(any_value(), FIELDS),
         left_over in proptest::collection::vec(any_value(), SLOTS),
     ) {
-        let action = reading_action(values, exprs);
+        let action = reading_action([first_values, second_values], exprs);
         let told = action.told_apart();
-        prop_assert_eq!(told.len(), 1, "one answer for each input");
-        let firsts = told.first().cloned().unwrap_or_default();
-        let count = action.inputs.first().map_or(0, |input| input.values.len());
-        prop_assert_eq!(firsts.len(), count, "one answer for each value");
-        prop_assert!(firsts.first().copied().unwrap_or(true), "the first value is always new");
-        let every = answers_in_turn(&action, &state, &left_over, &vec![true; count]);
-        let skipping = answers_in_turn(&action, &state, &left_over, &firsts);
+        prop_assert_eq!(told.len(), action.inputs.len(), "one answer for each input");
+        for (apart, input) in told.iter().zip(&action.inputs) {
+            prop_assert_eq!(apart.len(), input.values.len(), "one answer for each value");
+            prop_assert!(apart.first().copied().unwrap_or(true), "the first value is always new");
+        }
+        let new_in_each = |digits: &[usize]| {
+            told.iter()
+                .zip(digits)
+                .all(|(apart, digit)| apart.get(*digit).copied().unwrap_or(true))
+        };
+        let every = answers_in_turn(&action, &state, &left_over, |_| true);
+        let skipping = answers_in_turn(&action, &state, &left_over, new_in_each);
         for (position, (all, skipped)) in every.iter().zip(&skipping).enumerate() {
             match skipped {
-                Some(answers) => prop_assert_eq!(Some(answers), all.as_ref(), "value {} answers as it does in the full walk", position),
+                Some(answers) => prop_assert_eq!(Some(answers), all.as_ref(), "combination {} answers as it does in the full walk", position),
                 None => prop_assert!(
                     every.iter().take(position).any(|earlier| earlier == all),
-                    "value {} answers like no value before it", position
+                    "combination {} answers like no combination before it", position
                 ),
             }
         }
