@@ -35,7 +35,10 @@ impl Code {
     ///
     /// A [`Fault`] when the expression has no value in this state.
     pub fn eval(&self, frame: &mut Frame<'_>) -> Result<Value, Fault> {
-        self.top.eval(frame)
+        match &self.top {
+            Val::Num(num) => num.eval(frame).map(Value::Int).map_err(Stop::fault),
+            other => other.eval(frame),
+        }
     }
 
     /// Whether the expression is true in the state and locals of `frame`, for a guard or a rule.
@@ -146,6 +149,12 @@ enum Num {
         left: Operand,
         right: Operand,
     },
+    FieldMath {
+        math: Math,
+        bound: Bound,
+        field: usize,
+        number: i64,
+    },
     Bounded(Bound, Operand),
     Negate(Operand),
     Value(Box<Val>),
@@ -158,6 +167,11 @@ enum Cond {
         order: Order,
         left: Operand,
         right: Operand,
+    },
+    FieldOrder {
+        order: Order,
+        field: usize,
+        number: i64,
     },
     Is {
         operand: Operand,
@@ -240,6 +254,14 @@ impl Num {
             return None;
         };
         Some(match (op, arguments.as_slice()) {
+            (Op::Math(math), [Expr::Field(field), Expr::Const(Value::Int(number))]) => {
+                Self::FieldMath {
+                    math: *math,
+                    bound: Bound::Any,
+                    field: *field,
+                    number: *number,
+                }
+            }
             (Op::Math(math), [left, right]) => Self::Math {
                 math: *math,
                 bound: Bound::Any,
@@ -266,6 +288,17 @@ impl Num {
                 left,
                 right,
             },
+            Some(Self::FieldMath {
+                math,
+                bound: Bound::Any,
+                field,
+                number,
+            }) => Self::FieldMath {
+                math,
+                bound,
+                field,
+                number,
+            },
             Some(other) => Self::Bounded(bound, Operand::Num(Box::new(other))),
             None => Self::Bounded(bound, Operand::of(inner)),
         }
@@ -281,6 +314,17 @@ impl Num {
             } => {
                 let (first, second) = pair(left, right, frame)?;
                 let answer = arithmetic(*math, first, second);
+                frame.note(&answer);
+                Ok(bound.check(answer?)?)
+            }
+            Self::FieldMath {
+                math,
+                bound,
+                field,
+                number,
+            } => {
+                let first = int_at(frame.state, *field).map_err(Stop::fault)?;
+                let answer = arithmetic(*math, first, *number);
                 frame.note(&answer);
                 Ok(bound.check(answer?)?)
             }
@@ -327,6 +371,13 @@ impl Cond {
                 Some(Self::Any(parts.into_boxed_slice()))
             }
             Expr::Apply(op, arguments) => match (op, arguments.as_slice()) {
+                (Op::Order(order), [Expr::Field(field), Expr::Const(Value::Int(number))]) => {
+                    Some(Self::FieldOrder {
+                        order: *order,
+                        field: *field,
+                        number: *number,
+                    })
+                }
                 (Op::Order(order), [left, right]) => Some(Self::Order {
                     order: *order,
                     left: Operand::of(left),
@@ -369,6 +420,15 @@ impl Cond {
                 let (first, second) = pair(left, right, frame)?;
                 Ok(compare(*order, first, second))
             }
+            Self::FieldOrder {
+                order,
+                field,
+                number,
+            } => Ok(compare(
+                *order,
+                int_at(frame.state, *field).map_err(Stop::fault)?,
+                *number,
+            )),
             Self::Is {
                 operand,
                 number,

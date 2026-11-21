@@ -79,7 +79,7 @@ impl<'a> Frame<'a> {
     pub fn new(state: &'a [Value], slots: usize) -> Self {
         Self {
             state,
-            locals: vec![Value::Null; slots],
+            locals: std::iter::repeat_with(|| Value::Null).take(slots).collect(),
             deadline: None,
             ticks: 0,
             expired: false,
