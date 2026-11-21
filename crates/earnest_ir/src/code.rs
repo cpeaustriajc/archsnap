@@ -415,11 +415,6 @@ impl Cond {
 
     fn eval(&self, frame: &mut Frame<'_>) -> Result<bool, Fault> {
         match self {
-            Self::Const(flag) => Ok(*flag),
-            Self::Order { order, left, right } => {
-                let (first, second) = pair(left, right, frame)?;
-                Ok(compare(*order, first, second))
-            }
             Self::FieldOrder {
                 order,
                 field,
@@ -429,6 +424,26 @@ impl Cond {
                 int_at(frame.state, *field).map_err(Stop::fault)?,
                 *number,
             )),
+            Self::All(parts) => {
+                for part in parts {
+                    if !part.eval(frame)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            _ => self.rest(frame),
+        }
+    }
+
+    #[inline(never)]
+    fn rest(&self, frame: &mut Frame<'_>) -> Result<bool, Fault> {
+        match self {
+            Self::Const(flag) => Ok(*flag),
+            Self::Order { order, left, right } => {
+                let (first, second) = pair(left, right, frame)?;
+                Ok(compare(*order, first, second))
+            }
             Self::Is {
                 operand,
                 number,
@@ -452,14 +467,7 @@ impl Cond {
                 Ok(wanted.judge(&first, &second))
             }
             Self::Not(inner) => Ok(!inner.eval(frame)?),
-            Self::All(parts) => {
-                for part in parts {
-                    if !part.eval(frame)? {
-                        return Ok(false);
-                    }
-                }
-                Ok(true)
-            }
+            Self::FieldOrder { .. } | Self::All(_) => self.eval(frame),
             Self::Any(parts) => {
                 for part in parts {
                     if part.eval(frame)? {
