@@ -845,7 +845,11 @@ impl Search<'_> {
             stopped: false,
             workers: shared.peak.into_inner(),
         };
-        for (_, part) in finished {
+        for (expected, (index, part)) in finished.into_iter().enumerate() {
+            if index != expected {
+                expansion.stopped = true;
+                break;
+            }
             let stopped = part.stopped;
             expansion.parts.push(part);
             if stopped {
