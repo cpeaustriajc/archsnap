@@ -10,7 +10,7 @@ const SHARD_BITS: u32 = 6;
 const SHARD_COUNT: usize = 1 << SHARD_BITS;
 const SHARD_SHIFT: u32 = 51;
 const SHARD_MASK: u64 = (1 << SHARD_BITS) - 1;
-const MOST_LISTED_VALUES: u128 = 1 << 16;
+const MOST_LISTED_VALUES: u128 = 1 << 12;
 const GROWN_BITS: u32 = 32;
 const MOST_GROWN_VALUES: usize = 1 << GROWN_BITS;
 
