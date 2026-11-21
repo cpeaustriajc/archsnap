@@ -199,3 +199,44 @@ fn many_workers_stop_at_the_same_state_limit() {
         }
     }
 }
+
+fn queue_and_clock() -> Model {
+    let mut sketch = Sketch::new();
+    let messages = vec![sketch.text("a"), sketch.text("b")];
+    let domain = Domain::Seq {
+        item: Box::new(Domain::OneOf(messages.clone())),
+        max: 20,
+    };
+    let queue = sketch.field("queue", domain, vec![Value::seq(Vec::new())]);
+    let clock = sketch.number("clock", 0, 3, &[0]);
+    let size = size_of(&queue);
+    let short = apply(Op::Order(Order::Less), &size, Expr::Const(Value::Int(12)));
+    let sent = apply(Op::Seq(SeqOp::Push), &queue, Expr::Local(0));
+    sketch.action("tick", below(&clock, 3), &[(&clock, plus(&clock, 1))]);
+    sketch.action_with("send", &[("message", messages)], short, &[(&queue, sent)]);
+    let late = both(is(&size, 10), is(&clock, 0));
+    sketch.rule("neverTenUnticked", not(&late));
+    sketch.model()
+}
+
+#[test]
+fn workers_keep_the_order_of_states_with_and_without_a_code() {
+    let model = queue_and_clock();
+    let alone = explore(&model, &with_jobs(1));
+    assert_eq!(alone.states, 8191 * 4);
+    broken_after(&alone, 10);
+    for max_states in (1_916..3_836).step_by(3) {
+        let limits = |jobs| Limits {
+            max_states,
+            ..with_jobs(jobs)
+        };
+        let alone = explore(&model, &limits(1));
+        for jobs in [2, 4] {
+            assert_eq!(
+                explore(&model, &limits(jobs)),
+                alone,
+                "{jobs} jobs, {max_states} states"
+            );
+        }
+    }
+}
