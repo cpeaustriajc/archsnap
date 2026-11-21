@@ -1,4 +1,4 @@
-use crate::build::{Sketch, apply, below, plus};
+use crate::build::{Sketch, apply, below, both, is, is_not, not, plus};
 use earnest_check::{FindingKind, Limits, Outcome, Status, Verdict, explore};
 use earnest_ir::{Expr, Model, Op, Order, SeqOp};
 use earnest_value::{Domain, Value};
@@ -128,5 +128,74 @@ fn a_limit_above_four_billion_states_changes_nothing() {
         );
         assert_eq!(usual.states, 27_000);
         assert_eq!(huge, usual, "{jobs} jobs");
+    }
+}
+
+fn cube_with_corners(corners: &[[i64; 3]]) -> Model {
+    let mut sketch = Sketch::new();
+    let axes: Vec<Expr> = ["x", "y", "z"]
+        .iter()
+        .map(|name| sketch.number(name, 0, 29, &[0]))
+        .collect();
+    for (name, axis) in ["X", "Y", "Z"].iter().zip(&axes) {
+        sketch.action(
+            &format!("up{name}"),
+            below(axis, 29),
+            &[(axis, plus(axis, 1))],
+        );
+        sketch.action(
+            &format!("down{name}"),
+            is_not(axis, 0),
+            &[(axis, plus(axis, -1))],
+        );
+    }
+    for (number, corner) in corners.iter().enumerate() {
+        let at = corner
+            .iter()
+            .zip(&axes)
+            .map(|(value, axis)| is(axis, *value))
+            .reduce(both)
+            .expect("three axes");
+        sketch.rule(&format!("notAt{number}"), not(&at));
+    }
+    sketch.model()
+}
+
+#[test]
+fn many_workers_find_the_same_paths_through_states_met_from_several_parts() {
+    let corners = [
+        [15, 15, 14],
+        [20, 20, 5],
+        [29, 1, 28],
+        [10, 10, 10],
+        [29, 29, 29],
+    ];
+    let model = cube_with_corners(&corners);
+    let alone = explore(&model, &with_jobs(1));
+    assert_eq!(alone.states, 27_000);
+    for rule in &alone.rules {
+        assert_eq!(rule.verdict, Verdict::Broken);
+    }
+    for jobs in [2, 3, 4, 7, 10] {
+        assert_eq!(explore(&model, &with_jobs(jobs)), alone, "{jobs} jobs");
+    }
+}
+
+#[test]
+fn many_workers_stop_at_the_same_state_limit() {
+    let model = cube_with_corners(&[[29, 29, 29]]);
+    for max_states in [600, 4_000, 26_999] {
+        let limits = |jobs| Limits {
+            max_states,
+            ..with_jobs(jobs)
+        };
+        let alone = explore(&model, &limits(1));
+        for jobs in [2, 4, 10] {
+            assert_eq!(
+                explore(&model, &limits(jobs)),
+                alone,
+                "{jobs} jobs, {max_states} states"
+            );
+        }
     }
 }

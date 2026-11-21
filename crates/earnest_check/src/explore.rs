@@ -2,7 +2,9 @@ use crate::cut::cut_points;
 use crate::expand::{Asked, Budget, Clock, Expand, Mark, Scratch, Successors, Whence, Width};
 use crate::helpers::{Helpers, Loan};
 use crate::outcome::Outcome;
-use crate::store::{Placed, Store, hash_row, row_at, same_row};
+use crate::store::{
+    Fresh, Placed, SHARD_COUNT, Spread, Store, hash_row, row_at, same_row, shard_of,
+};
 use earnest_ir::{Fault, Field, Model};
 use earnest_value::Value;
 use hashbrown::HashTable;
@@ -104,8 +106,8 @@ pub(crate) struct Search<'a> {
 #[derive(Clone, Copy, Debug)]
 enum Target {
     Known(usize),
-    Fresh,
-    Raw,
+    Fresh(usize),
+    Raw { fresh_before: usize },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -123,6 +125,8 @@ struct Part {
     entries: Vec<Entry>,
     rows: Vec<u8>,
     hashes: Vec<u64>,
+    froms: Vec<usize>,
+    shards: Vec<Vec<usize>>,
     raws: Vec<Box<[Value]>>,
     stopped: bool,
 }
@@ -299,20 +303,38 @@ impl PartSink<'_> {
         });
     }
 
-    fn first_in_part(&mut self, hash: u64) -> bool {
+    fn add_fresh(&mut self, action: usize, hash: u64) {
+        self.part.rows.extend_from_slice(&self.packed);
+        if self.part.shards.is_empty() {
+            self.part.shards.resize_with(SHARD_COUNT, Vec::new);
+        }
+        if let Some(shard) = self.part.shards.get_mut(shard_of(hash)) {
+            shard.push(self.part.hashes.len());
+        }
+        self.part.hashes.push(hash);
+        self.part.froms.push(self.from);
+        if self.graph {
+            self.push(action, Target::Fresh(self.part.hashes.len() - 1));
+        }
+    }
+
+    fn offer_unseen(&mut self, action: usize, hash: u64) -> bool {
         let stride = self.store.stride();
-        let (rows, row) = (&self.part.rows, &self.packed);
-        match self.met.entry(
+        let (rows, hashes, row) = (&self.part.rows, &self.part.hashes, &self.packed);
+        let met = self.met.entry(
             hash,
             |at| same_row(row_at(rows, stride, *at), row),
-            |at| hash_row(row_at(rows, stride, *at)),
-        ) {
-            hashbrown::hash_table::Entry::Occupied(_) => false,
-            hashbrown::hash_table::Entry::Vacant(vacant) => {
-                vacant.insert(self.part.hashes.len());
-                true
-            }
+            |at| hashes.get(*at).copied().unwrap_or(0),
+        );
+        let hashbrown::hash_table::Entry::Vacant(vacant) = met else {
+            return false;
+        };
+        if self.store.find(row, hash).is_some() {
+            return true;
         }
+        vacant.insert(hashes.len());
+        self.add_fresh(action, hash);
+        true
     }
 }
 
@@ -337,23 +359,20 @@ impl Successors for PartSink<'_> {
                 return false;
             }
             self.part.raws.push(next);
-            self.push(action, Target::Raw);
+            let fresh_before = self.part.hashes.len();
+            self.push(action, Target::Raw { fresh_before });
             return true;
         }
         self.store.pack(&self.row, &mut self.packed);
         let hash = hash_row(&self.packed);
+        if !self.graph {
+            return self.offer_unseen(action, hash);
+        }
         if let Some(to) = self.store.find(&self.packed, hash) {
-            if self.graph {
-                self.push(action, Target::Known(to));
-            }
+            self.push(action, Target::Known(to));
             return true;
         }
-        if !self.graph && !self.first_in_part(hash) {
-            return false;
-        }
-        self.part.rows.extend_from_slice(&self.packed);
-        self.part.hashes.push(hash);
-        self.push(action, Target::Fresh);
+        self.add_fresh(action, hash);
         true
     }
 }
@@ -582,7 +601,7 @@ impl Search<'_> {
                 workers: expansion.workers,
             };
             if !(ran.stopped && asked == Asked::Everything) {
-                self.merge(expansion.parts);
+                self.merge_any(expansion.parts);
             }
             return ran;
         }
@@ -627,7 +646,7 @@ impl Search<'_> {
                 };
             }
             self.record_all(&marks, rest.start);
-            self.merge(expansion.parts);
+            self.merge_any(expansion.parts);
             return Ran {
                 stopped: expansion.stopped,
                 workers: expansion.workers,
@@ -920,14 +939,65 @@ impl Search<'_> {
         }
     }
 
+    fn merge_any(&mut self, parts: Vec<Part>) {
+        let found: usize = parts.iter().map(|part| part.hashes.len()).sum();
+        let room = self.store.len().saturating_add(found) <= self.limits.max_states;
+        let simple = !self.limits.keep_graph && parts.iter().all(|part| part.raws.is_empty());
+        if room && simple && parts.len() > 1 {
+            self.merge_spread(&parts);
+        } else {
+            self.merge(parts);
+        }
+    }
+
+    fn merge_spread(&mut self, parts: &[Part]) {
+        for part in parts {
+            for (id, mark) in &part.marks {
+                self.record(*id, mark);
+            }
+            self.judged = self.judged.max(part.first.saturating_add(part.expanded));
+        }
+        let fresh: Vec<Fresh<'_>> = parts
+            .iter()
+            .map(|part| Fresh {
+                rows: &part.rows,
+                hashes: &part.hashes,
+                froms: &part.froms,
+                shards: &part.shards,
+            })
+            .collect();
+        let crew = Crew {
+            own: self.limits.jobs.max(1),
+            helpers: self.limits.helpers.as_ref(),
+        };
+        self.store.place_level(&fresh, &crew);
+    }
+
     fn merge(&mut self, parts: Vec<Part>) {
         let most = self.limits.max_states;
         let stride = self.store.stride();
+        let graph = self.limits.keep_graph;
         for part in parts {
             let mut marks = part.marks.into_iter().peekable();
             let mut raws = part.raws.into_iter();
-            let mut fresh = part.hashes.iter().enumerate();
-            for entry in &part.entries {
+            let mut listed = part.entries.iter().copied().peekable();
+            let mut fresh = 0..part.hashes.len();
+            let froms = &part.froms;
+            let mut next = || {
+                if graph {
+                    return listed.next();
+                }
+                let due = |entry: &Entry| matches!(entry.target, Target::Raw { fresh_before } if fresh_before <= fresh.start);
+                listed.next_if(due).or_else(|| {
+                    let at = fresh.next()?;
+                    Some(Entry {
+                        from: froms.get(at).copied().unwrap_or(0),
+                        action: 0,
+                        target: Target::Fresh(at),
+                    })
+                })
+            };
+            while let Some(entry) = next() {
                 while let Some((id, mark)) = marks.next_if(|(id, _)| *id <= entry.from) {
                     self.record(id, &mark);
                 }
@@ -935,14 +1005,12 @@ impl Search<'_> {
                 let parent = Some(entry.from);
                 let placed = match entry.target {
                     Target::Known(to) => Placed::Known(to),
-                    Target::Fresh => {
-                        let Some((at, hash)) = fresh.next() else {
-                            continue;
-                        };
+                    Target::Fresh(at) => {
+                        let hash = part.hashes.get(at).copied().unwrap_or(0);
                         self.store
-                            .place(row_at(&part.rows, stride, at), *hash, parent, most)
+                            .place(row_at(&part.rows, stride, at), hash, parent, most)
                     }
-                    Target::Raw => {
+                    Target::Raw { .. } => {
                         let Some(values) = raws.next() else {
                             continue;
                         };
@@ -953,7 +1021,7 @@ impl Search<'_> {
                     self.reason = Some(self.limit_reason());
                     return;
                 };
-                if self.limits.keep_graph {
+                if graph {
                     self.arrows.push(Arrow {
                         from: entry.from,
                         to,
@@ -1005,6 +1073,37 @@ impl Search<'_> {
                 broken: expanded.broken.clone(),
             };
         }
+    }
+}
+
+struct Crew<'a> {
+    own: usize,
+    helpers: Option<&'a Helpers>,
+}
+
+impl Spread for Crew<'_> {
+    fn run(&self, tasks: usize, job: &(dyn Fn(usize) + Sync)) {
+        let next = AtomicUsize::new(0);
+        let work = || {
+            loop {
+                let task = next.fetch_add(1, Ordering::Relaxed);
+                if task >= tasks {
+                    return;
+                }
+                job(task);
+            }
+        };
+        let own = self.own.min(tasks);
+        let loan = self
+            .helpers
+            .map(|helpers| helpers.borrow(tasks.saturating_sub(own)));
+        let borrowed = loan.as_ref().map_or(0, Loan::threads);
+        std::thread::scope(|scope| {
+            for _ in 1..own.saturating_add(borrowed) {
+                scope.spawn(work);
+            }
+            work();
+        });
     }
 }
 
