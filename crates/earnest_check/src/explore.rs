@@ -951,23 +951,13 @@ impl Search<'_> {
     }
 
     fn merge_any(&mut self, parts: Vec<Part>) {
-        let found: usize = parts.iter().map(|part| part.hashes.len()).sum();
-        let room = self.store.len().saturating_add(found) <= self.limits.max_states;
         let simple = !self.limits.keep_graph && parts.iter().all(|part| part.raws.is_empty());
-        if room && simple && parts.len() > 1 {
-            self.merge_spread(&parts);
-        } else {
+        if !(simple && parts.len() > 1 && self.merge_spread(&parts)) {
             self.merge(parts);
         }
     }
 
-    fn merge_spread(&mut self, parts: &[Part]) {
-        for part in parts {
-            for (id, mark) in &part.marks {
-                self.record(*id, mark);
-            }
-            self.judged = self.judged.max(part.first.saturating_add(part.expanded));
-        }
+    fn merge_spread(&mut self, parts: &[Part]) -> bool {
         let fresh: Vec<Fresh<'_>> = parts
             .iter()
             .map(|part| Fresh {
@@ -981,7 +971,17 @@ impl Search<'_> {
             own: self.limits.jobs.max(1),
             helpers: self.limits.helpers.as_ref(),
         };
-        self.store.place_level(&fresh, &crew);
+        let most = self.limits.max_states;
+        if self.store.place_level(&fresh, &crew, most).is_none() {
+            return false;
+        }
+        for part in parts {
+            for (id, mark) in &part.marks {
+                self.record(*id, mark);
+            }
+            self.judged = self.judged.max(part.first.saturating_add(part.expanded));
+        }
+        true
     }
 
     fn merge(&mut self, parts: Vec<Part>) {

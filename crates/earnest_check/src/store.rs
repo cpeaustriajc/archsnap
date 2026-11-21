@@ -252,7 +252,7 @@ impl<T: Id> Links<T> {
         }
     }
 
-    fn place_level(&mut self, rows: &mut Vec<u8>, at: Level<'_>) -> usize
+    fn place_level(&mut self, rows: &mut Vec<u8>, at: Level<'_>) -> Option<usize>
     where
         T: Send + Sync,
     {
@@ -269,6 +269,9 @@ impl<T: Id> Links<T> {
         for map in &maps {
             bases.push(total);
             total += map.count;
+        }
+        if at.count + total > at.most {
+            return None;
         }
         let first_new = rows.len();
         rows.resize(first_new + total * at.stride, 0);
@@ -335,7 +338,7 @@ impl<T: Id> Links<T> {
                 }
             }
         });
-        total
+        Some(total)
     }
 
     fn truncate(&mut self, kept: usize) {
@@ -363,6 +366,7 @@ struct Level<'a> {
     spread: &'a dyn Spread,
     stride: usize,
     count: usize,
+    most: usize,
 }
 
 #[derive(Default)]
@@ -740,19 +744,25 @@ impl Store {
         placed
     }
 
-    pub(crate) fn place_level(&mut self, parts: &[Fresh<'_>], spread: &dyn Spread) -> usize {
+    pub(crate) fn place_level(
+        &mut self,
+        parts: &[Fresh<'_>],
+        spread: &dyn Spread,
+        most: usize,
+    ) -> Option<usize> {
         let at = Level {
             parts,
             spread,
             stride: self.stride,
             count: self.count,
+            most,
         };
         let placed = match &mut self.ids {
             Ids::Narrow(links) => links.place_level(&mut self.rows, at),
             Ids::Wide(links) => links.place_level(&mut self.rows, at),
-        };
+        }?;
         self.count += placed;
-        placed
+        Some(placed)
     }
 
     pub(crate) fn place_values(
